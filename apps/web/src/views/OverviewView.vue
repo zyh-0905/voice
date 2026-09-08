@@ -1,8 +1,10 @@
 ﻿
 <template><div><h1>概览</h1><p data-testid="demo-notice">演示数据</p><div class="metrics"><article>待处理风险 <b data-testid="metric-pending-risks">3</b></article><article>逾期任务 <b data-testid="metric-overdue-tasks">2</b></article><article>进行中任务 <b data-testid="metric-active-tasks">8</b></article><article>有效反馈 <b data-testid="metric-valid-feedback">12</b></article></div><section class="panel" data-testid="evidence-panel"><h2>证据与来源</h2><span data-testid="ai-provenance">AI 演示分析 · 来源已标注</span><ul><li v-for="item in evidence" :key="item.title"><button @click="selected=item">{{item.title}} · 查看证据</button></li></ul><aside v-if="selected" class="drawer" data-testid="evidence-drawer" role="dialog"><button data-testid="evidence-close" @click="close">关闭</button><h3>{{selected.title}}</h3><p>{{selected.evidence}}</p></aside></section></div></template>
-<script setup lang="ts">`nimport { ref, nextTick, onBeforeUnmount, watch } from 'vue'
+<script setup lang="ts">
+import { ref, nextTick, onBeforeUnmount, watch } from 'vue'
 const evidence=[{title:'风险规则命中',evidence:'近 30 天退款率高于阈值，命中规则 R-204。'},{title:'字段完整性检查',evidence:'订单金额字段缺失率为 1.8%，已完成治理。'},{title:'反馈样本',evidence:'抽样 12 条有效反馈，均可回溯到原始批次。'}]; const selected=ref<typeof evidence[number]|null>(null); const close=()=>selected.value=null; const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')close()}; window.addEventListener('keydown',onKey); onBeforeUnmount(()=>window.removeEventListener('keydown',onKey)); watch(selected,async v=>{if(v){await nextTick();document.querySelector<HTMLElement>('[data-testid="evidence-close"]')?.focus()}})
 </script>
 <style scoped>.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.metrics article,.panel{padding:20px;background:var(--vl-surface);border:1px solid var(--vl-border);border-radius:12px}.metrics b{display:block;font-size:28px;margin-top:8px}.panel{margin-top:24px}.panel h2{display:inline-block;margin:0 16px 0 0}ul{padding:0;list-style:none}li button{padding:10px;border:0;background:transparent;cursor:pointer}.drawer{position:fixed;right:0;top:0;height:100vh;width:360px;padding:24px;background:var(--vl-surface);box-shadow:-8px 0 28px #173b3026}@media(max-width:700px){.metrics{grid-template-columns:repeat(2,1fr)}}</style>
+
 
 
