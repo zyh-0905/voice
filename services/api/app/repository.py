@@ -18,6 +18,9 @@ class Repository(Protocol):
     def list_pending_outbox(self, limit: int | None = None) -> list[dict]: ...
     def mark_published(self, event_key: str) -> None: ...
     def mark_publish_failed(self, event_key: str, error: str) -> None: ...
+    def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
+    def create_entity(self, kind: str, value: dict) -> dict: ...
+    def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
 
 
 class InMemoryRepository:
@@ -25,6 +28,7 @@ class InMemoryRepository:
         self.datasets = {}
         self.analyses = {}
         self.outbox = []
+        self.risks, self.tasks, self.reviews = {}, {}, {}
 
     def _create(self, collection, value):
         key = value['id']
@@ -44,6 +48,9 @@ class InMemoryRepository:
         del self.datasets[key]
     def create_analysis(self, value): return self._create(self.analyses, value)
     def update_analysis(self, key, changes): return self._update(self.analyses, key, changes)
+    def list_entities(self, kind, project_id): return [deepcopy(v) for v in getattr(self, kind).values() if v.get('project_id') == project_id]
+    def create_entity(self, kind, value): return self._create(getattr(self, kind), value)
+    def update_entity(self, kind, key, changes): return self._update(getattr(self, kind), key, changes)
     def create_outbox_event(self, event):
         if any(e['event_key'] == event['event_key'] for e in self.outbox): return next(e for e in self.outbox if e['event_key'] == event['event_key'])
         value = deepcopy({**event, 'status': event.get('status', 'pending')}); self.outbox.append(value); return deepcopy(value)

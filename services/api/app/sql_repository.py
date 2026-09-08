@@ -1,7 +1,7 @@
 from collections.abc import MutableMapping
 from sqlalchemy import select
 from .db import Base, SessionLocal
-from .models import Dataset, AnalysisRun, OutboxEvent
+from .models import Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review
 
 
 class _EntityMap(MutableMapping):
@@ -91,6 +91,25 @@ class SQLAlchemyRepository:
                 Base.metadata.create_all(session.get_bind())
         self.datasets = _EntityMap(self, 'datasets')
         self.analyses = _EntityMap(self, 'analyses')
+        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review}
+
+    def list_entities(self, kind, project_id):
+        model = self._domain[kind]
+        with self.session() as s:
+            return [{c.name: getattr(o,c.name) for c in model.__table__.columns} for o in s.scalars(select(model).where(model.project_id == project_id)).all()]
+    def create_entity(self, kind, value):
+        model = self._domain[kind]
+        with self.session() as s, s.begin():
+            o = model(**{k:v for k,v in value.items() if k in model.__table__.columns.keys()}); s.add(o); s.flush()
+            return {c.name:getattr(o,c.name) for c in model.__table__.columns}
+    def update_entity(self, kind, key, changes):
+        model = self._domain[kind]
+        with self.session() as s, s.begin():
+            o=s.get(model,key)
+            if o is None: raise KeyError(key)
+            for k,v in changes.items():
+                if k in model.__table__.columns.keys() and k != 'id': setattr(o,k,v)
+            s.flush(); return {c.name:getattr(o,c.name) for c in model.__table__.columns}
 
     def session(self):
         return self._session_factory()
