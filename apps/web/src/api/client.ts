@@ -16,12 +16,17 @@ export class ApiHttpError extends Error {
     this.name = 'ApiHttpError'
   }
 }
+const ACCESS_TOKEN_KEY = 'voicelens:access_token'
+export function setAccessToken(token: string): void { if (typeof window !== 'undefined') window.sessionStorage.setItem(ACCESS_TOKEN_KEY, token) }
+export function clearAccessToken(): void { if (typeof window !== 'undefined') window.sessionStorage.removeItem(ACCESS_TOKEN_KEY) }
+function getAccessToken(): string | null { return typeof window === 'undefined' ? null : window.sessionStorage.getItem(ACCESS_TOKEN_KEY) }
 
 /** Real HTTP implementation. The mock client remains the default for demo pages. */
 export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'): ApiClient {
   const base = baseUrl.replace(/\/$/, '')
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${base}${path}`, { ...init, headers: { Accept: 'application/json', ...(init.headers || {}) } })
+    const token = getAccessToken()
+    const response = await fetch(`${base}${path}`, { ...init, headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) } })
     if (!response.ok) {
       let body: ApiErrorBody | undefined
       try { body = await response.json() } catch { /* non-json error */ }
