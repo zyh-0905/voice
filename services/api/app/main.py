@@ -1,8 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
-from .ingestion import parse_csv_text
+from .ingestion import parse_csv_text, parse_xlsx_bytes
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
@@ -39,7 +39,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     data = await file.read()
     if len(data) > MAX_BYTES: raise HTTPException(413, detail={'code':'file_too_large'})
     did='ds_'+uuid4().hex[:10]
-    preview = parse_csv_text(data.decode('utf-8', errors='replace')) if ext == 'csv' else {'headers': [], 'rows': [], 'stats': {}}
+    try:\n        preview = parse_csv_text(data.decode('utf-8', errors='replace')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}\n    except ValueError as exc:\n        raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
     d={'id':did,'project_id':project_id,'name':name or file.filename,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
 @app.get('/api/v1/projects/{project_id}/datasets')
@@ -49,7 +49,6 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest):
     d=datasets.get(dataset_id)
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
-    if d.get('file_ext') in ('xls','xlsx'): raise HTTPException(422, detail={'code':'unsupported_file_type','message':'xlsx parsing is not supported yet'})
     stats = d.get('preview', {}).get('stats', {})
     d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=max(1,d['rows']), version=d['version']+1)
     total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
@@ -121,6 +120,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
