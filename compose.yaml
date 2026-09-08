@@ -1,4 +1,4 @@
-﻿services:
+services:
   api:
     build:
       context: .
@@ -65,15 +65,5 @@
       redis:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    ports:
-      - "8080:8080"
-    depends_on:
-      api:
         condition: service_healthy
 
