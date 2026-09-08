@@ -5,7 +5,7 @@ from uuid import uuid4
 from .ingestion import parse_csv_text
 from .repository import get_repository
 from .worker import AnalysisWorker
-from .middleware import SecurityHeadersMiddleware
+from .middleware import SecurityHeadersMiddleware`r`nimport hashlib
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
@@ -14,7 +14,7 @@ repository = get_repository()
 datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
-MAX_BYTES = 50 * 1024 * 1024
+MAX_BYTES = 50 * 1024 * 1024`r`n_idempotency = {}
 ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -113,6 +113,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
