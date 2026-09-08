@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -96,7 +96,7 @@ def get_project(project_id: str): return _project(project_id)
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'锟斤拷锟斤拷锟斤拷锟斤拷锟斤�?,'status':'todo','priority':'high'}], 'total':1}
+def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'analyst','status':'todo','priority':'high'}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str):
     items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
