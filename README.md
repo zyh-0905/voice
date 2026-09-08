@@ -41,3 +41,5 @@ $env:PYTHONPATH='services/api'; python -m pytest services/api/tests -q
 复制 `.env.example` 后按部署环境调整：`DATABASE_URL` 默认指向本机 PostgreSQL，`REDIS_URL` 指向 Redis；`AUTH_REQUIRED=true` 是生产默认值。仅在本地演示时可显式设置 `AUTH_REQUIRED=false`，关闭匿名请求的认证要求。
 
 Frontend validation now passes with Node.js 24/npm 11: typecheck, unit tests, and production build.
+
+分析质量评估：$env:PYTHONPATH='services/api'; python services/api/evaluation/evaluate_analysis.py。脚本输出 topic coverage、摘要非空和 evidence offset 合法性，失败时返回非零码。
