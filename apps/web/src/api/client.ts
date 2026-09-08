@@ -2,8 +2,11 @@ import type {DatasetPreview,ImportHealth,AnalysisRun} from '../types/domain'
 
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
+  upload(projectId: string, file: File, signal?: AbortSignal): Promise<DatasetPreview>
   health(id: string, signal?: AbortSignal): Promise<ImportHealth>
+  health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealth>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
+  runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
 }
 
 export interface ApiErrorBody { detail?: string; message?: string }
@@ -27,11 +30,25 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     return response.json() as Promise<T>
   }
   return {
-    upload(file, signal) {
+    upload(projectOrFile: string | File, fileOrSignal?: File | AbortSignal, maybeSignal?: AbortSignal) {
+      const projectId = typeof projectOrFile === 'string' ? projectOrFile : 'demo-project'
+      const file = (typeof projectOrFile === 'string' ? fileOrSignal : projectOrFile) as File
+      const signal = typeof projectOrFile === 'string' ? maybeSignal : fileOrSignal as AbortSignal | undefined
       const form = new FormData(); form.append('file', file)
-      return request<DatasetPreview>('/datasets/upload', { method: 'POST', body: form, signal })
+      form.append('consent', 'true')
+      return request<DatasetPreview>(`/projects/${encodeURIComponent(projectId)}/datasets`, { method: 'POST', body: form, signal })
     },
-    health(id, signal) { return request<ImportHealth>(`/datasets/${encodeURIComponent(id)}/health`, { signal }) },
-    runAnalysis(id, signal) { return request<AnalysisRun>('/analysis/runs', { method: 'POST', body: JSON.stringify({ dataset_id: id }), headers: { 'Content-Type': 'application/json' }, signal }) },
+    health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
+      const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
+      const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
+      const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
+      return request<ImportHealth>(`/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(id)}/validate`, { method: 'POST', body: '{}', headers: {'Content-Type':'application/json'}, signal })
+    },
+    runAnalysis(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
+      const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
+      const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
+      const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
+      return request<AnalysisRun>(`/projects/${encodeURIComponent(projectId)}/analyses`, { method: 'POST', body: JSON.stringify({ dataset_ids: [id] }), headers: { 'Content-Type': 'application/json' }, signal })
+    },
   }
 }
