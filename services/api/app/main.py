@@ -3,12 +3,12 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
 from .ingestion import parse_csv_text
-from .repository import repository
+from .repository import get_repository
 from .worker import AnalysisWorker
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
-datasets = repository.datasets
+repository = get_repository()\ndatasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
