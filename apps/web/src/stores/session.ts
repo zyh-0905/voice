@@ -1,0 +1,1 @@
+import {defineStore} from 'pinia';import {ref} from 'vue';export const useSessionStore=defineStore('session',()=>{const user=ref({id:'demo-user',name:'Demo Reviewer',email:'demo@voicelens.local'});const isDemo=ref(true);return {user,isDemo};});
