@@ -20,3 +20,15 @@ npm --prefix apps/web run build
 ```
 
 当前 API 位于 `src/api`，使用 mock client；后续 FastAPI `/api/v1` 接入时保持 `ApiClient` 契约即可替换。演示数据均有 demo/mock 标识，不代表真实人工复核结果。
+## API 启动
+
+```bash
+python -m pip install -r services/api/requirements.txt
+uvicorn services.api.app.main:app --reload
+```
+
+API 测试：
+
+```bash
+$env:PYTHONPATH='services/api'; python -m pytest services/api/tests -q
+```
