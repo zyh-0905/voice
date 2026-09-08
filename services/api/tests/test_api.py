@@ -53,3 +53,16 @@ def test_successful_analysis_idempotency_and_conflict():
     assert first.json()['id'] == second.json()['id']
     conflict = client.post('/api/v1/projects/idempo/analyses', json={'dataset_ids': [did], 'config': {'x': 1}}, headers=headers)
     assert conflict.status_code == 409
+
+def test_auth_login_me_logout():
+    bad = client.post('/api/v1/auth/login', json={'username':'demo','password':'wrong'})
+    assert bad.status_code == 401
+    login = client.post('/api/v1/auth/login', json={'username':'demo','password':'demo'})
+    assert login.status_code == 200
+    payload = login.json(); assert payload['token_type'] == 'bearer'
+    token = payload['access_token']; assert payload['user']['role'] == 'ANALYST'
+    me = client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {token}'})
+    assert me.status_code == 200 and me.json()['id'] == 'demo-user'
+    assert client.get('/api/v1/auth/me').status_code == 401
+    assert client.post('/api/v1/auth/logout', headers={'Authorization': f'Bearer {token}'}).status_code == 204
+    assert client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).status_code == 401
