@@ -15,7 +15,7 @@ def main() -> int:
     web = services["web"]
     if web.get("build", {}).get("dockerfile") != "apps/web/Dockerfile":
         raise SystemExit("web Dockerfile is invalid")
-    if web.get("ports") != ["8080:8080"]:
+    if web.get("ports") != ["8080:80"]:
         raise SystemExit("web must expose port 8080")
     if web.get("depends_on", {}).get("api", {}).get("condition") != "service_healthy":
         raise SystemExit("web must depend on healthy api")
@@ -32,3 +32,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
