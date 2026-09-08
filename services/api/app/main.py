@@ -105,5 +105,3 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
 def export_redacted(project_id: str): return Response('id,project_id,status\nexport-001,'+project_id+',redacted\n', media_type='text/csv')
-export-001,'+project_id+',redacted
-', media_type='text/csv')
