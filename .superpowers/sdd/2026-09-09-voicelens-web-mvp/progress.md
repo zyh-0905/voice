@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Hardened CSV ingestion: strict UTF-8 decoding and row/header shape validation now reject malformed input with actionable errors.
-Verification: backend pytest 18 passed; malformed CSV manual rejection PASS; frontend typecheck/unit/build and Playwright + axe remain green; compose validation PASS.
-Remaining: Docker multi-service integration, production identity/token persistence, and external model evaluation.
+Hardened CSV ingestion with strict UTF-8 decoding, row-shape validation, and line/byte diagnostics; added malformed-input regression coverage.
+Verification: backend pytest 20 passed; compileall PASS; frontend typecheck/unit/build PASS; Playwright + axe 4 passed; compose validation PASS; style-token lint PASS.
+Remaining: Docker daemon integration, production identity/token persistence, and external model evaluation.
