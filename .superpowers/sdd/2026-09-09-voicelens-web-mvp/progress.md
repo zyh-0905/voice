@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Replaced fixed demo export with project-scoped redacted CSV generated from governed preview rows; unknown projects 404, empty projects return headers, and a second redaction pass prevents PII leakage.
+Added pending analysis outbox event recording at creation time, with event id/type/project/analysis/status metadata for future relay.
 Verification: backend pytest 15 passed; compileall PASS; frontend typecheck/unit/build PASS; Playwright + axe 2 passed; compose validation PASS.
-Remaining: Docker daemon integration, production identity/token persistence, and external model evaluation.
+Remaining: persist outbox events in PostgreSQL transactionally and run a real relay in Docker/Redis integration; production model evaluation.
