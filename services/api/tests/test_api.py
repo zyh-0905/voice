@@ -48,6 +48,21 @@ def test_domain_endpoints_and_viewer_guard():
     assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'Authorization':f'Bearer {viewer_token}'}).status_code == 403
     assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'Authorization':f'Bearer {analyst_token}'}).status_code == 200
 
+def test_redacted_export_contains_only_project_rows_and_masks_pii():
+    datasets['export-a'] = {'id': 'export-a', 'project_id': 'demo-project', 'preview': {'rows': [
+        {'email': 'person@example.com', 'phone': '13812345678', 'note': 'safe'}
+    ]}}
+    datasets['export-b'] = {'id': 'export-b', 'project_id': 'other-project', 'preview': {'rows': [
+        {'email': 'other@example.com'}
+    ]}}
+    response = client.get('/api/v1/projects/demo-project/exports/redacted.csv')
+    assert response.status_code == 200
+    body = response.text
+    assert 'export-a' in body and 'export-b' not in body
+    assert 'person@example.com' not in body and '13812345678' not in body
+    assert '<EMAIL_REDACTED>' in body and '<PHONE_REDACTED>' in body
+    assert client.get('/api/v1/projects/missing/exports/redacted.csv').status_code == 404
+
 def test_analysis_idempotency():
     r = client.post('/api/v1/projects/p/analyses', json={'dataset_ids':['missing']}, headers={'Idempotency-Key':'k1'})
     assert r.status_code == 404

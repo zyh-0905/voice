@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depe
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
-from .ingestion import parse_csv_text, parse_xlsx_bytes
+from .ingestion import parse_csv_text, parse_xlsx_bytes, redact_text
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
@@ -146,6 +146,9 @@ def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(requ
 
 
 from fastapi.responses import Response, JSONResponse
+import csv
+import io
+import json
 
 # Domain read models (in-memory demo repository)
 projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project','description':'Synthetic workspace','status':'active'}}
@@ -172,8 +175,28 @@ def confirm_review(project_id: str, review_id: str, user: dict = Depends(require
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
 def export_redacted(project_id: str, user: dict = Depends(require_user)):
-    content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
-    return Response(content=content, media_type='text/csv')
+    """Export only the redacted dataset previews belonging to *project_id*.
+
+    The payload intentionally keeps each row in a JSON column.  This avoids
+    leaking arbitrary source column names while preserving nested/duplicate
+    fields, and applies redaction once more at the export boundary so a
+    repository populated by an older parser cannot emit raw PII.
+    """
+    if project_id not in projects:
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    output = io.StringIO(newline='')
+    writer = csv.DictWriter(output, fieldnames=['dataset_id', 'row_index', 'data'])
+    writer.writeheader()
+    for dataset in datasets.values():
+        if dataset.get('project_id') != project_id:
+            continue
+        rows = (dataset.get('preview') or {}).get('rows') or []
+        for index, row in enumerate(rows):
+            clean = {}
+            for key, value in (row or {}).items():
+                clean[str(key)] = redact_text(str(value))['text']
+            writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
+    return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
 
 
 
