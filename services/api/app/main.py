@@ -90,17 +90,17 @@ def list_projects(): return {'items': list(projects.values()), 'total': len(proj
 @app.get('/api/v1/projects/{project_id}')
 def get_project(project_id: str): return _project(project_id)
 @app.get('/api/v1/projects/{project_id}/risks')
-def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Ê±¼ä×Ö¶ÎÈ±Ê§','severity':'high','status':'open','evidence_count':2}], 'total':1}
+def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'²¹³äÊ±¼ä×Ö¶ÎÓ³Éä','owner':'Êý¾ÝÖÎÀí×é','status':'todo','priority':'high'}], 'total':1}
+def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½','status':'todo','priority':'high'}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str):
-    items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'¹ØÁªÏßË÷´ýÈË¹¤¸´ºË','confirmed_by':None}]
+    items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
     return {'items':items,'total':len(items)}
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
 def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(None)):
     if (x_role or '').upper() == 'VIEWER': raise HTTPException(403, detail={'code':'forbidden'})
-    r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'¹ØÁªÏßË÷´ýÈË¹¤¸´ºË','confirmed_by':None})
+    r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv', response_class=PlainTextResponse)
