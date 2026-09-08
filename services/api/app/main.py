@@ -175,6 +175,10 @@ import json
 # Domain read models (in-memory demo repository)
 projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project','description':'Synthetic workspace','status':'active'}}
 reviews = {}
+if repository.__class__.__name__ == 'InMemoryRepository':
+    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'Missing time field','severity':'high','status':'open','evidence_count':2})
+    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'Missing time field','owner':'analyst','status':'todo','priority':'high'})
+    repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
 def _project(pid): return projects.get(pid) or {'id':pid,'name':pid,'description':'Project','status':'active'}
 @app.get('/api/v1/projects')
 def list_projects(user: dict = Depends(require_user)): return {'items': list(projects.values()), 'total': len(projects)}
@@ -183,18 +187,21 @@ def get_project(project_id: str, user: dict = Depends(require_user)):
     if project_id not in projects: raise HTTPException(404, detail={'code':'project_not_found'})
     return projects[project_id]
 @app.get('/api/v1/projects/{project_id}/risks')
-def list_risks(project_id: str, user: dict = Depends(require_user)): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
+def list_risks(project_id: str, user: dict = Depends(require_user)):
+    items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str, user: dict = Depends(require_user)): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'analyst','status':'todo','priority':'high'}], 'total':1}
+def list_tasks(project_id: str, user: dict = Depends(require_user)):
+    items=repository.list_entities('tasks', project_id); return {'items':items, 'total':len(items)}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str, user: dict = Depends(require_user)):
-    items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
+    items=repository.list_entities('reviews', project_id)
     return {'items':items,'total':len(items)}
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
 def confirm_review(project_id: str, review_id: str, user: dict = Depends(require_analyst)):
-    r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
+    try: r=repository.update_entity('reviews', review_id, {'status':'confirmed','confirmed_by':user.get('id','demo-user'),'confirmed_at':datetime.now(timezone.utc)})
+    except KeyError: raise HTTPException(404, detail={'code':'review_not_found'})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
-    r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
+    return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
 def export_redacted(project_id: str, user: dict = Depends(require_user)):
     """Export only the redacted dataset previews belonging to *project_id*.
