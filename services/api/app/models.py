@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from sqlalchemy import DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
@@ -7,7 +7,7 @@ class Project(Base):
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)`n    source_namespace: Mapped[str | None] = mapped_column(String(128), index=True)`n    source_kind: Mapped[str | None] = mapped_column(String(64), index=True)`n    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 class Dataset(Base):
     __tablename__ = "datasets"
@@ -35,3 +35,7 @@ class AuditEvent(Base):
     actor: Mapped[str | None] = mapped_column(String(128))
     detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+
+

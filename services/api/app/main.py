@@ -40,12 +40,21 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     if ext not in ALLOWED: raise HTTPException(422, detail={'code':'unsupported_file_type'})
     data = await file.read()
     if len(data) > MAX_BYTES: raise HTTPException(413, detail={'code':'file_too_large'})
+    content_hash = hashlib.sha256(data).hexdigest()
+    source_name = name or file.filename or 'upload'
+    namespace = source_namespace or ''
+    kind = source_kind or ext
+    source_key = (project_id, namespace, kind, source_name)
+    for existing in datasets.values():
+        if (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == source_key:
+            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=existing)
+            raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
     try:
         preview = parse_csv_text(data.decode('utf-8', errors='replace')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
-    d={'id':did,'project_id':project_id,'name':name or file.filename,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
+    d={'id':did,'project_id':project_id,'name':source_name,'source_namespace':namespace,'source_kind':kind,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str): return {'items':[d for d in datasets.values() if d['project_id']==project_id], 'total':sum(d['project_id']==project_id for d in datasets.values())}
@@ -97,7 +106,7 @@ def cancel_analysis(project_id: str, analysis_id: str):
     return worker.cancel(analysis_id)
 
 
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 
 # Domain read models (in-memory demo repository)
 projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project','description':'Synthetic workspace','status':'active'}}
@@ -125,6 +134,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
