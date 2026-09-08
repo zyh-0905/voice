@@ -5,6 +5,9 @@ import os
 
 
 class Repository(Protocol):
+    def list_projects(self) -> list[dict]: ...
+    def get_project(self, key: str) -> dict | None: ...
+    def create_project(self, value: dict) -> dict: ...
     datasets: MutableMapping[str, dict]
     analyses: MutableMapping[str, dict]
     outbox: list[dict]
@@ -25,6 +28,7 @@ class Repository(Protocol):
 
 class InMemoryRepository:
     def __init__(self):
+        self.projects = {}
         self.datasets = {}
         self.analyses = {}
         self.outbox = []
@@ -36,6 +40,10 @@ class InMemoryRepository:
             raise ValueError(f'Entity already exists: {key}')
         collection[key] = deepcopy(value)
         return deepcopy(collection[key])
+
+    def list_projects(self): return [deepcopy(v) for v in self.projects.values()]
+    def get_project(self, key): return deepcopy(self.projects.get(key))
+    def create_project(self, value): return self._create(self.projects, value)
 
     def _update(self, collection, key, changes):
         collection[key].update(deepcopy(changes))

@@ -172,20 +172,27 @@ import csv
 import io
 import json
 
-# Domain read models (in-memory demo repository)
-projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project','description':'Synthetic workspace','status':'active'}}
+# Domain read models backed by repository
+if not repository.get_project('demo-project'):
+    try:
+        repository.create_project({'id':'demo-project','name':'VoiceLens Demo Project'})
+    except ValueError:
+        pass
 reviews = {}
 if repository.__class__.__name__ == 'InMemoryRepository':
     repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'Missing time field','severity':'high','status':'open','evidence_count':2})
     repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'Missing time field','owner':'analyst','status':'todo','priority':'high'})
     repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
-def _project(pid): return projects.get(pid) or {'id':pid,'name':pid,'description':'Project','status':'active'}
+def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
-def list_projects(user: dict = Depends(require_user)): return {'items': list(projects.values()), 'total': len(projects)}
+def list_projects(user: dict = Depends(require_user)):
+    items = repository.list_projects()
+    return {'items': items, 'total': len(items)}
 @app.get('/api/v1/projects/{project_id}')
 def get_project(project_id: str, user: dict = Depends(require_user)):
-    if project_id not in projects: raise HTTPException(404, detail={'code':'project_not_found'})
-    return projects[project_id]
+    project = repository.get_project(project_id)
+    if not project: raise HTTPException(404, detail={'code':'project_not_found'})
+    return project
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_user)):
     items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
@@ -211,7 +218,7 @@ def export_redacted(project_id: str, user: dict = Depends(require_user)):
     fields, and applies redaction once more at the export boundary so a
     repository populated by an older parser cannot emit raw PII.
     """
-    if project_id not in projects:
+    if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
     output = io.StringIO(newline='')
     writer = csv.DictWriter(output, fieldnames=['dataset_id', 'row_index', 'data'])
@@ -234,4 +241,5 @@ def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(requir
         raise HTTPException(404, detail={'code': 'dataset_not_found'})
     repository.delete_dataset(dataset_id)
     return Response(status_code=204)
+
 

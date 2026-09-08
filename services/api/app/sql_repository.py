@@ -1,7 +1,7 @@
 from collections.abc import MutableMapping
 from sqlalchemy import select
 from .db import Base, SessionLocal
-from .models import Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review
+from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review
 
 
 class _EntityMap(MutableMapping):
@@ -92,6 +92,21 @@ class SQLAlchemyRepository:
         self.datasets = _EntityMap(self, 'datasets')
         self.analyses = _EntityMap(self, 'analyses')
         self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review}
+
+    def _project_dict(self, obj):
+        return {'id': obj.id, 'name': obj.name, 'description': 'Project', 'status': 'active'}
+    def list_projects(self):
+        with self.session() as s:
+            return [self._project_dict(o) for o in s.scalars(select(Project)).all()]
+    def get_project(self, key):
+        with self.session() as s:
+            o = s.get(Project, key)
+            return self._project_dict(o) if o else None
+    def create_project(self, value):
+        with self.session() as s, s.begin():
+            o = Project(id=value['id'], name=value['name'])
+            s.add(o); s.flush()
+            return self._project_dict(o)
 
     def list_entities(self, kind, project_id):
         model = self._domain[kind]
