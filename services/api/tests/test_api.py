@@ -68,3 +68,4 @@ def test_auth_login_me_logout():
     assert client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).status_code == 401
 
 
+
