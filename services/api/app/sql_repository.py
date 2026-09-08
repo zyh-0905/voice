@@ -15,7 +15,7 @@ class _EntityMap(MutableMapping):
     def _to_dict(self, obj):
         if self.kind == 'datasets':
             value = dict(obj.governance or {})
-            value.update(id=obj.id, project_id=obj.project_id, name=obj.filename, status=obj.status, content_hash=obj.content_hash, source_namespace=obj.source_namespace, source_kind=obj.source_kind)
+            value.update(id=obj.id, project_id=obj.project_id, name=obj.filename, status=obj.status, content_hash=getattr(obj, 'content_hash', None), source_namespace=getattr(obj, 'source_namespace', None), source_kind=getattr(obj, 'source_kind', None))
             value.setdefault('created_at', obj.created_at.isoformat() if obj.created_at else None)
             return value
         value = dict(obj.result or {})
@@ -99,6 +99,7 @@ class SQLAlchemyRepository:
     def update_dataset(self, key, changes): return self.datasets.write(key, changes, 'update')
     def create_analysis(self, value): return self.analyses.write(value['id'], value, 'create')
     def update_analysis(self, key, changes): return self.analyses.write(key, changes, 'update')
+
 
 
 
