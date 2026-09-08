@@ -78,7 +78,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
     try:
-        preview = parse_csv_text(data.decode('utf-8', errors='replace')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}
+        preview = parse_csv_text(data.decode('utf-8')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
     d={'id':did,'project_id':project_id,'name':source_name,'source_namespace':namespace,'source_kind':kind,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
@@ -216,3 +216,4 @@ def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(requir
         raise HTTPException(404, detail={'code': 'dataset_not_found'})
     repository.delete_dataset(dataset_id)
     return Response(status_code=204)
+
