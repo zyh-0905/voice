@@ -1,1 +1,1 @@
-<template><div /></template>
+<template><div><h1>概览</h1><p data-testid="demo-notice">演示数据</p><div class="metrics"><article>待处理风险 <b data-testid="metric-pending-risks">3</b></article><article>逾期任务 <b data-testid="metric-overdue-tasks">2</b></article><article>进行中任务 <b data-testid="metric-active-tasks">8</b></article><article>有效反馈 <b data-testid="metric-valid-feedback">12</b></article></div></div></template>
