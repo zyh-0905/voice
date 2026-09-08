@@ -1,4 +1,4 @@
-"""Validate the Compose contract used by local and CI deployments."""
+﻿"""Validate the Compose contract used by local and CI deployments."""
 from pathlib import Path
 import sys
 
@@ -15,7 +15,7 @@ def main() -> int:
     web = services["web"]
     if web.get("build", {}).get("dockerfile") != "apps/web/Dockerfile":
         raise SystemExit("web Dockerfile is invalid")
-    if web.get("ports") != ["8080:80"]:
+    if web.get("ports") != ["8080:8080"]:
         raise SystemExit("web must expose port 8080")
     if web.get("depends_on", {}).get("api", {}).get("condition") != "service_healthy":
         raise SystemExit("web must depend on healthy api")
@@ -32,4 +32,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
