@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Fixed Alembic portability: %(here)s/migrations resolution, environment DATABASE_URL override, and safe logging configuration. Verified upgrade head against temporary SQLite.
-Verification: Alembic upgrade PASS; backend pytest 13 passed; frontend typecheck/unit/build PASS; Playwright + axe 2 passed; compose validation PASS.
-Remaining: Docker daemon integration and production identity/model evaluation.
+Replaced fixed demo export with project-scoped redacted CSV generated from governed preview rows; unknown projects 404, empty projects return headers, and a second redaction pass prevents PII leakage.
+Verification: backend pytest 15 passed; compileall PASS; frontend typecheck/unit/build PASS; Playwright + axe 2 passed; compose validation PASS.
+Remaining: Docker daemon integration, production identity/token persistence, and external model evaluation.
