@@ -115,11 +115,17 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     total_rows = sum(d.get('rows', 0) for d in ds)
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
     aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
+    repository.create_outbox_event({'event_key': f'analysis.created:{aid}', 'event_type':'analysis.created', 'payload': {'analysis_id': aid, 'project_id': project_id}})
     outbox_events.append({'event_id': 'evt_'+uuid4().hex[:10], 'event_type': 'analysis.created', 'analysis_id': aid, 'project_id': project_id, 'status': 'pending', 'created_at': now()})
     if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return analyses[aid]
+
+@app.get('/api/v1/projects/{project_id}/outbox/status')
+def outbox_status(project_id: str, user: dict = Depends(require_user)):
+    events = [e for e in repository.list_pending_outbox() if e.get('payload', {}).get('project_id') == project_id]
+    return {'pending': len(events), 'items': events}
 @app.get('/api/v1/projects/{project_id}/analyses')
 def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_user)):
     page, page_size = _page(page, page_size)

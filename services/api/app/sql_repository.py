@@ -1,7 +1,7 @@
 ﻿from collections.abc import MutableMapping
 from sqlalchemy import select
 from .db import Base, SessionLocal
-from .models import Dataset, AnalysisRun
+from .models import Dataset, AnalysisRun, OutboxEvent
 
 
 class _EntityMap(MutableMapping):
@@ -99,6 +99,18 @@ class SQLAlchemyRepository:
     def update_dataset(self, key, changes): return self.datasets.write(key, changes, 'update')
     def create_analysis(self, value): return self.analyses.write(value['id'], value, 'create')
     def update_analysis(self, key, changes): return self.analyses.write(key, changes, 'update')
+    def create_outbox_event(self, event):
+        with self.session() as session, session.begin():
+            obj = OutboxEvent(event_key=event['event_key'], event_type=event['event_type'], payload=event.get('payload', {}), status=event.get('status','pending'))
+            session.add(obj); session.flush()
+            return {'id': obj.id, 'event_key': obj.event_key, 'event_type': obj.event_type, 'payload': obj.payload, 'status': obj.status, 'created_at': obj.created_at.isoformat()}
+    def list_pending_outbox(self):
+        with self.session() as session:
+            return [{'id':o.id,'event_key':o.event_key,'event_type':o.event_type,'payload':o.payload,'status':o.status,'created_at':o.created_at.isoformat()} for o in session.scalars(select(OutboxEvent).where(OutboxEvent.status=='pending')).all()]
+    def mark_published(self, event_key):
+        with self.session() as session, session.begin():
+            obj = session.scalars(select(OutboxEvent).where(OutboxEvent.event_key==event_key)).first()
+            if obj: obj.status='published'
 
 
 
