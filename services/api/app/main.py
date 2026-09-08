@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -85,6 +85,7 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
         if previous and previous[0] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
         if previous: return analyses[previous[1]]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
+    if sum(d['rows'] for d in ds if d) > 5000: raise HTTPException(422, detail={'code':'feedback_limit_exceeded'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
     total_rows = sum(d.get('rows', 0) for d in ds)
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
