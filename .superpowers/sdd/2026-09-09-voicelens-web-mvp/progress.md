@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Expanded semantic design tokens with chart palette, text roles, control borders, focus-visible styling, and reduced-motion defaults.
-Verification: frontend typecheck/unit/build PASS; Playwright + axe previously PASS; backend pytest 13 PASS; compose validation PASS; npm audit PASS.
-Remaining: Docker-enabled integration and production identity/model evaluation.
+Hardened production defaults: AUTH_REQUIRED=true, PostgreSQL DATABASE_URL default, Compose explicit auth, and test-only demo override. Added regression coverage for auth/project isolation/XLS/empty data/idempotency.
+Verification: backend pytest 13 passed; compileall PASS; compose validation PASS; frontend typecheck/unit/build PASS; Playwright + axe 2 passed; npm audit 0 vulnerabilities.
+Remaining: Docker daemon integration, production identity/token store, and external model quality evaluation.
