@@ -1,1 +1,1 @@
-<template><div class="page"><h1>登录</h1><p>演示模式</p><router-link to="/overview">进入工作台</router-link></div></template>
+<script setup lang="ts">import {useSessionStore} from '../stores/session';import {useRouter} from 'vue-router';const s=useSessionStore();const r=useRouter();function enter(){s.login();r.push('/overview')}</script><template><div class="page"><h1>登录</h1><p>演示模式</p><button @click="enter">进入演示工作台</button></div></template>
