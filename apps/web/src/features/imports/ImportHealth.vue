@@ -1,0 +1,1 @@
+<script setup lang="ts">defineEmits<{done:[]}>()</script><template><div class="card" data-testid="import-health"><h2>治理报告</h2><p>✓ 字段完整性通过　✓ 脱敏规则已启用　⚠ 缺少 12 条时间字段</p><p class="muted">百分比仅在 total 真实可用时显示；当前为 mock 演示。</p><button @click="$emit('done')">重新导入</button></div></template>

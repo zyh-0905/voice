@@ -1,0 +1,2 @@
+<script setup lang="ts">import {ref} from 'vue'; const emit=defineEmits<{next:[]}>(); const rows=ref([{source:'call_id',target:'通话 ID'},{source:'transcript',target:'转写文本'},{source:'agent',target:'坐席'}]);</script>
+<template><div class="card" data-testid="field-mapping"><h2>字段映射</h2><p class="muted">请确认字段含义；原始数据将在分析前脱敏。</p><table><tr v-for="r in rows" :key="r.source"><td>{{r.source}}</td><td>→ {{r.target}}</td></tr></table><button data-testid="mapping-next" @click="emit('next')">确认并生成治理报告</button></div></template>
