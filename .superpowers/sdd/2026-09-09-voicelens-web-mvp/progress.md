@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Added SQL Repository transactional CRUD, deterministic CPU analysis results, project/domain API contracts, and overview topic/table visualization.
-Verification: frontend typecheck PASS; unit 2 passed; build PASS; Playwright Chromium + axe 2 passed; backend pytest 9 passed; compileall PASS.
-Remaining: production PostgreSQL deployment validation, Celery/Redis worker integration, and full NLP/LLM evaluation beyond deterministic MVP.
+Added optional Celery/Redis adapter and worker Compose service, API contract README/OpenAPI smoke tests, deterministic analysis pipeline, transactional SQL Repository, and overview analysis visualization.
+Verification: frontend typecheck/unit/build PASS; Playwright Chromium + axe PASS (2); backend pytest PASS (10); compileall PASS. Fixed domain fixture syntax after regression.
+Remaining product scope: production PostgreSQL/Celery deployment validation, external model quality evaluation, and broader load/visual regression coverage.
