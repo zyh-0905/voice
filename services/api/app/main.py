@@ -107,5 +107,3 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str): return Response('id,project_id,status\nexport-001,'+project_id+',redacted\n', media_type='text/csv')
 export-001,'+project_id+',redacted
 ', media_type='text/csv')
-
-
