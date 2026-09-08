@@ -1,4 +1,4 @@
-﻿"""Deterministic ingestion helpers shared by upload and validation endpoints."""
+"""Deterministic ingestion helpers shared by upload and validation endpoints."""
 import csv, io, re
 from collections import Counter
 
@@ -30,8 +30,16 @@ def classify_rows(rows: list[dict], time_field: str | None = None) -> dict:
     return {"total": len(rows), "valid": valid, "invalid": invalid, "duplicate": duplicate, "redacted": redacted, "missing_time": missing_time, "preview": preview}
 
 def parse_csv_text(text: str) -> dict:
-    reader = csv.DictReader(io.StringIO(text)); rows = list(reader)
-    return {"headers": reader.fieldnames or [], "rows": rows, "stats": classify_rows(rows)}
+    reader = csv.DictReader(io.StringIO(text, newline=''))
+    headers = reader.fieldnames or []
+    if not headers or any(not str(h).strip() for h in headers):
+        raise ValueError('CSV header is missing or contains an empty field')
+    rows = []
+    for line_no, row in enumerate(reader, 2):
+        if None in row:
+            raise ValueError(f'CSV row {line_no} has more fields than the header')
+        rows.append(row)
+    return {"headers": headers, "rows": rows, "stats": classify_rows(rows)}
 
 def parse_xlsx_bytes(data: bytes) -> dict:
     """Parse the first worksheet of an XLSX workbook with bounded dimensions."""
