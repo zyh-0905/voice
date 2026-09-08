@@ -2,12 +2,13 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
+from .ingestion import parse_csv_text, classify_rows
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 datasets: dict[str, dict] = {}
 analyses: dict[str, dict] = {}
 MAX_BYTES = 50 * 1024 * 1024
-ALLOWED = {'csv', 'xls', 'xlsx'}
+ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
 
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -31,7 +32,8 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     data = await file.read()
     if len(data) > MAX_BYTES: raise HTTPException(413, detail={'code':'file_too_large'})
     did='ds_'+uuid4().hex[:10]
-    d={'id':did,'project_id':project_id,'name':name or file.filename,'rows':0,'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'created_at':now()}
+    preview = parse_csv_text(data.decode('utf-8', errors='replace')) if ext == 'csv' else {'headers': [], 'rows': [], 'stats': {}}
+    d={'id':did,'project_id':project_id,'name':name or file.filename,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     datasets[did]=d; return d
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str): return {'items':[d for d in datasets.values() if d['project_id']==project_id], 'total':sum(d['project_id']==project_id for d in datasets.values())}
@@ -40,7 +42,13 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest):
     d=datasets.get(dataset_id)
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
-    d.update(state='READY',status='ready',rows=max(1,d['rows']),version=d['version']+1); return d
+    if d.get('file_ext') in ('xls','xlsx'): raise HTTPException(422, detail={'code':'unsupported_file_type','message':'xlsx parsing is not supported yet'})
+    stats = d.get('preview', {}).get('stats', {})
+    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=max(1,d['rows']), version=d['version']+1)
+    total = stats.get('total', 0)
+    d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
+    d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
+    return d
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest):
     ds=[datasets.get(i) for i in req.dataset_ids]
