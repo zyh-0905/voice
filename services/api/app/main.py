@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -8,7 +8,7 @@ from .worker import AnalysisWorker
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
-repository = get_repository()\ndatasets = repository.datasets
+repository = get_repository()`ndatasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
@@ -76,3 +76,4 @@ def retry_analysis(project_id: str, analysis_id: str):
 def cancel_analysis(project_id: str, analysis_id: str):
     get_analysis(project_id, analysis_id)
     return worker.cancel(analysis_id)
+
