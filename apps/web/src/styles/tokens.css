@@ -9,3 +9,6 @@
 }
 :focus-visible { outline: 3px solid #0b6e63; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+:root { --vl-color-white: #ffffff; --vl-color-danger-soft: #fee2e2; --vl-color-warning-soft: #fef3c7; --vl-color-danger-strong: #b91c1c; --vl-color-warning-strong: #92400e; --vl-color-success-strong: #047857; --vl-color-notice-bg: #edf6f0; --vl-color-shadow: #173b3026; --vl-color-shadow-soft: #17332a12; --vl-color-focus: #7bc9a8; }
+

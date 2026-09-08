@@ -1,46 +1,46 @@
-ï»¿<template>
+<template>
   <div>
-    <h1>æ¦‚è§ˆ</h1>
-    <p v-if="analysis" data-testid="demo-notice">æ¼”ç¤ºæ•°æ® Â· åˆæˆåˆ†æç‰ˆæœ¬ {{ analysis.version }}</p>
+    <h1>¸ÅÀÀ</h1>
+    <p v-if="analysis" data-testid="demo-notice">ÑİÊ¾Êı¾İ ¡¤ ºÏ³É·ÖÎö°æ±¾ {{ analysis.version }}</p>
     <div v-if="analysis" class="metrics">
-      <article>å¾…å¤„ç†é£é™© <b data-testid="metric-pending-risks">3</b></article>
-      <article>é€¾æœŸä»»åŠ¡ <b data-testid="metric-overdue-tasks">2</b></article>
-      <article>è¿›è¡Œä¸­ä»»åŠ¡ <b data-testid="metric-active-tasks">8</b></article>
-      <article>æœ‰æ•ˆåé¦ˆ <b data-testid="metric-valid-feedback">{{ analysis.validFeedback }}</b></article>
+      <article>´ı´¦Àí·çÏÕ <b data-testid="metric-pending-risks">3</b></article>
+      <article>ÓâÆÚÈÎÎñ <b data-testid="metric-overdue-tasks">2</b></article>
+      <article>½øĞĞÖĞÈÎÎñ <b data-testid="metric-active-tasks">8</b></article>
+      <article>ÓĞĞ§·´À¡ <b data-testid="metric-valid-feedback">{{ analysis.validFeedback }}</b></article>
     </div>
     <section v-if="analysis" class="panel" aria-labelledby="analysis-title">
-      <h2 id="analysis-title">ä¸»é¢˜åˆ†æ</h2>
+      <h2 id="analysis-title">Ö÷Ìâ·ÖÎö</h2>
       <p data-testid="analysis-summary">{{ analysis.summary }}</p>
-      <p class="caption">æ¯æ¡åˆæˆåé¦ˆå½’å…¥ä¸€ä¸ªä¸»é¢˜ï¼›å æ¯”åˆ†æ¯ä¸º {{ analysis.validFeedback }} æ¡æœ‰æ•ˆåé¦ˆã€‚</p>
+      <p class="caption">Ã¿ÌõºÏ³É·´À¡¹éÈëÒ»¸öÖ÷Ìâ£»Õ¼±È·ÖÄ¸Îª {{ analysis.validFeedback }} ÌõÓĞĞ§·´À¡¡£</p>
       <ul class="topics" data-testid="topic-list">
         <li v-for="topic in analysis.topics" :key="topic.id">
-          <div class="topic-heading"><h3>{{ topic.title }}</h3><span>{{ topic.count }} æ¡ Â· {{ percentage(topic.count) }}%</span></div>
+          <div class="topic-heading"><h3>{{ topic.title }}</h3><span>{{ topic.count }} Ìõ ¡¤ {{ percentage(topic.count) }}%</span></div>
           <div class="bar-track" aria-hidden="true"><div class="bar" :style="{ width: `${percentage(topic.count)}%` }"></div></div>
           <p>{{ topic.summary }}</p>
-          <button @click="openEvidence(topic, $event)">æŸ¥çœ‹ã€Œ{{ topic.title }}ã€è¯æ®</button>
+          <button @click="openEvidence(topic, $event)">²é¿´¡¸{{ topic.title }}¡¹Ö¤¾İ</button>
         </li>
       </ul>
-      <button data-testid="chart-data-toggle" :aria-expanded="showTable" aria-controls="topic-data-table" @click="showTable = !showTable">{{ showTable ? 'æ”¶èµ·æ•°æ®è¡¨' : 'æŸ¥çœ‹æ•°æ®è¡¨' }}</button>
+      <button data-testid="chart-data-toggle" :aria-expanded="showTable" aria-controls="topic-data-table" @click="showTable = !showTable">{{ showTable ? 'ÊÕÆğÊı¾İ±í' : '²é¿´Êı¾İ±í' }}</button>
       <div v-show="showTable" id="topic-data-table" class="table-wrapper">
         <table data-testid="chart-data-table">
-          <caption>ä¸»é¢˜åˆ†å¸ƒ Â· åˆæˆæ¼”ç¤ºæ•°æ®</caption>
-          <thead><tr><th scope="col">ä¸»é¢˜</th><th scope="col">åé¦ˆæ•°</th><th scope="col">å æœ‰æ•ˆåé¦ˆ</th></tr></thead>
+          <caption>Ö÷Ìâ·Ö²¼ ¡¤ ºÏ³ÉÑİÊ¾Êı¾İ</caption>
+          <thead><tr><th scope="col">Ö÷Ìâ</th><th scope="col">·´À¡Êı</th><th scope="col">Õ¼ÓĞĞ§·´À¡</th></tr></thead>
           <tbody><tr v-for="topic in analysis.topics" :key="topic.id"><th scope="row">{{ topic.title }}</th><td>{{ topic.count }}</td><td>{{ percentage(topic.count) }}%</td></tr></tbody>
         </table>
       </div>
     </section>
     <section v-else class="panel" data-testid="analysis-empty" aria-live="polite">
-      <h2>æš‚æ— åˆ†æç»“æœ</h2><p>å½“å‰é¡¹ç›®è¿˜æ²¡æœ‰å¯å±•ç¤ºçš„åˆ†æç»“æœã€‚è¯·å…ˆå¯¼å…¥åé¦ˆå¹¶å®Œæˆåˆ†æã€‚</p>
+      <h2>ÔİÎŞ·ÖÎö½á¹û</h2><p>µ±Ç°ÏîÄ¿»¹Ã»ÓĞ¿ÉÕ¹Ê¾µÄ·ÖÎö½á¹û¡£ÇëÏÈµ¼Èë·´À¡²¢Íê³É·ÖÎö¡£</p>
     </section>
     <section v-if="analysis" class="panel" data-testid="evidence-panel">
-      <h2>è¯æ®ä¸æ¥æº</h2>
-      <p data-testid="ai-provenance">AI æ¼”ç¤ºåˆ†æ Â· æ¥æºä¸ºåˆæˆæ ·æœ¬ï¼Œæœªç»äººå·¥å¤æ ¸</p>
-      <ul><li v-for="item in analysis.topics" :key="item.id"><button @click="openEvidence(item, $event)">{{ item.title }} Â· æŸ¥çœ‹è¯æ®</button></li></ul>
+      <h2>Ö¤¾İÓëÀ´Ô´</h2>
+      <p data-testid="ai-provenance">AI ÑİÊ¾·ÖÎö ¡¤ À´Ô´ÎªºÏ³ÉÑù±¾£¬Î´¾­ÈË¹¤¸´ºË</p>
+      <ul><li v-for="item in analysis.topics" :key="item.id"><button @click="openEvidence(item, $event)">{{ item.title }} ¡¤ ²é¿´Ö¤¾İ</button></li></ul>
     </section>
     <aside v-if="selected" class="drawer" data-testid="evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="evidence-title" @keydown.tab.prevent="closeButton?.focus()">
-      <button ref="closeButton" data-testid="evidence-close" @click="close">å…³é—­</button>
+      <button ref="closeButton" data-testid="evidence-close" @click="close">¹Ø±Õ</button>
       <h3 id="evidence-title">{{ selected.title }}</h3><p>{{ selected.evidence }}</p>
-      <p>æ¥æºï¼š{{ analysis?.version }} Â· åˆæˆåé¦ˆï¼Œä»…ç”¨äºæ¼”ç¤º</p>
+      <p>À´Ô´£º{{ analysis?.version }} ¡¤ ºÏ³É·´À¡£¬½öÓÃÓÚÑİÊ¾</p>
     </aside>
   </div>
 </template>
@@ -81,7 +81,7 @@ ul{padding:0;list-style:none}.topics{display:grid;grid-template-columns:repeat(3
 .bar-track{height:8px;border-radius:8px;background:var(--vl-bg);overflow:hidden}.bar{height:100%;background:var(--vl-green);transition:width .2s ease}
 button{padding:10px;border:1px solid var(--vl-border);border-radius:6px;background:var(--vl-surface);color:var(--vl-text);cursor:pointer}
 li button{margin-top:8px}.table-wrapper{overflow-x:auto;margin-top:16px}table{width:100%;border-collapse:collapse;text-align:left}caption{text-align:left;padding-bottom:12px}th,td{padding:12px;border-bottom:1px solid var(--vl-border)}
-.drawer{position:fixed;z-index:30;right:0;top:0;height:100dvh;width:min(420px,100vw);padding:24px;overflow-y:auto;background:var(--vl-surface);box-shadow:-8px 0 28px #173b3026}
+.drawer{position:fixed;z-index:30;right:0;top:0;height:100dvh;width:min(420px,100vw);padding:24px;overflow-y:auto;background:var(--vl-surface);box-shadow:-8px 0 28px var(--vl-color-shadow)}
 @media(max-width:900px){.topics{grid-template-columns:1fr}}@media(max-width:700px){.metrics{grid-template-columns:repeat(2,1fr)}}
 @media(prefers-reduced-motion:reduce){.bar{transition:none}}
 </style>

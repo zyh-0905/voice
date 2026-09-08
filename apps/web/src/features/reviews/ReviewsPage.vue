@@ -1,14 +1,14 @@
-ï»¿<template>
+<template>
   <main class="page">
-    <header class="heading"><div><h1>å¤æ ¸ä¸å¤ç›˜</h1><p>å›´ç»•å›ºå®šåˆ†æç‰ˆæœ¬æ ¸å¯¹è¯æ®å¹¶è®°å½•äººå·¥ç»“è®º <span class="demo">æ¼”ç¤ºæ•°æ®</span></p></div><span class="version">åˆ†æç‰ˆæœ¬ v2026.09.09-01</span></header>
-    <div v-if="loading" class="state">æ­£åœ¨åŠ è½½å¤æ ¸ææ–™â€¦</div>
-    <div v-else-if="error" class="state error">åŠ è½½å¤±è´¥ï¼š{{ error }} <button @click="load">é‡è¯•</button></div>
-    <div v-else-if="!review" class="state">æš‚æ— å¯å¤æ ¸çš„åˆ†æç‰ˆæœ¬</div>
+    <header class="heading"><div><h1>¸´ºËÓë¸´ÅÌ</h1><p>Î§ÈÆ¹Ì¶¨·ÖÎö°æ±¾ºË¶ÔÖ¤¾İ²¢¼ÇÂ¼ÈË¹¤½áÂÛ <span class="demo">ÑİÊ¾Êı¾İ</span></p></div><span class="version">·ÖÎö°æ±¾ v2026.09.09-01</span></header>
+    <div v-if="loading" class="state">ÕıÔÚ¼ÓÔØ¸´ºË²ÄÁÏ¡­</div>
+    <div v-else-if="error" class="state error">¼ÓÔØÊ§°Ü£º{{ error }} <button @click="load">ÖØÊÔ</button></div>
+    <div v-else-if="!review" class="state">ÔİÎŞ¿É¸´ºËµÄ·ÖÎö°æ±¾</div>
     <template v-else>
-      <section class="notice">å¤ç›˜ç»“æœç”¨äºè®°å½•è§‚å¯Ÿä¸åç»­è¡ŒåŠ¨ã€‚å½“å‰è¯æ®åªå±•ç¤ºå…³è”çº¿ç´¢ï¼Œä¸èƒ½å®£ç§°å› æœå…³ç³»æˆ–è‡ªåŠ¨è¯æ˜æªæ–½æœ‰æ•ˆã€‚</section>
-      <section class="card"><h2>è¯æ®å¯¹ç…§</h2><div class="evidence" v-for="item in review.evidence" :key="item.id"><div><b>{{ item.label }}</b><p>{{ item.detail }}</p></div><span class="tag">{{ item.source }}</span></div></section>
-      <section class="card"><h2>äººå·¥ç¡®è®¤</h2><p class="muted">è¯·åŸºäºåŸå§‹è®°å½•å®Œæˆç¡®è®¤ï¼Œç¡®è®¤å†…å®¹å°†å†™å…¥å®¡è®¡æ—¥å¿—ã€‚</p><button class="primary" :disabled="confirmed" @click="confirmed=true">{{ confirmed ? 'å·²ç¡®è®¤å¹¶è®°å½•' : 'ç¡®è®¤æœ¬æ¬¡å¤æ ¸' }}</button></section>
-      <section class="card"><h2>å¤ç›˜ç»“æœ</h2><dl><div><dt>è§‚å¯Ÿ</dt><dd>{{ review.observation }}</dd></div><div><dt>åç»­åŠ¨ä½œ</dt><dd>{{ review.next }}</dd></div></dl></section>
+      <section class="notice">¸´ÅÌ½á¹ûÓÃÓÚ¼ÇÂ¼¹Û²ìÓëºóĞøĞĞ¶¯¡£µ±Ç°Ö¤¾İÖ»Õ¹Ê¾¹ØÁªÏßË÷£¬²»ÄÜĞû³ÆÒò¹û¹ØÏµ»ò×Ô¶¯Ö¤Ã÷´ëÊ©ÓĞĞ§¡£</section>
+      <section class="card"><h2>Ö¤¾İ¶ÔÕÕ</h2><div class="evidence" v-for="item in review.evidence" :key="item.id"><div><b>{{ item.label }}</b><p>{{ item.detail }}</p></div><span class="tag">{{ item.source }}</span></div></section>
+      <section class="card"><h2>ÈË¹¤È·ÈÏ</h2><p class="muted">Çë»ùÓÚÔ­Ê¼¼ÇÂ¼Íê³ÉÈ·ÈÏ£¬È·ÈÏÄÚÈİ½«Ğ´ÈëÉó¼ÆÈÕÖ¾¡£</p><button class="primary" :disabled="confirmed" @click="confirmed=true">{{ confirmed ? 'ÒÑÈ·ÈÏ²¢¼ÇÂ¼' : 'È·ÈÏ±¾´Î¸´ºË' }}</button></section>
+      <section class="card"><h2>¸´ÅÌ½á¹û</h2><dl><div><dt>¹Û²ì</dt><dd>{{ review.observation }}</dd></div><div><dt>ºóĞø¶¯×÷</dt><dd>{{ review.next }}</dd></div></dl></section>
     </template>
   </main>
 </template>
@@ -16,9 +16,9 @@
 import { ref } from 'vue'
 const loading = ref(true); const error = ref(''); const confirmed = ref(false)
 const review = ref<any>(null)
-function load(){ loading.value=true; error.value=''; setTimeout(()=>{ review.value={evidence:[{id:'e1',label:'é€€æ¬¾ç‡ä¸Šå‡',detail:'è¿‘ 30 å¤©é€€æ¬¾ç‡ 8.4%ï¼Œè¾ƒåŸºçº¿é«˜ 2.1 ä¸ªç™¾åˆ†ç‚¹',source:'æ•°æ®é›† orders.csv'},{id:'e2',label:'å®¢æœä¸»é¢˜å…³è”',detail:'â€œé€€æ¬¾å»¶è¿Ÿâ€ä¸»é¢˜å æ¯” 14%ï¼Œä¸å¼‚å¸¸çª—å£é‡å ',source:'ä¸»é¢˜åˆ†æ v1'}],observation:'å¼‚å¸¸ä¸é€€æ¬¾å»¶è¿Ÿä¸»é¢˜åœ¨æ—¶é—´çª—å£ä¸Šé‡å ï¼Œéœ€ä¸šåŠ¡è´Ÿè´£äººè¿›ä¸€æ­¥æ ¸å¯¹ã€‚',next:'æŠ½æ ·å¤æ ¸ 20 æ¡è®¢å•å¹¶åœ¨ä¸‹ä¸ªç‰ˆæœ¬æ¯”è¾ƒæŒ‡æ ‡ã€‚'}; loading.value=false },180) }
+function load(){ loading.value=true; error.value=''; setTimeout(()=>{ review.value={evidence:[{id:'e1',label:'ÍË¿îÂÊÉÏÉı',detail:'½ü 30 ÌìÍË¿îÂÊ 8.4%£¬½Ï»ùÏß¸ß 2.1 ¸ö°Ù·Öµã',source:'Êı¾İ¼¯ orders.csv'},{id:'e2',label:'¿Í·şÖ÷Ìâ¹ØÁª',detail:'¡°ÍË¿îÑÓ³Ù¡±Ö÷ÌâÕ¼±È 14%£¬ÓëÒì³£´°¿ÚÖØµş',source:'Ö÷Ìâ·ÖÎö v1'}],observation:'Òì³£ÓëÍË¿îÑÓ³ÙÖ÷ÌâÔÚÊ±¼ä´°¿ÚÉÏÖØµş£¬ĞèÒµÎñ¸ºÔğÈË½øÒ»²½ºË¶Ô¡£',next:'³éÑù¸´ºË 20 Ìõ¶©µ¥²¢ÔÚÏÂ¸ö°æ±¾±È½ÏÖ¸±ê¡£'}; loading.value=false },180) }
 load()
 </script>
 <style scoped>
-.page{padding:32px;max-width:1100px;margin:auto}.heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1{margin:0;color:var(--vl-text);font-size:var(--vl-font-title)}h2{margin:0 0 14px;font-size:17px}.demo,.version,.tag{font-size:12px;color:var(--vl-muted);border:1px solid var(--vl-border);padding:4px 8px;border-radius:12px}.card{background:var(--vl-surface);border:1px solid var(--vl-border);border-radius:var(--vl-radius);padding:20px;margin-bottom:16px;box-shadow:var(--vl-shadow-sm)}.notice{padding:14px 16px;border-left:3px solid var(--vl-color-primary);background:#edf6f0;color:var(--vl-text);margin-bottom:16px}.evidence{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--vl-border)}.evidence:last-child{border:0}.evidence p,.muted{color:var(--vl-muted);margin:6px 0 0}.primary{background:var(--vl-color-primary);color:#fff;border:0;padding:10px 16px;border-radius:8px}.primary:disabled{opacity:.7}.state{text-align:center;padding:64px}.error{color:#b91c1c}dt{color:var(--vl-muted);font-size:12px}dd{margin:4px 0 14px;color:var(--vl-text)}
+.page{padding:32px;max-width:1100px;margin:auto}.heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1{margin:0;color:var(--vl-text);font-size:var(--vl-font-title)}h2{margin:0 0 14px;font-size:17px}.demo,.version,.tag{font-size:12px;color:var(--vl-muted);border:1px solid var(--vl-border);padding:4px 8px;border-radius:12px}.card{background:var(--vl-surface);border:1px solid var(--vl-border);border-radius:var(--vl-radius);padding:20px;margin-bottom:16px;box-shadow:var(--vl-shadow-sm)}.notice{padding:14px 16px;border-left:3px solid var(--vl-color-primary);background:var(--vl-color-notice-bg);color:var(--vl-text);margin-bottom:16px}.evidence{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--vl-border)}.evidence:last-child{border:0}.evidence p,.muted{color:var(--vl-muted);margin:6px 0 0}.primary{background:var(--vl-color-primary);color:var(--vl-color-white);border:0;padding:10px 16px;border-radius:8px}.primary:disabled{opacity:.7}.state{text-align:center;padding:64px}.error{color:var(--vl-color-danger-strong)}dt{color:var(--vl-muted);font-size:12px}dd{margin:4px 0 14px;color:var(--vl-text)}
 </style>
