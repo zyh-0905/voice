@@ -206,3 +206,11 @@ def export_redacted(project_id: str, user: dict = Depends(require_user)):
                 clean[str(key)] = redact_text(str(value))['text']
             writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
+
+@app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
+def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_analyst)):
+    dataset = datasets.get(dataset_id)
+    if not dataset or dataset.get('project_id') != project_id:
+        raise HTTPException(404, detail={'code': 'dataset_not_found'})
+    repository.delete_dataset(dataset_id)
+    return Response(status_code=204)
