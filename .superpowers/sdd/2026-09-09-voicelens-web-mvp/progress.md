@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Final regression run completed after auth, XLSX, Celery, idempotency, CI, and Compose changes.
-Verification: backend pytest 13 passed; compileall PASS; compose validation PASS; npm ci PASS; frontend typecheck PASS; unit tests 2 passed; build PASS; Playwright Chromium + axe 2 passed.
-Remaining: Docker daemon integration, production identity/database/queue secrets and deployment, external model evaluation, and load testing.
+Added API collection pagination (page/page_size <= 100), analysis dataset count cap (1-10), and total row limit (5000) matching documented contracts.
+Verification: backend pytest 13 passed; compileall PASS; frontend typecheck/unit/build PASS; Playwright + axe 2 passed; compose validation PASS.
+Remaining: Docker-enabled integration, production identity/database/queue rollout, and external model evaluation.
