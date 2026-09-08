@@ -1,11 +1,12 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
 from .ingestion import parse_csv_text
 from .repository import get_repository
 from .worker import AnalysisWorker
-from .middleware import SecurityHeadersMiddleware`r`nimport hashlib
+from .middleware import SecurityHeadersMiddleware
+import hashlib
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
@@ -14,7 +15,8 @@ repository = get_repository()
 datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
-MAX_BYTES = 50 * 1024 * 1024`r`n_idempotency = {}
+MAX_BYTES = 50 * 1024 * 1024
+_idempotency = {}
 ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -54,11 +56,17 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest):
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
     return repository.update_dataset(dataset_id, d)
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
-def create_analysis(project_id: str, req: AnalysisRequest):
+def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None)):
     ds=[datasets.get(i) for i in req.dataset_ids]
+    if idempotency_key:
+        fingerprint = hashlib.sha256((project_id + '|' + '|'.join(req.dataset_ids) + '|' + repr(req.config)).encode()).hexdigest()
+        previous = _idempotency.get(idempotency_key)
+        if previous and previous[0] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
+        if previous: return analyses[previous[1]]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
     aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; repository.create_analysis(a)
+    if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return analyses[aid]
@@ -113,6 +121,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
