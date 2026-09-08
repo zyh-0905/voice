@@ -37,3 +37,7 @@ def test_domain_endpoints_and_viewer_guard():
     review = client.get('/api/v1/projects/demo/reviews').json()['items'][0]['id']
     assert client.post(f'/api/v1/projects/demo/reviews/{review}/confirm', headers={'x-role':'VIEWER'}).status_code == 403
     assert client.post(f'/api/v1/projects/demo/reviews/{review}/confirm', headers={'x-role':'ANALYST'}).status_code == 200
+
+def test_analysis_idempotency():
+    r = client.post('/api/v1/projects/p/analyses', json={'dataset_ids':['missing']}, headers={'Idempotency-Key':'k1'})
+    assert r.status_code == 404
