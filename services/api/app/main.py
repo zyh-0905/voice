@@ -8,7 +8,9 @@ from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
 from .auth import router as auth_router, require_user, require_analyst
+from .config import dedupe_hmac_secret
 import hashlib
+import hmac
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
@@ -71,9 +73,13 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     source_name = name or file.filename or 'upload'
     namespace = source_namespace or ''
     kind = source_kind or ext
-    source_key = (project_id, namespace, kind, source_name)
+    dedupe_secret, demo_fallback = dedupe_hmac_secret()
+    event_key = hmac.new(dedupe_secret.encode('utf-8'), '\x1f'.join((project_id, namespace, kind, source_name)).encode('utf-8'), hashlib.sha256).hexdigest()
     for existing in datasets.values():
-        if (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == source_key:
+        existing_key = existing.get('event_key')
+        # Legacy rows predate HMAC keys; compare their fields only for migration compatibility.
+        is_same_source = existing_key == event_key if existing_key else (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == (project_id, namespace, kind, source_name)
+        if is_same_source:
             if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=existing)
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
@@ -83,7 +89,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': f'invalid UTF-8 CSV at byte {exc.start}'}) from exc
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
-    d={'id':did,'project_id':project_id,'name':source_name,'source_namespace':namespace,'source_kind':kind,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
+    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
 def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:

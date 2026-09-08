@@ -17,6 +17,8 @@ class Dataset(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # HMAC of the source identity; nullable for rows created before dedupe migration.
+    event_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="uploaded", nullable=False)
     governance: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
