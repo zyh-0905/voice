@@ -72,7 +72,10 @@ def retry_analysis(project_id: str, analysis_id: str):
     a=get_analysis(project_id, analysis_id)
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
-    if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
+    if os.getenv('USE_CELERY', '').lower() in ('1','true','yes'):
+        from .tasks import run_analysis_task
+        if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
+    elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
     return analyses[analysis_id]
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
 def cancel_analysis(project_id: str, analysis_id: str):
@@ -93,7 +96,7 @@ def get_project(project_id: str): return _project(project_id)
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷','status':'todo','priority':'high'}], 'total':1}
+def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'锟斤拷锟斤拷锟斤拷锟斤拷锟斤�?,'status':'todo','priority':'high'}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str):
     items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
@@ -108,5 +111,6 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
