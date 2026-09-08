@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from .ingestion import parse_csv_text
 from .repository import get_repository
-from .worker import AnalysisWorker
+from .worker import AnalysisWorker`nfrom .middleware import SecurityHeadersMiddleware
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
+app.add_middleware(SecurityHeadersMiddleware)
 repository = get_repository()
 datasets = repository.datasets
 analyses = repository.analyses
@@ -111,6 +112,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
