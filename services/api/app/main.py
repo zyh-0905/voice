@@ -19,7 +19,7 @@ analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
 _idempotency = {}
-ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
+ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
     expected_version: int | None = None
@@ -61,7 +61,7 @@ def _page(page: int, page_size: int):
         raise HTTPException(422, detail={'code': 'invalid_pagination'})
     return page, page_size
 @app.get('/api/v1/projects/{project_id}/datasets')
-def list_datasets(project_id: str, page: int = 1, page_size: int = 20):
+def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_user)):
     page, page_size = _page(page, page_size)
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
@@ -72,7 +72,7 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
     stats = d.get('preview', {}).get('stats', {})
-    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=max(1,d['rows']), version=d['version']+1)
+    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=d['rows'], version=d['version']+1)
     total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
     return repository.update_dataset(dataset_id, d)
@@ -95,13 +95,13 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
         worker.run(aid)
     return analyses[aid]
 @app.get('/api/v1/projects/{project_id}/analyses')
-def list_analyses(project_id: str, page: int = 1, page_size: int = 20):
+def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_user)):
     page, page_size = _page(page, page_size)
     all_items = [a for a in analyses.values() if a['project_id']==project_id]
     start = (page - 1) * page_size
     return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
-def get_analysis(project_id: str, analysis_id: str):
+def get_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_user)):
     a=analyses.get(analysis_id)
     if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
     return a
@@ -128,20 +128,21 @@ projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project'
 reviews = {}
 def _project(pid): return projects.get(pid) or {'id':pid,'name':pid,'description':'Project','status':'active'}
 @app.get('/api/v1/projects')
-def list_projects(): return {'items': list(projects.values()), 'total': len(projects)}
+def list_projects(user: dict = Depends(require_user)): return {'items': list(projects.values()), 'total': len(projects)}
 @app.get('/api/v1/projects/{project_id}')
-def get_project(project_id: str): return _project(project_id)
+def get_project(project_id: str, user: dict = Depends(require_user)):
+    if project_id not in projects: raise HTTPException(404, detail={'code':'project_not_found'})
+    return projects[project_id]
 @app.get('/api/v1/projects/{project_id}/risks')
-def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
+def list_risks(project_id: str, user: dict = Depends(require_user)): return {'items':[{'id':'risk-001','project_id':project_id,'title':'Missing time field','severity':'high','status':'open','evidence_count':2}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'analyst','status':'todo','priority':'high'}], 'total':1}
+def list_tasks(project_id: str, user: dict = Depends(require_user)): return {'items':[{'id':'task-001','project_id':project_id,'title':'Missing time field','owner':'analyst','status':'todo','priority':'high'}], 'total':1}
 @app.get('/api/v1/projects/{project_id}/reviews')
-def list_reviews(project_id: str):
+def list_reviews(project_id: str, user: dict = Depends(require_user)):
     items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
     return {'items':items,'total':len(items)}
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
-def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(None), user: dict = Depends(require_analyst)):
-    if (x_role or '').upper() == 'VIEWER': raise HTTPException(403, detail={'code':'forbidden'})
+def confirm_review(project_id: str, review_id: str, user: dict = Depends(require_analyst)):
     r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
