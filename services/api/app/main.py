@@ -9,9 +9,12 @@ from .middleware import SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
 from .auth import router as auth_router, require_user, require_analyst
 from .config import dedupe_hmac_secret
+from .settings import validate_production_settings
 import hashlib
 import hmac
 import os
+
+validate_production_settings()
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 app.add_middleware(SecurityHeadersMiddleware)
