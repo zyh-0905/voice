@@ -1,0 +1,1 @@
+import {describe,it,expect} from "vitest";import {createPinia,setActivePinia} from "pinia";import {useSessionStore} from "../../src/stores/session";describe("session",()=>{it("requires login",()=>{setActivePinia(createPinia());const s=useSessionStore();expect(s.user).toBeNull();s.login();expect(s.user).not.toBeNull();s.logout();expect(s.user).toBeNull()})})
