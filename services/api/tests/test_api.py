@@ -41,3 +41,15 @@ def test_domain_endpoints_and_viewer_guard():
 def test_analysis_idempotency():
     r = client.post('/api/v1/projects/p/analyses', json={'dataset_ids':['missing']}, headers={'Idempotency-Key':'k1'})
     assert r.status_code == 404
+
+def test_successful_analysis_idempotency_and_conflict():
+    upload = client.post('/api/v1/projects/idempo/datasets', files={'file': ('a.csv', b'email\na@example.com\n')}, data={'consent': 'true'})
+    did = upload.json()['id']
+    assert client.post(f'/api/v1/projects/idempo/datasets/{did}/validate', json={}).status_code == 202
+    headers = {'Idempotency-Key': 'same-key'}
+    first = client.post('/api/v1/projects/idempo/analyses', json={'dataset_ids': [did]}, headers=headers)
+    second = client.post('/api/v1/projects/idempo/analyses', json={'dataset_ids': [did]}, headers=headers)
+    assert first.status_code == second.status_code == 202
+    assert first.json()['id'] == second.json()['id']
+    conflict = client.post('/api/v1/projects/idempo/analyses', json={'dataset_ids': [did], 'config': {'x': 1}}, headers=headers)
+    assert conflict.status_code == 409
