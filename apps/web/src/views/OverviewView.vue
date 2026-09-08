@@ -1,10 +1,87 @@
-﻿
-<template><div><h1>概览</h1><p data-testid="demo-notice">演示数据</p><div class="metrics"><article>待处理风险 <b data-testid="metric-pending-risks">3</b></article><article>逾期任务 <b data-testid="metric-overdue-tasks">2</b></article><article>进行中任务 <b data-testid="metric-active-tasks">8</b></article><article>有效反馈 <b data-testid="metric-valid-feedback">12</b></article></div><section class="panel" data-testid="evidence-panel"><h2>证据与来源</h2><span data-testid="ai-provenance">AI 演示分析 · 来源已标注</span><ul><li v-for="item in evidence" :key="item.title"><button @click="selected=item">{{item.title}} · 查看证据</button></li></ul><aside v-if="selected" class="drawer" data-testid="evidence-drawer" role="dialog"><button data-testid="evidence-close" @click="close">关闭</button><h3>{{selected.title}}</h3><p>{{selected.evidence}}</p></aside></section></div></template>
+﻿<template>
+  <div>
+    <h1>概览</h1>
+    <p v-if="analysis" data-testid="demo-notice">演示数据 · 合成分析版本 {{ analysis.version }}</p>
+    <div v-if="analysis" class="metrics">
+      <article>待处理风险 <b data-testid="metric-pending-risks">3</b></article>
+      <article>逾期任务 <b data-testid="metric-overdue-tasks">2</b></article>
+      <article>进行中任务 <b data-testid="metric-active-tasks">8</b></article>
+      <article>有效反馈 <b data-testid="metric-valid-feedback">{{ analysis.validFeedback }}</b></article>
+    </div>
+    <section v-if="analysis" class="panel" aria-labelledby="analysis-title">
+      <h2 id="analysis-title">主题分析</h2>
+      <p data-testid="analysis-summary">{{ analysis.summary }}</p>
+      <p class="caption">每条合成反馈归入一个主题；占比分母为 {{ analysis.validFeedback }} 条有效反馈。</p>
+      <ul class="topics" data-testid="topic-list">
+        <li v-for="topic in analysis.topics" :key="topic.id">
+          <div class="topic-heading"><h3>{{ topic.title }}</h3><span>{{ topic.count }} 条 · {{ percentage(topic.count) }}%</span></div>
+          <div class="bar-track" aria-hidden="true"><div class="bar" :style="{ width: `${percentage(topic.count)}%` }"></div></div>
+          <p>{{ topic.summary }}</p>
+          <button @click="openEvidence(topic, $event)">查看「{{ topic.title }}」证据</button>
+        </li>
+      </ul>
+      <button data-testid="chart-data-toggle" :aria-expanded="showTable" aria-controls="topic-data-table" @click="showTable = !showTable">{{ showTable ? '收起数据表' : '查看数据表' }}</button>
+      <div v-show="showTable" id="topic-data-table" class="table-wrapper">
+        <table data-testid="chart-data-table">
+          <caption>主题分布 · 合成演示数据</caption>
+          <thead><tr><th scope="col">主题</th><th scope="col">反馈数</th><th scope="col">占有效反馈</th></tr></thead>
+          <tbody><tr v-for="topic in analysis.topics" :key="topic.id"><th scope="row">{{ topic.title }}</th><td>{{ topic.count }}</td><td>{{ percentage(topic.count) }}%</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section v-else class="panel" data-testid="analysis-empty" aria-live="polite">
+      <h2>暂无分析结果</h2><p>当前项目还没有可展示的分析结果。请先导入反馈并完成分析。</p>
+    </section>
+    <section v-if="analysis" class="panel" data-testid="evidence-panel">
+      <h2>证据与来源</h2>
+      <p data-testid="ai-provenance">AI 演示分析 · 来源为合成样本，未经人工复核</p>
+      <ul><li v-for="item in analysis.topics" :key="item.id"><button @click="openEvidence(item, $event)">{{ item.title }} · 查看证据</button></li></ul>
+    </section>
+    <aside v-if="selected" class="drawer" data-testid="evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="evidence-title" @keydown.tab.prevent="closeButton?.focus()">
+      <button ref="closeButton" data-testid="evidence-close" @click="close">关闭</button>
+      <h3 id="evidence-title">{{ selected.title }}</h3><p>{{ selected.evidence }}</p>
+      <p>来源：{{ analysis?.version }} · 合成反馈，仅用于演示</p>
+    </aside>
+  </div>
+</template>
 <script setup lang="ts">
-import { ref, nextTick, onBeforeUnmount, watch } from 'vue'
-const evidence=[{title:'风险规则命中',evidence:'近 30 天退款率高于阈值，命中规则 R-204。'},{title:'字段完整性检查',evidence:'订单金额字段缺失率为 1.8%，已完成治理。'},{title:'反馈样本',evidence:'抽样 12 条有效反馈，均可回溯到原始批次。'}]; const selected=ref<typeof evidence[number]|null>(null); const close=()=>selected.value=null; const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')close()}; window.addEventListener('keydown',onKey); onBeforeUnmount(()=>window.removeEventListener('keydown',onKey)); watch(selected,async v=>{if(v){await nextTick();document.querySelector<HTMLElement>('[data-testid="evidence-close"]')?.focus()}})
+import { computed, ref, nextTick, onBeforeUnmount, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { useSessionStore } from '../stores/session'
+import { useProjectStore } from '../stores/project'
+import { demoAnalysis } from '../features/analysis/demoAnalysis'
+const route = useRoute()
+const session = useSessionStore()
+const project = useProjectStore()
+const analysis = computed(() => session.isDemo && (route.params.p || project.selectedProjectId) === 'demo-project' ? demoAnalysis : null)
+const showTable = ref(false)
+const selected = ref<{ title: string; evidence: string } | null>(null)
+const closeButton = ref<HTMLButtonElement | null>(null)
+let trigger: HTMLElement | null = null
+const percentage = (count: number) => analysis.value ? Math.round(count / analysis.value.validFeedback * 100) : 0
+function openEvidence(item: { title: string; evidence: string }, event: MouseEvent) {
+  trigger = event.currentTarget as HTMLElement
+  selected.value = item
+}
+function close() { selected.value = null; trigger?.focus() }
+const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && selected.value) close() }
+window.addEventListener('keydown', onKey)
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+watch(selected, async value => { if (value) { await nextTick(); closeButton.value?.focus() } })
+watch(analysis, () => { close(); showTable.value = false })
 </script>
-<style scoped>.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.metrics article,.panel{padding:20px;background:var(--vl-surface);border:1px solid var(--vl-border);border-radius:12px}.metrics b{display:block;font-size:28px;margin-top:8px}.panel{margin-top:24px}.panel h2{display:inline-block;margin:0 16px 0 0}ul{padding:0;list-style:none}li button{padding:10px;border:0;background:transparent;cursor:pointer}.drawer{position:fixed;right:0;top:0;height:100vh;width:360px;padding:24px;background:var(--vl-surface);box-shadow:-8px 0 28px #173b3026}@media(max-width:700px){.metrics{grid-template-columns:repeat(2,1fr)}}</style>
-
-
-
+<style scoped>
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.metrics article,.panel{padding:20px;background:var(--vl-surface);border:1px solid var(--vl-border);border-radius:12px}
+.metrics b{display:block;font-size:28px;margin-top:8px}
+.panel{margin-top:24px}.panel h2{margin:0}.caption{font-size:13px}
+ul{padding:0;list-style:none}.topics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.topics li{padding:16px;border:1px solid var(--vl-border);border-radius:8px}
+.topic-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.topic-heading h3{font-size:16px}
+.bar-track{height:8px;border-radius:8px;background:var(--vl-bg);overflow:hidden}.bar{height:100%;background:var(--vl-green);transition:width .2s ease}
+button{padding:10px;border:1px solid var(--vl-border);border-radius:6px;background:var(--vl-surface);color:var(--vl-text);cursor:pointer}
+li button{margin-top:8px}.table-wrapper{overflow-x:auto;margin-top:16px}table{width:100%;border-collapse:collapse;text-align:left}caption{text-align:left;padding-bottom:12px}th,td{padding:12px;border-bottom:1px solid var(--vl-border)}
+.drawer{position:fixed;z-index:30;right:0;top:0;height:100dvh;width:min(420px,100vw);padding:24px;overflow-y:auto;background:var(--vl-surface);box-shadow:-8px 0 28px #173b3026}
+@media(max-width:900px){.topics{grid-template-columns:1fr}}@media(max-width:700px){.metrics{grid-template-columns:repeat(2,1fr)}}
+@media(prefers-reduced-motion:reduce){.bar{transition:none}}
+</style>
