@@ -53,7 +53,7 @@ def require_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Dep
     # demo workflows can explicitly opt out with AUTH_REQUIRED=false.
     required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
     if not required and not credentials:
-        return _public(_USERS["demo"]) | {"projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
+        return _public(_USERS["demo"]) | {"demo_bypass": True, "projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
     return current_user(credentials)
 
 def require_analyst(user: Annotated[dict, Depends(require_user)]) -> dict:
@@ -83,3 +83,17 @@ def me(user: Annotated[dict, Depends(current_user)]):
 def logout(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
     if credentials:
         _tokens.pop(credentials.credentials, None)
+
+
+def require_project_access(project_id: str, user: Annotated[dict, Depends(require_user)]) -> dict:
+    """Hide projects outside the authenticated principal's membership list."""
+    if user.get("demo_bypass"):
+        return user
+    membership = next((item for item in user.get("projects", []) if item.get("project_id") == project_id), None)
+    if membership is None:
+        raise HTTPException(status_code=404, detail={"code": "project_not_found"})
+    return {**user, "role": membership.get("role", "VIEWER")}
+
+
+def require_project_analyst(user: Annotated[dict, Depends(require_project_access)]) -> dict:
+    return require_analyst(user)

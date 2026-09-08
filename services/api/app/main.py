@@ -7,7 +7,7 @@ from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
-from .auth import router as auth_router, require_user, require_analyst
+from .auth import router as auth_router, require_user, require_analyst, require_project_access, require_project_analyst
 from .config import dedupe_hmac_secret
 from .settings import validate_production_settings
 import hashlib
@@ -66,7 +66,7 @@ def readiness():
             return JSONResponse(status_code=503, content={'status': 'not_ready', 'database': database, 'queue': queue})
     return {'status': 'ready', 'database': database, 'queue': queue}
 @app.post('/api/v1/projects/{project_id}/datasets', status_code=201)
-async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_analyst)):
+async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_project_analyst)):
     if not consent: raise HTTPException(422, detail={'code':'consent_required'})
     ext = (file.filename or '').rsplit('.',1)[-1].lower()
     if ext not in ALLOWED: raise HTTPException(422, detail={'code':'unsupported_file_type'})
@@ -99,14 +99,14 @@ def _page(page: int, page_size: int):
         raise HTTPException(422, detail={'code': 'invalid_pagination'})
     return page, page_size
 @app.get('/api/v1/projects/{project_id}/datasets')
-def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_user)):
+def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
     page, page_size = _page(page, page_size)
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
     return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
 
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
-def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_analyst)):
+def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_project_analyst)):
     d=datasets.get(dataset_id)
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
@@ -116,7 +116,7 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
     return repository.update_dataset(dataset_id, d)
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
-def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_analyst)):
+def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
     if idempotency_key:
         fingerprint = hashlib.sha256((project_id + '|' + '|'.join(req.dataset_ids) + '|' + repr(req.config)).encode()).hexdigest()
@@ -137,22 +137,22 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     return analyses[aid]
 
 @app.get('/api/v1/projects/{project_id}/outbox/status')
-def outbox_status(project_id: str, user: dict = Depends(require_user)):
+def outbox_status(project_id: str, user: dict = Depends(require_project_access)):
     events = [e for e in repository.list_pending_outbox() if e.get('payload', {}).get('project_id') == project_id]
     return {'pending': len(events), 'items': events}
 @app.get('/api/v1/projects/{project_id}/analyses')
-def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_user)):
+def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
     page, page_size = _page(page, page_size)
     all_items = [a for a in analyses.values() if a['project_id']==project_id]
     start = (page - 1) * page_size
     return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
-def get_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_user)):
+def get_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_access)):
     a=analyses.get(analysis_id)
     if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
     return a
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/retry')
-def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_analyst)):
+def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     a=get_analysis(project_id, analysis_id)
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
@@ -162,7 +162,7 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
     elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
     return analyses[analysis_id]
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
-def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_analyst)):
+def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     get_analysis(project_id, analysis_id)
     return worker.cancel(analysis_id)
 
@@ -187,30 +187,35 @@ def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
 def list_projects(user: dict = Depends(require_user)):
     items = repository.list_projects()
+    if not user.get("demo_bypass"):
+        allowed = {item["project_id"] for item in user.get("projects", [])}
+        items = [item for item in items if item["id"] in allowed]
     return {'items': items, 'total': len(items)}
 @app.get('/api/v1/projects/{project_id}')
-def get_project(project_id: str, user: dict = Depends(require_user)):
+def get_project(project_id: str, user: dict = Depends(require_project_access)):
     project = repository.get_project(project_id)
     if not project: raise HTTPException(404, detail={'code':'project_not_found'})
     return project
 @app.get('/api/v1/projects/{project_id}/risks')
-def list_risks(project_id: str, user: dict = Depends(require_user)):
+def list_risks(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str, user: dict = Depends(require_user)):
+def list_tasks(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('tasks', project_id); return {'items':items, 'total':len(items)}
 @app.get('/api/v1/projects/{project_id}/reviews')
-def list_reviews(project_id: str, user: dict = Depends(require_user)):
+def list_reviews(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('reviews', project_id)
     return {'items':items,'total':len(items)}
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
-def confirm_review(project_id: str, review_id: str, user: dict = Depends(require_analyst)):
+def confirm_review(project_id: str, review_id: str, user: dict = Depends(require_project_analyst)):
+    if not any(item['id'] == review_id for item in repository.list_entities('reviews', project_id)):
+        raise HTTPException(404, detail={'code':'review_not_found'})
     try: r=repository.update_entity('reviews', review_id, {'status':'confirmed','confirmed_by':user.get('id','demo-user'),'confirmed_at':datetime.now(timezone.utc)})
     except KeyError: raise HTTPException(404, detail={'code':'review_not_found'})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
-def export_redacted(project_id: str, user: dict = Depends(require_user)):
+def export_redacted(project_id: str, user: dict = Depends(require_project_access)):
     """Export only the redacted dataset previews belonging to *project_id*.
 
     The payload intentionally keeps each row in a JSON column.  This avoids
@@ -235,7 +240,7 @@ def export_redacted(project_id: str, user: dict = Depends(require_user)):
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
 
 @app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
-def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_analyst)):
+def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_analyst)):
     dataset = datasets.get(dataset_id)
     if not dataset or dataset.get('project_id') != project_id:
         raise HTTPException(404, detail={'code': 'dataset_not_found'})

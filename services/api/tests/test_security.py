@@ -49,3 +49,31 @@ def test_viewer_cannot_confirm_review(monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
+
+
+def test_token_cannot_access_another_project(monkeypatch):
+    from app.main import repository
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setitem(repository.projects, "private-project", {"id": "private-project", "name": "Private"})
+    token = client.post("/api/v1/auth/login", json={"username": "demo", "password": "demo"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    projects = client.get("/api/v1/projects", headers=headers).json()["items"]
+    assert "private-project" not in {item["id"] for item in projects}
+    for suffix in ("", "/datasets", "/analyses", "/risks", "/tasks", "/reviews", "/outbox/status", "/exports/redacted.csv"):
+        response = client.get("/api/v1/projects/private-project" + suffix, headers=headers)
+        assert response.status_code == 404, suffix
+    response = client.post("/api/v1/projects/private-project/datasets", headers=headers,
+        files={"file": ("test.csv", b"text\nfeedback\n", "text/csv")}, data={"consent": "true"})
+    assert response.status_code == 404
+    response = client.post("/api/v1/projects/private-project/analyses", headers=headers, json={"dataset_ids": ["any"]})
+    assert response.status_code == 404
+    assert client.get("/api/v1/projects/demo-project", headers=headers).status_code == 200
+
+
+def test_cross_project_review_confirmation_does_not_mutate(monkeypatch):
+    from app.main import repository
+    monkeypatch.setenv("AUTH_REQUIRED", "false")
+    monkeypatch.setitem(repository.reviews, "private-review", {"id": "private-review", "project_id": "private-project", "status": "pending"})
+    response = client.post("/api/v1/projects/demo-project/reviews/private-review/confirm")
+    assert response.status_code == 404
+    assert repository.reviews["private-review"]["status"] == "pending"
