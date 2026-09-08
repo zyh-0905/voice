@@ -7,7 +7,8 @@ export const useSessionStore = defineStore('session', () => {
   const stored = typeof window !== 'undefined' ? sessionStorage.getItem(SESSION_KEY) : null
   const user = ref<User | null>(stored ? JSON.parse(stored) as User : null)
   const isDemo = ref(true)
-  function login() { user.value = DEMO_USER; sessionStorage.setItem(SESSION_KEY, JSON.stringify(DEMO_USER)) }
-  function logout() { user.value = null; sessionStorage.removeItem(SESSION_KEY) }
+  function login() { user.value = DEMO_USER; if (typeof window !== 'undefined') sessionStorage.setItem(SESSION_KEY, JSON.stringify(DEMO_USER)) }
+  function logout() { user.value = null; if (typeof window !== 'undefined') sessionStorage.removeItem(SESSION_KEY) }
   return { user, isDemo, login, logout }
 })
+
