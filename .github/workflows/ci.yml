@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -71,3 +71,4 @@ jobs:
         run: npx playwright install --with-deps chromium
       - working-directory: apps/web
         run: npm run test:e2e -- --project=chromium --workers=1
+
