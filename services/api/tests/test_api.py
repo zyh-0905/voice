@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app, datasets
 from app.ingestion import redact_text, parse_csv_text
+import pytest
 
 client = TestClient(app)
 def test_health():
@@ -22,6 +23,15 @@ def test_upload_validate_analysis():
 def test_reject_type_and_consent():
     assert client.post('/api/v1/projects/p/datasets', files={'file':('a.pdf',b'x')}, data={'consent':'true'}).status_code == 422
     assert client.post('/api/v1/projects/p/datasets', files={'file':('a.csv',b'x')}).status_code == 422
+
+def test_upload_rejects_invalid_utf8_csv():
+    response = client.post('/api/v1/projects/bad-utf8/datasets', files={'file': ('bad.csv', b'header\n\xff')}, data={'consent': 'true'})
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'invalid_file'
+
+def test_csv_rejects_inconsistent_field_count_with_line():
+    with pytest.raises(ValueError, match=r'CSV row 3'):
+        parse_csv_text('a,b\n1,2\n3\n')
 
 def test_txt_upload_and_redaction():
     r = client.post('/api/v1/projects/p/datasets', files={'file': ('notes.txt', '鑱旂郴 a@example.com'.encode())}, data={'consent': 'true'})
