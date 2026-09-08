@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app, datasets
 from app.ingestion import redact_text, parse_csv_text
+from app import auth
 import pytest
 
 client = TestClient(app)
@@ -101,6 +102,20 @@ def test_auth_login_me_logout():
     assert client.get('/api/v1/auth/me').status_code == 401
     assert client.post('/api/v1/auth/logout', headers={'Authorization': f'Bearer {token}'}).status_code == 204
     assert client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).status_code == 401
+
+def test_auth_token_ttl_expiration(monkeypatch):
+    monkeypatch.setenv('AUTH_TOKEN_TTL_SECONDS', '0')
+    payload = client.post('/api/v1/auth/login', json={'username': 'demo', 'password': 'demo'}).json()
+    assert payload['expires_in'] == 0
+    response = client.get('/api/v1/auth/me', headers={'Authorization': f"Bearer {payload['access_token']}"})
+    assert response.status_code == 401
+    assert response.json()['detail']['code'] == 'token_expired'
+
+def test_auth_token_ttl_normal(monkeypatch):
+    monkeypatch.setenv('AUTH_TOKEN_TTL_SECONDS', '3600')
+    payload = client.post('/api/v1/auth/login', json={'username': 'demo', 'password': 'demo'}).json()
+    assert payload['expires_in'] == 3600
+    assert client.get('/api/v1/auth/me', headers={'Authorization': f"Bearer {payload['access_token']}"}).status_code == 200
 
 
 

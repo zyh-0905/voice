@@ -4,6 +4,7 @@ The token store is deliberately replaceable; production deployments should
 provide a database/OIDC-backed implementation instead.
 """
 from secrets import token_urlsafe
+import time
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,6 +14,13 @@ import os
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 _tokens: dict[str, dict] = {}
+_DEFAULT_TOKEN_TTL_SECONDS = 3600
+
+def _token_ttl() -> int:
+    try:
+        return max(0, int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(_DEFAULT_TOKEN_TTL_SECONDS))))
+    except (TypeError, ValueError):
+        return _DEFAULT_TOKEN_TTL_SECONDS
 _USERS = {
     "demo": {"id": "demo-user", "email": "demo@voicelens.local", "name": "Demo Analyst", "password": "demo", "role": "ANALYST"},
     "viewer": {"id": "viewer-user", "email": "viewer@voicelens.local", "name": "Demo Viewer", "password": "viewer", "role": "VIEWER"},
@@ -28,7 +36,12 @@ def _public(user: dict) -> dict:
 def current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict:
     if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials not in _tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": "unauthorized"}, headers={"WWW-Authenticate": "Bearer"})
-    return _tokens[credentials.credentials]
+    token = credentials.credentials
+    session = _tokens[token]
+    if time.time() >= session["exp"]:
+        _tokens.pop(token, None)
+        raise HTTPException(status_code=401, detail={"code": "token_expired"}, headers={"WWW-Authenticate": "Bearer"})
+    return session
 
 def require_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict:
     """Require a valid bearer token when AUTH_REQUIRED is enabled.
@@ -55,8 +68,12 @@ def login(request: LoginRequest):
         raise HTTPException(status_code=401, detail={"code": "invalid_credentials"}, headers={"WWW-Authenticate": "Bearer"})
     token = token_urlsafe(32)
     session = _public(user) | {"projects": [{"project_id": "demo-project", "role": user["role"], "permissions": ["read", "analyze"] if user["role"] != "VIEWER" else ["read"]}]}
+    issued_at = time.time()
+    ttl = _token_ttl()
+    session["issued_at"] = issued_at
+    session["exp"] = issued_at + ttl
     _tokens[token] = session
-    return {"access_token": token, "token_type": "bearer", "user": session}
+    return {"access_token": token, "token_type": "bearer", "expires_in": ttl, "user": _public(user) | {"projects": session["projects"]}}
 
 @router.get("/me")
 def me(user: Annotated[dict, Depends(current_user)]):
