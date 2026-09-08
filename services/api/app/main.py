@@ -1,4 +1,4 @@
-锘縡rom fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -78,4 +78,31 @@ def cancel_analysis(project_id: str, analysis_id: str):
     get_analysis(project_id, analysis_id)
     return worker.cancel(analysis_id)
 
+
+from fastapi.responses import PlainTextResponse
+
+# Domain read models (in-memory demo repository)
+projects = {'demo-project': {'id':'demo-project','name':'VoiceLens Demo Project','description':'Synthetic workspace','status':'active'}}
+reviews = {}
+def _project(pid): return projects.get(pid) or {'id':pid,'name':pid,'description':'Project','status':'active'}
+@app.get('/api/v1/projects')
+def list_projects(): return {'items': list(projects.values()), 'total': len(projects)}
+@app.get('/api/v1/projects/{project_id}')
+def get_project(project_id: str): return _project(project_id)
+@app.get('/api/v1/projects/{project_id}/risks')
+def list_risks(project_id: str): return {'items':[{'id':'risk-001','project_id':project_id,'title':'时间字段缺失','severity':'high','status':'open','evidence_count':2}], 'total':1}
+@app.get('/api/v1/projects/{project_id}/tasks')
+def list_tasks(project_id: str): return {'items':[{'id':'task-001','project_id':project_id,'title':'补充时间字段映射','owner':'数据治理组','status':'todo','priority':'high'}], 'total':1}
+@app.get('/api/v1/projects/{project_id}/reviews')
+def list_reviews(project_id: str):
+    items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'关联线索待人工复核','confirmed_by':None}]
+    return {'items':items,'total':len(items)}
+@app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
+def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(None)):
+    if (x_role or '').upper() == 'VIEWER': raise HTTPException(403, detail={'code':'forbidden'})
+    r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'关联线索待人工复核','confirmed_by':None})
+    if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
+    r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
+@app.get('/api/v1/projects/{project_id}/exports/redacted.csv', response_class=PlainTextResponse)
+def export_redacted(project_id: str): return 'id,project_id,status\nexport-001,'+project_id+',redacted\n'
 
