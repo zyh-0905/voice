@@ -125,7 +125,7 @@ def list_reviews(project_id: str):
     items=[r for r in reviews.values() if r['project_id']==project_id] or [{'id':'review-001','project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None}]
     return {'items':items,'total':len(items)}
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
-def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(None)):
+def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(None), user: dict = Depends(require_analyst)):
     if (x_role or '').upper() == 'VIEWER': raise HTTPException(403, detail={'code':'forbidden'})
     r=reviews.setdefault(review_id, {'id':review_id,'project_id':project_id,'run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
@@ -134,6 +134,7 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
 def export_redacted(project_id: str, user: dict = Depends(require_user)):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
 
 
 
