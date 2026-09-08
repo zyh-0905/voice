@@ -18,7 +18,8 @@ datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
-_idempotency = {}\noutbox_events = []
+_idempotency = {}
+outbox_events = []
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -113,7 +114,8 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
     total_rows = sum(d.get('rows', 0) for d in ds)
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
-    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)\n    outbox_events.append({'event_id': 'evt_'+uuid4().hex[:10], 'event_type': 'analysis.created', 'analysis_id': aid, 'project_id': project_id, 'status': 'pending', 'created_at': now()})
+    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
+    outbox_events.append({'event_id': 'evt_'+uuid4().hex[:10], 'event_type': 'analysis.created', 'analysis_id': aid, 'project_id': project_id, 'status': 'pending', 'created_at': now()})
     if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
@@ -197,6 +199,7 @@ def export_redacted(project_id: str, user: dict = Depends(require_user)):
                 clean[str(key)] = redact_text(str(value))['text']
             writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
+
 
 
 
