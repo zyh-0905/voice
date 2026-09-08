@@ -79,6 +79,8 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     did='ds_'+uuid4().hex[:10]
     try:
         preview = parse_csv_text(data.decode('utf-8')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}
+    except UnicodeDecodeError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_file', 'message': f'invalid UTF-8 CSV at byte {exc.start}'}) from exc
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
     d={'id':did,'project_id':project_id,'name':source_name,'source_namespace':namespace,'source_kind':kind,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}

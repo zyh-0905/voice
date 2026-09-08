@@ -35,9 +35,13 @@ def parse_csv_text(text: str) -> dict:
     if not headers or any(not str(h).strip() for h in headers):
         raise ValueError('CSV header is missing or contains an empty field')
     rows = []
-    for line_no, row in enumerate(reader, 2):
+    for row in reader:
+        line_no = reader.line_num
         if None in row:
             raise ValueError(f'CSV row {line_no} has more fields than the header')
+        missing = [header for header, value in row.items() if value is None]
+        if missing:
+            raise ValueError(f'CSV row {line_no} has fewer fields than the header: {", ".join(missing)}')
         rows.append(row)
     return {"headers": headers, "rows": rows, "stats": classify_rows(rows)}
 
