@@ -4,10 +4,13 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from .ingestion import parse_csv_text
 from .repository import repository
+from .worker import AnalysisWorker
+import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 datasets = repository.datasets
 analyses = repository.analyses
+worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
 ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -51,6 +54,25 @@ def create_analysis(project_id: str, req: AnalysisRequest):
     ds=[datasets.get(i) for i in req.dataset_ids]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
-    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; analyses[aid]=a; return a
+    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; analyses[aid]=a
+    if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
+        worker.run(aid)
+    return a
 @app.get('/api/v1/projects/{project_id}/analyses')
 def list_analyses(project_id: str): return {'items':[a for a in analyses.values() if a['project_id']==project_id]}
+@app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
+def get_analysis(project_id: str, analysis_id: str):
+    a=analyses.get(analysis_id)
+    if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
+    return a
+@app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/retry')
+def retry_analysis(project_id: str, analysis_id: str):
+    a=get_analysis(project_id, analysis_id)
+    if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
+    worker.retry(analysis_id)
+    if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
+    return a
+@app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
+def cancel_analysis(project_id: str, analysis_id: str):
+    get_analysis(project_id, analysis_id)
+    return worker.cancel(analysis_id)
