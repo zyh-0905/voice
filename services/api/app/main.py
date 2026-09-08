@@ -2,14 +2,14 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
-from .ingestion import parse_csv_text, classify_rows
+from .ingestion import parse_csv_text
+from .repository import repository
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
-datasets: dict[str, dict] = {}
-analyses: dict[str, dict] = {}
+datasets = repository.datasets
+analyses = repository.analyses
 MAX_BYTES = 50 * 1024 * 1024
 ALLOWED = {'txt', 'csv', 'xls', 'xlsx'}
-
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
     expected_version: int | None = None
@@ -21,7 +21,6 @@ class ValidateRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     dataset_ids: list[str] = Field(min_length=1)
     config: dict = {}
-
 @app.get('/api/v1/health')
 def health(): return {'status':'ok','service':'voicelens-api'}
 @app.post('/api/v1/projects/{project_id}/datasets', status_code=201)
@@ -45,10 +44,8 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest):
     if d.get('file_ext') in ('xls','xlsx'): raise HTTPException(422, detail={'code':'unsupported_file_type','message':'xlsx parsing is not supported yet'})
     stats = d.get('preview', {}).get('stats', {})
     d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=max(1,d['rows']), version=d['version']+1)
-    total = stats.get('total', 0)
-    d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
-    d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
-    return d
+    total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
+    d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}; return d
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest):
     ds=[datasets.get(i) for i in req.dataset_ids]
