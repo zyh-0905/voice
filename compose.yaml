@@ -64,6 +64,24 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  relay:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: python -m services.api.app.relay_runner
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql://voicelens:voicelens@postgres:5432/voicelens
+      REDIS_URL: redis://redis:6379/0
+      AUTH_REQUIRED: "true"
+      OUTBOX_RELAY_INTERVAL_SECONDS: "5"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
       postgres:
         condition: service_healthy
 

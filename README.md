@@ -34,7 +34,7 @@ $env:PYTHONPATH='services/api'; python -m pytest services/api/tests -q
 ```
 ## Docker Compose
 
-开发环境可使用 `docker compose up --build` 同时启动 API、PostgreSQL 和 Redis。当前 API repository 默认仍为内存实现，数据库与队列服务已预留健康检查和连接配置，后续可替换为生产 repository/worker。
+开发环境可使用 `docker compose up --build` 同时启动 API、PostgreSQL、Redis、分析 worker 和 outbox relay。relay 会每 5 秒批量投递最多 100 个待发布事件，可通过 `OUTBOX_RELAY_INTERVAL_SECONDS` 调整间隔。
 
 ### API 环境变量
 
