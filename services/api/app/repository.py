@@ -14,8 +14,9 @@ class Repository(Protocol):
     def create_analysis(self, value: dict) -> dict: ...
     def update_analysis(self, key: str, changes: dict) -> dict: ...
     def create_outbox_event(self, event: dict) -> dict: ...
-    def list_pending_outbox(self) -> list[dict]: ...
+    def list_pending_outbox(self, limit: int | None = None) -> list[dict]: ...
     def mark_published(self, event_key: str) -> None: ...
+    def mark_publish_failed(self, event_key: str, error: str) -> None: ...
 
 
 class InMemoryRepository:
@@ -42,10 +43,18 @@ class InMemoryRepository:
     def create_outbox_event(self, event):
         if any(e['event_key'] == event['event_key'] for e in self.outbox): return next(e for e in self.outbox if e['event_key'] == event['event_key'])
         value = deepcopy({**event, 'status': event.get('status', 'pending')}); self.outbox.append(value); return deepcopy(value)
-    def list_pending_outbox(self): return [deepcopy(e) for e in self.outbox if e.get('status') == 'pending']
+    def list_pending_outbox(self, limit=None):
+        events = [e for e in self.outbox if e.get('status') == 'pending']
+        return deepcopy(events[:limit] if limit is not None else events)
     def mark_published(self, event_key):
         for e in self.outbox:
             if e['event_key'] == event_key: e['status'] = 'published'; return
+    def mark_publish_failed(self, event_key, error):
+        for e in self.outbox:
+            if e['event_key'] == event_key:
+                e['last_error'] = str(error)
+                e['attempts'] = int(e.get('attempts', 0)) + 1
+                return
 
 
 repository = InMemoryRepository()

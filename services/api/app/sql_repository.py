@@ -104,13 +104,22 @@ class SQLAlchemyRepository:
             obj = OutboxEvent(event_key=event['event_key'], event_type=event['event_type'], payload=event.get('payload', {}), status=event.get('status','pending'))
             session.add(obj); session.flush()
             return {'id': obj.id, 'event_key': obj.event_key, 'event_type': obj.event_type, 'payload': obj.payload, 'status': obj.status, 'created_at': obj.created_at.isoformat()}
-    def list_pending_outbox(self):
+    def list_pending_outbox(self, limit=None):
         with self.session() as session:
-            return [{'id':o.id,'event_key':o.event_key,'event_type':o.event_type,'payload':o.payload,'status':o.status,'created_at':o.created_at.isoformat()} for o in session.scalars(select(OutboxEvent).where(OutboxEvent.status=='pending')).all()]
+             query = select(OutboxEvent).where(OutboxEvent.status=='pending').order_by(OutboxEvent.id)
+             if limit is not None: query = query.limit(limit)
+             return [{'id':o.id,'event_key':o.event_key,'event_type':o.event_type,'payload':o.payload,'status':o.status,'created_at':o.created_at.isoformat()} for o in session.scalars(query).all()]
     def mark_published(self, event_key):
         with self.session() as session, session.begin():
             obj = session.scalars(select(OutboxEvent).where(OutboxEvent.event_key==event_key)).first()
-            if obj: obj.status='published'
+             if obj: obj.status='published'
+
+     def mark_publish_failed(self, event_key, error):
+          # Keep pending so the relay can retry; payload stores diagnostic metadata.
+          with self.session() as session, session.begin():
+             obj = session.scalars(select(OutboxEvent).where(OutboxEvent.event_key==event_key)).first()
+             if obj:
+                  obj.payload = {**(obj.payload or {}), '_relay_error': str(error), '_relay_attempts': int((obj.payload or {}).get('_relay_attempts', 0)) + 1}
 
 
 
