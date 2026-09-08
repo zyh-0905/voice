@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+import os
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
@@ -28,6 +29,22 @@ def current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Dep
     if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials not in _tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": "unauthorized"}, headers={"WWW-Authenticate": "Bearer"})
     return _tokens[credentials.credentials]
+
+def require_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict:
+    """Require a valid bearer token when AUTH_REQUIRED is enabled.
+
+    Demo mode deliberately supplies an analyst identity so existing local
+    workflows remain usable without a login round trip.
+    """
+    required = os.getenv("AUTH_REQUIRED", "false").lower() in ("1", "true", "yes", "on")
+    if not required and not credentials:
+        return _public(_USERS["demo"]) | {"projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
+    return current_user(credentials)
+
+def require_analyst(user: Annotated[dict, Depends(require_user)]) -> dict:
+    if user.get("role", "ANALYST").upper() == "VIEWER":
+        raise HTTPException(status_code=403, detail={"code": "forbidden"})
+    return user
 
 @router.post("/login")
 def login(request: LoginRequest):

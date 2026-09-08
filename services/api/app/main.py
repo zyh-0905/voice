@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -6,7 +6,7 @@ from .ingestion import parse_csv_text, parse_xlsx_bytes
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
-from .auth import router as auth_router
+from .auth import router as auth_router, require_user, require_analyst
 import hashlib
 import os
 
@@ -34,7 +34,7 @@ class AnalysisRequest(BaseModel):
 @app.get('/api/v1/health')
 def health(): return {'status':'ok','service':'voicelens-api'}
 @app.post('/api/v1/projects/{project_id}/datasets', status_code=201)
-async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False)):
+async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_analyst)):
     if not consent: raise HTTPException(422, detail={'code':'consent_required'})
     ext = (file.filename or '').rsplit('.',1)[-1].lower()
     if ext not in ALLOWED: raise HTTPException(422, detail={'code':'unsupported_file_type'})
@@ -59,7 +59,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str): return {'items':[d for d in datasets.values() if d['project_id']==project_id], 'total':sum(d['project_id']==project_id for d in datasets.values())}
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
-def validate(project_id: str, dataset_id: str, req: ValidateRequest):
+def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_analyst)):
     d=datasets.get(dataset_id)
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
@@ -69,7 +69,7 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest):
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
     return repository.update_dataset(dataset_id, d)
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
-def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None)):
+def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
     if idempotency_key:
         fingerprint = hashlib.sha256((project_id + '|' + '|'.join(req.dataset_ids) + '|' + repr(req.config)).encode()).hexdigest()
@@ -91,7 +91,7 @@ def get_analysis(project_id: str, analysis_id: str):
     if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
     return a
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/retry')
-def retry_analysis(project_id: str, analysis_id: str):
+def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_analyst)):
     a=get_analysis(project_id, analysis_id)
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
@@ -101,7 +101,7 @@ def retry_analysis(project_id: str, analysis_id: str):
     elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
     return analyses[analysis_id]
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
-def cancel_analysis(project_id: str, analysis_id: str):
+def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_analyst)):
     get_analysis(project_id, analysis_id)
     return worker.cancel(analysis_id)
 
@@ -131,9 +131,12 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
-def export_redacted(project_id: str):
+def export_redacted(project_id: str, user: dict = Depends(require_user)):
     content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
     return Response(content=content, media_type='text/csv')
+
+
+
 
 
 
