@@ -6,12 +6,14 @@ from .ingestion import parse_csv_text, parse_xlsx_bytes, redact_text
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import SecurityHeadersMiddleware
+from .rate_limit import WriteRateLimitMiddleware
 from .auth import router as auth_router, require_user, require_analyst
 import hashlib
 import os
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(WriteRateLimitMiddleware)
 app.include_router(auth_router)
 repository = get_repository()
 datasets = repository.datasets
