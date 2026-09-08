@@ -26,3 +26,14 @@ def test_csv_preview_stats():
     assert parsed['stats']['total'] == 2
     assert parsed['stats']['duplicate'] == 1
     assert parsed['stats']['redacted'] == 2
+
+def test_domain_endpoints_and_viewer_guard():
+    assert client.get('/api/v1/projects').status_code == 200
+    assert client.get('/api/v1/projects/demo').status_code == 200
+    assert client.get('/api/v1/projects/demo/risks').status_code == 200
+    assert client.get('/api/v1/projects/demo/tasks').status_code == 200
+    assert client.get('/api/v1/projects/demo/reviews').status_code == 200
+    assert client.get('/api/v1/projects/demo/exports/redacted.csv').headers['content-type'].startswith('text/csv')
+    review = client.get('/api/v1/projects/demo/reviews').json()['items'][0]['id']
+    assert client.post(f'/api/v1/projects/demo/reviews/{review}/confirm', headers={'x-role':'VIEWER'}).status_code == 403
+    assert client.post(f'/api/v1/projects/demo/reviews/{review}/confirm', headers={'x-role':'ANALYST'}).status_code == 200
