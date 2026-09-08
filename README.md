@@ -36,4 +36,8 @@ $env:PYTHONPATH='services/api'; python -m pytest services/api/tests -q
 
 开发环境可使用 `docker compose up --build` 同时启动 API、PostgreSQL 和 Redis。当前 API repository 默认仍为内存实现，数据库与队列服务已预留健康检查和连接配置，后续可替换为生产 repository/worker。
 
+### API 环境变量
+
+复制 `.env.example` 后按部署环境调整：`DATABASE_URL` 默认指向本机 PostgreSQL，`REDIS_URL` 指向 Redis；`AUTH_REQUIRED=true` 是生产默认值。仅在本地演示时可显式设置 `AUTH_REQUIRED=false`，关闭匿名请求的认证要求。
+
 Frontend validation now passes with Node.js 24/npm 11: typecheck, unit tests, and production build.

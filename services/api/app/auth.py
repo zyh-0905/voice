@@ -36,7 +36,9 @@ def require_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Dep
     Demo mode deliberately supplies an analyst identity so existing local
     workflows remain usable without a login round trip.
     """
-    required = os.getenv("AUTH_REQUIRED", "false").lower() in ("1", "true", "yes", "on")
+    # Authentication is required by default in deployed environments. Local
+    # demo workflows can explicitly opt out with AUTH_REQUIRED=false.
+    required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
     if not required and not credentials:
         return _public(_USERS["demo"]) | {"projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
     return current_user(credentials)
