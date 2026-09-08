@@ -22,3 +22,4 @@ test('viewer sees demo risks and tasks without mutation actions', async ({ page 
   await expect(page.getByRole('button', { name: '创建任务' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '执行' })).toHaveCount(0)
 })
+
