@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Verified production settings guard behavior directly: invalid auth/demo-secret/SQLite configuration is rejected; valid production-shaped config is accepted.
-Verification: direct guard smoke checks PASS; backend pytest 29 passed; frontend typecheck/unit/build PASS; Playwright + axe 4 passed; compose validation PASS.
-Remaining: actual Docker/DB/Redis deployment integration and production identity/model evaluation.
+Persisted Risk/Task/Review entities with SQLAlchemy/Alembic 0003 and integrated domain GET/confirm flows through Repository; memory mode seeds demo records.
+Verification: backend pytest 29 passed; compileall PASS; compose validation PASS; frontend typecheck/unit/build PASS; Playwright + axe 4 passed.
+Remaining: Docker daemon integration, production identity/token storage, and real model evaluation.
