@@ -1,0 +1,1 @@
+export type DatasetPreview={id:string;name:string;rows:number;status:string;hasTime:boolean}; export type ImportHealth={completeness:number;piiMasked:boolean;timeFieldMissing:number}; export type AnalysisRun={id:string;status:'queued'|'running'|'done'|'error';total?:number};

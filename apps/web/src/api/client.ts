@@ -1,0 +1,1 @@
+import type {DatasetPreview,ImportHealth,AnalysisRun} from '../types/domain'; export interface ApiClient{upload(file:File):Promise<DatasetPreview>; health(id:string):Promise<ImportHealth>; runAnalysis(id:string):Promise<AnalysisRun>}
