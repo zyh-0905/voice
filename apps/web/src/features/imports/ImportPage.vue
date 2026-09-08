@@ -1,39 +1,7 @@
-ï»¿<script setup lang="ts">
-import { ref } from 'vue'
-import FieldMapping from './FieldMapping.vue'
-import DatasetList from './DatasetList.vue'
-import ImportHealth from './ImportHealth.vue'
-import { mockApi } from '../../api/mock'
-const file = ref<File | null>(null)
-const step = ref(1)
-const busy = ref(false)
-const error = ref('')
-function choose(event: Event) {
-  const selected = (event.target as HTMLInputElement).files?.[0] ?? null
-  error.value = ''
-  if (selected && !/\.(csv|xlsx|xls|txt)$/i.test(selected.name)) { error.value = 'ä»…æ”¯æŒ CSVã€XLSXã€XLS æˆ– TXT æ–‡ä»¶'; file.value = null; return }
-  if (selected && selected.size > 20 * 1024 * 1024) { error.value = 'æ–‡ä»¶å¤§å°ä¸èƒ½è¶…è¿‡ 20 MB'; file.value = null; return }
-  file.value = selected
-}
-async function upload() {
-  if (!file.value) { error.value = 'è¯·é€‰æ‹©è¦å¯¼å…¥çš„æ–‡ä»¶'; return }
-  busy.value = true; error.value = ''
-  try { await mockApi.upload(file.value); step.value = 2 } catch { error.value = 'ä¸Šä¼ å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•' } finally { busy.value = false }
-}
+<script setup lang="ts">
+import {computed,ref} from 'vue';import {useRoute,useRouter} from 'vue-router';import {mockApi} from '../../api/mock';import FieldMapping from './FieldMapping.vue';import DatasetList from './DatasetList.vue';import ImportHealth from './ImportHealth.vue';
+const route=useRoute();const router=useRouter();const projectId=computed(()=>String(route.params.p));const file=ref<File|null>(null),step=ref(1),busy=ref(false),error=ref('');
+function choose(e:Event){const f=(e.target as HTMLInputElement).files?.[0]??null;error.value='';if(f&&!/\.(csv|xlsx|xls|txt)$/i.test(f.name)){error.value='½öÖ§³Ö CSV¡¢XLSX¡¢XLS »ò TXT ÎÄ¼ş';return}if(f&&f.size>20*1024*1024){error.value='ÎÄ¼ş´óĞ¡²»ÄÜ³¬¹ı 20 MB';return}file.value=f}
+async function upload(){if(!file.value){error.value='ÇëÑ¡ÔñÒªµ¼ÈëµÄÎÄ¼ş';return}busy.value=true;try{const d=await mockApi.upload(file.value);sessionStorage.setItem(`voicelens:dataset:${projectId.value}`,JSON.stringify(d));step.value=2}catch{error.value='ÉÏ´«Ê§°Ü£¬ÇëÉÔºóÖØÊÔ'}finally{busy.value=false}}
 </script>
-<template>
-  <section class="page" data-testid="import-page">
-    <h1>æ•°æ®å¯¼å…¥</h1>
-    <p class="muted">ä¸Šä¼ é€šè¯æ•°æ®ï¼Œå®Œæˆå­—æ®µæ˜ å°„ä¸æ²»ç†æ£€æŸ¥ã€‚å½“å‰ä¸º demo/mock æ¼”ç¤ºç¯å¢ƒã€‚</p>
-    <div class="steps">å¯¼å…¥æ–‡ä»¶ â†’ å­—æ®µæ˜ å°„ â†’ æ²»ç†æŠ¥å‘Š</div>
-    <div v-if="step === 1" class="card">
-      <input data-testid="file-input" type="file" accept=".csv,.xlsx,.xls,.txt" @change="choose">
-      <p v-if="file">{{ file.name }}</p>
-      <button data-testid="upload-button" :disabled="busy" @click="upload">{{ busy ? 'ä¸Šä¼ ä¸­â€¦' : 'å¼€å§‹ä¸Šä¼ ' }}</button>
-      <p v-if="error" class="error" data-testid="import-error">{{ error }}</p>
-    </div>
-    <FieldMapping v-else-if="step === 2" @next="step = 3" />
-    <ImportHealth v-else @done="step = 1" />
-    <DatasetList />
-  </section>
-</template>
+<template><section class="page" data-testid="import-page"><h1>Êı¾İµ¼Èë</h1><p class="muted">ÏîÄ¿£º{{projectId}}</p><div class="steps">µ¼ÈëÎÄ¼ş ¡ú ×Ö¶ÎÓ³Éä ¡ú ÖÎÀí±¨¸æ</div><div v-if="step===1" class="card"><input data-testid="file-input" type="file" accept=".csv,.xlsx,.xls,.txt" @change="choose"><p v-if="file">{{file.name}}</p><button data-testid="upload-button" :disabled="busy" @click="upload">{{busy?'ÉÏ´«ÖĞ¡­':'¿ªÊ¼ÉÏ´«'}}</button><p v-if="error" class="error" data-testid="import-error">{{error}}</p></div><FieldMapping v-else-if="step===2" @next="step=3"/><ImportHealth v-else @done="step=1"/><DatasetList :project-id="projectId"/></section></template>
