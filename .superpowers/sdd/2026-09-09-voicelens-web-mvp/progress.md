@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Final delivery verification after all MVP, security, deployment, ingestion, analysis, and CI changes.
-Verification: backend pytest 24 passed; compileall PASS; compose validation PASS; frontend lint/typecheck/unit/build PASS; Playwright Chromium + axe 4 passed; npm audit 0 vulnerabilities; working tree clean.
-Remaining: production Docker daemon integration, external identity provider/token persistence, and real model evaluation.
+HMAC-protected dataset dedupe identity is now implemented with configurable DEDUPE_HMAC_SECRET, legacy compatibility, unique event_key migration, and source-content conflict behavior.
+Verification: backend pytest 24 passed; compileall PASS; compose validation PASS; frontend typecheck/unit/build PASS; Playwright + axe 4 passed; style lint and npm audit PASS.
+Remaining: replace demo fallback secret with deployment secret management, Docker multi-service integration, and production model evaluation.
