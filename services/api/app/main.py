@@ -29,7 +29,7 @@ class ValidateRequest(BaseModel):
     timezone: str | None = None
     time_policy: str | None = None
 class AnalysisRequest(BaseModel):
-    dataset_ids: list[str] = Field(min_length=1)
+    dataset_ids: list[str] = Field(min_length=1, max_length=10)
     config: dict = {}
 @app.get('/api/v1/health')
 def health(): return {'status':'ok','service':'voicelens-api'}
@@ -56,8 +56,16 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
     d={'id':did,'project_id':project_id,'name':source_name,'source_namespace':namespace,'source_kind':kind,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
+def _page(page: int, page_size: int):
+    if page < 1 or page_size < 1 or page_size > 100:
+        raise HTTPException(422, detail={'code': 'invalid_pagination'})
+    return page, page_size
 @app.get('/api/v1/projects/{project_id}/datasets')
-def list_datasets(project_id: str): return {'items':[d for d in datasets.values() if d['project_id']==project_id], 'total':sum(d['project_id']==project_id for d in datasets.values())}
+def list_datasets(project_id: str, page: int = 1, page_size: int = 20):
+    page, page_size = _page(page, page_size)
+    all_items = [d for d in datasets.values() if d['project_id']==project_id]
+    start = (page - 1) * page_size
+    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_analyst)):
     d=datasets.get(dataset_id)
@@ -78,13 +86,19 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
         if previous: return analyses[previous[1]]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
-    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; repository.create_analysis(a)
+    total_rows = sum(d.get('rows', 0) for d in ds)
+    if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
+    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
     if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return analyses[aid]
 @app.get('/api/v1/projects/{project_id}/analyses')
-def list_analyses(project_id: str): return {'items':[a for a in analyses.values() if a['project_id']==project_id]}
+def list_analyses(project_id: str, page: int = 1, page_size: int = 20):
+    page, page_size = _page(page, page_size)
+    all_items = [a for a in analyses.values() if a['project_id']==project_id]
+    start = (page - 1) * page_size
+    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
 def get_analysis(project_id: str, analysis_id: str):
     a=analyses.get(analysis_id)
