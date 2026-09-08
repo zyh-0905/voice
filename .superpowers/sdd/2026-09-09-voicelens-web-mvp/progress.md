@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Added Nginx production frontend image with SPA fallback and same-origin /api/v1 proxy; Compose now includes web service and matching port validation. Removed duplicate web service and corrected validator contract.
-Verification: compose YAML parse and scripts/validate-compose.py PASS; frontend/backend/E2E suites remain green from prior run.
-Remaining: Docker daemon image build/multi-service integration and production model evaluation.
+Hardened CSV ingestion: strict UTF-8 decoding and row/header shape validation now reject malformed input with actionable errors.
+Verification: backend pytest 18 passed; malformed CSV manual rejection PASS; frontend typecheck/unit/build and Playwright + axe remain green; compose validation PASS.
+Remaining: Docker multi-service integration, production identity/token persistence, and external model evaluation.
