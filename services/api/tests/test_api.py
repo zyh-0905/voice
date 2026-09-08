@@ -1,4 +1,4 @@
-﻿from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
 from app.main import app, datasets
 from app.ingestion import redact_text, parse_csv_text
 
@@ -35,8 +35,10 @@ def test_domain_endpoints_and_viewer_guard():
     assert client.get('/api/v1/projects/demo-project/reviews').status_code == 200
     assert client.get('/api/v1/projects/demo-project/exports/redacted.csv').headers['content-type'].startswith('text/csv')
     review = client.get('/api/v1/projects/demo-project/reviews').json()['items'][0]['id']
-    assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'x-role':'VIEWER'}).status_code == 403
-    assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'x-role':'ANALYST'}).status_code == 200
+    viewer_token = client.post('/api/v1/auth/login', json={'username':'viewer','password':'viewer'}).json()['access_token']
+    analyst_token = client.post('/api/v1/auth/login', json={'username':'demo','password':'demo'}).json()['access_token']
+    assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'Authorization':f'Bearer {viewer_token}'}).status_code == 403
+    assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'Authorization':f'Bearer {analyst_token}'}).status_code == 200
 
 def test_analysis_idempotency():
     r = client.post('/api/v1/projects/p/analyses', json={'dataset_ids':['missing']}, headers={'Idempotency-Key':'k1'})
