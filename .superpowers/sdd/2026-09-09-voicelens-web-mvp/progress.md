@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Delivery audit completed with clean working tree and full local verification.
-Verification: backend pytest 20 passed; compileall PASS; compose validation PASS; frontend lint:style/typecheck/unit/build PASS; Playwright Chromium + axe 4 passed; npm audit 0 vulnerabilities.
-Remaining: Docker daemon integration and production identity/database/queue/model rollout.
+Added expiring bearer tokens with configurable AUTH_TOKEN_TTL_SECONDS, expiry metadata, and token_expired 401 handling.
+Verification: backend pytest 22 passed; compileall PASS; frontend typecheck/unit/build PASS; Playwright + axe 4 passed; compose validation PASS.
+Remaining: production identity/token persistence and Docker multi-service integration.
