@@ -104,4 +104,8 @@ def confirm_review(project_id: str, review_id: str, x_role: str|None = Header(No
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     r.update(status='confirmed', confirmed_by='demo-user', confirmed_at=now()); return r
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
-def export_redacted(project_id: str): return Response('id,project_id,status\nexport-001,'+project_id+',redacted\n', media_type='text/csv')
+def export_redacted(project_id: str):
+    content = f'id,project_id,status\\nexport-001,{project_id},redacted\\n'
+    return Response(content=content, media_type='text/csv')
+
+
