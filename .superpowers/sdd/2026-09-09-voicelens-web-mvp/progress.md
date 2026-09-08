@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Hardened Compose API healthcheck to use /api/v1/health; Docker/Podman CLI is unavailable locally, so image execution remains unverified.
-Verification: compose YAML parse PASS; backend pytest 13 passed; frontend typecheck/unit/build PASS; Playwright + axe 2 passed.
-Remaining: run Docker image/compose integration on a host with Docker, production identity/database/queue rollout, and model quality evaluation.
+Added GitHub Actions CI for backend/frontend/Playwright and a compose validation script covering services, build context, Dockerfile, and healthchecks.
+Verification: python scripts/validate-compose.py PASS; CI YAML parse PASS; backend pytest 13 passed; frontend typecheck/unit/build PASS; Playwright + axe 2 passed.
+Remaining: execute CI/Docker integration on remote runner and complete production model/data quality evaluation.
