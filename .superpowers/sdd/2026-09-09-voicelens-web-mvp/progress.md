@@ -1,1 +1,3 @@
-# SDD ledger ¡ª plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
+ï»¿# SDD ledger â€” plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
+Task 1: complete (commits b80bdbe..c9f188f, review findings fixed; npm unavailable)
+Task 2: complete (commits ea210aa..f30a089, template syntax and validation fixed; full review deferred)
