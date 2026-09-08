@@ -1,4 +1,4 @@
 ﻿# SDD ledger — plan: docs/superpowers/plans/2026-09-09-voicelens-web-mvp.md
-Completed final local regression after authentication and project-isolation fixes.
-Verification: backend pytest 13 passed; compileall PASS; compose validation PASS; npm ci/typecheck/unit/build PASS; Playwright Chromium + axe 2 passed; npm production audit 0 vulnerabilities.
-Remaining: Docker daemon integration and production identity/database/queue rollout with real external model evaluation.
+Expanded semantic design tokens with chart palette, text roles, control borders, focus-visible styling, and reduced-motion defaults.
+Verification: frontend typecheck/unit/build PASS; Playwright + axe previously PASS; backend pytest 13 PASS; compose validation PASS; npm audit PASS.
+Remaining: Docker-enabled integration and production identity/model evaluation.
