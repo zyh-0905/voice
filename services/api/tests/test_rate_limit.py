@@ -1,4 +1,4 @@
-"""Regression coverage for write rate limiting."""
+﻿"""Regression coverage for write rate limiting."""
 
 from fastapi.testclient import TestClient
 from app.main import app
@@ -34,3 +34,4 @@ def test_upload_rate_limit_returns_retry_after(monkeypatch):
     finally:
         middleware.limit = previous_limit
         middleware._hits.clear()
+
