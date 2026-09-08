@@ -55,7 +55,7 @@ def create_analysis(project_id: str, req: AnalysisRequest):
     ds=[datasets.get(i) for i in req.dataset_ids]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
-    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; analyses[aid]=a
+    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':sum(d['rows'] for d in ds)}; analyses[aid]=a
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return a

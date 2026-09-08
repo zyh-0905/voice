@@ -6,6 +6,7 @@ machine intentionally lives here so API behaviour remains identical.
 from __future__ import annotations
 
 from typing import MutableMapping
+from .analysis import analyze_feedback
 
 
 class AnalysisWorker:
@@ -17,6 +18,11 @@ class AnalysisWorker:
         try:
             run.update(status="running", stage="analyzing")
             total = int(run.get("total") or 0)
+            rows = []
+            for dataset in run.get("datasets", []):
+                rows.extend(dataset.get("preview", {}).get("rows", []))
+            if rows:
+                run["analysis"] = analyze_feedback(rows)
             run["progress"] = total
             run.update(status="done", stage="completed")
             return run
