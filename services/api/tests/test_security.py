@@ -49,3 +49,15 @@ def test_viewer_cannot_confirm_review(monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
+from app.main import app
+
+def test_security_headers_and_strict_auth(monkeypatch):
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    response = client.get('/api/v1/health')
+    assert response.headers['x-content-type-options'] == 'nosniff'
+    assert response.headers['x-frame-options'] == 'DENY'
+    assert response.headers['referrer-policy'] == 'no-referrer'
+    monkeypatch.setenv('AUTH_REQUIRED', 'true')
+    assert client.get('/api/v1/projects').status_code == 401
+    assert client.post('/api/v1/projects/p/datasets', files={'file': ('a.csv', b'x')}, data={'consent': 'true'}).status_code == 401
