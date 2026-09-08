@@ -5,3 +5,4 @@ __pycache__/
 .env
 /package-lock.json
 /voicelens.db
+apps/web/test-results/
