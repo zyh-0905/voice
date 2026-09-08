@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Response
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -91,6 +91,13 @@ def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dic
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
     return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
+@app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
+def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_analyst)):
+    dataset = datasets.get(dataset_id)
+    if not dataset or dataset.get('project_id') -ne project_id: throw [Exception]::new('x')
+    repository.delete_dataset(dataset_id)
+    return Response(status_code=204)
+
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_analyst)):
     d=datasets.get(dataset_id)
@@ -221,3 +228,14 @@ def export_redacted(project_id: str, user: dict = Depends(require_user)):
 
 
 
+
+@app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
+def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_analyst)):
+    dataset = datasets.get(dataset_id)
+    if not dataset or dataset.get('project_id') != project_id:
+        raise HTTPException(404, detail={'code': 'dataset_not_found'})
+    try:
+        del datasets[dataset_id]
+    except KeyError:
+        raise HTTPException(404, detail={'code': 'dataset_not_found'})
+    return None
