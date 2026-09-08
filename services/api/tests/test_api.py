@@ -5,6 +5,14 @@ from app.ingestion import redact_text, parse_csv_text
 client = TestClient(app)
 def test_health():
     assert client.get('/api/v1/health').json()['status'] == 'ok'
+
+def test_readiness_demo_skips_optional_dependencies():
+    response = client.get('/api/v1/health/ready')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['status'] == 'ready'
+    assert payload['database']['status'] == 'skipped'
+    assert payload['queue']['status'] == 'skipped'
 def test_upload_validate_analysis():
     r=client.post('/api/v1/projects/p/datasets', files={'file':('a.csv',b'x')}, data={'consent':'true'})
     assert r.status_code == 201

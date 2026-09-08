@@ -9,6 +9,7 @@ def test_openapi_contract_lists_core_routes():
     paths = document.json()['paths']
     expected = {
         '/api/v1/health',
+        '/api/v1/health/ready',
         '/api/v1/projects/{project_id}/datasets',
         '/api/v1/projects/{project_id}/analyses',
         '/api/v1/projects/{project_id}/reviews/{review_id}/confirm',

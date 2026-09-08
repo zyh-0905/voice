@@ -33,6 +33,30 @@ class AnalysisRequest(BaseModel):
     config: dict = {}
 @app.get('/api/v1/health')
 def health(): return {'status':'ok','service':'voicelens-api'}
+
+@app.get('/api/v1/health/ready')
+def readiness():
+    """Dependency readiness probe.
+
+    Demo mode deliberately reports skipped database/queue checks. In database
+    mode a failed connection makes the probe return 503 so orchestrators do
+    not route traffic to an instance that cannot persist work.
+    """
+    from fastapi.responses import JSONResponse
+    use_database = os.getenv('USE_DATABASE', '').lower() in ('1', 'true', 'yes')
+    use_queue = os.getenv('USE_CELERY', '').lower() in ('1', 'true', 'yes')
+    database = {'status': 'configured' if use_database else 'skipped'}
+    queue = {'status': 'configured' if use_queue else 'skipped'}
+    if use_database:
+        try:
+            from .db import engine
+            with engine.connect() as connection:
+                connection.exec_driver_sql('SELECT 1')
+            database['status'] = 'reachable'
+        except Exception as exc:
+            database.update(status='unreachable', error=type(exc).__name__)
+            return JSONResponse(status_code=503, content={'status': 'not_ready', 'database': database, 'queue': queue})
+    return {'status': 'ready', 'database': database, 'queue': queue}
 @app.post('/api/v1/projects/{project_id}/datasets', status_code=201)
 async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_analyst)):
     if not consent: raise HTTPException(422, detail={'code':'consent_required'})
