@@ -24,5 +24,6 @@
                             "vue-tsc":  "^2.2.0",
                             "@axe-core/playwright":  "^4.10.2",
                             "@playwright/test":  "^1.52.0"
+                            ,"jsdom":  "^26.0.0"
                         }
 }

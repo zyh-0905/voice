@@ -7,6 +7,6 @@ export default defineConfig({
     // Keep unit tests isolated from Playwright specs under tests/e2e.
     include: ["tests/unit/**/*.spec.ts"],
     exclude: ["tests/e2e/**", "node_modules/**"],
-    environment: "node",
+    environment: "jsdom",
   },
 });
