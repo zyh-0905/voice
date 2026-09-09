@@ -186,9 +186,10 @@ export const mockApi: ApiClient = {
     await delay(500)
     return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
   },
-  async summary() {
+  async summary(projectId: string) {
     await delay(300)
-    return SYNTHETIC_SUMMARY
+    // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)
+    return { ...SYNTHETIC_SUMMARY, project_id: projectId }
   },
   async topics() {
     await delay(300)

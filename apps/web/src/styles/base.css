@@ -57,6 +57,14 @@ button, input, select, textarea { font: inherit; }
   .vl-metrics { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* 遮罩层:证据抽屉与窄屏导航共用(背景不可交互语义) */
+.vl-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--vl-z-modal);
+  background: var(--vl-color-overlay);
+}
+
 /* 焦点与动效(风格规范第 10 节) */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--vl-color-brand);
@@ -86,7 +94,9 @@ button, input, select, textarea { font: inherit; }
   .vl-button { min-height: var(--vl-control-height-touch); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .vl-shell *, .vl-overlay, .vl-overlay * {
+  /* 冻结片段覆盖壳内;壳外页面(/login、/projects 等)同样抑制非必要动效 */
+  .vl-shell *, .vl-overlay, .vl-overlay *,
+  .vl-login *, .vl-page * {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;

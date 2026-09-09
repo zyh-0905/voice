@@ -90,12 +90,7 @@ function onKeydown(event: KeyboardEvent): void {
 </script>
 
 <style scoped>
-.vl-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--vl-z-modal);
-  background: var(--vl-color-overlay);
-}
+/* .vl-overlay 已提升为 base.css 全局工具类,此处不再重复定义 */
 .vl-evidence-drawer {
   position: absolute;
   inset-block: 0;

@@ -3,7 +3,7 @@
 // 校验响应 project_id 上下文;服务端数据由 composable 管理,不复制进 Pinia。
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { DatasetBatch, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
-import type { ApiClient } from '../api/client'
+import { ApiHttpError, type ApiClient } from '../api/client'
 import { mockApi } from '../api/mock'
 
 export type AsyncStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'forbidden'
@@ -35,6 +35,8 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = mock
   const error = ref<string | null>(null)
 
   let controller: AbortController | null = null
+  /** 当前数据所属项目;跨项目失败时不得把旧项目数据标为「本项目的过期结果」 */
+  let loadedProjectId: string | null = null
   const hasData = () => summary.value !== null
 
   async function load(): Promise<void> {
@@ -64,6 +66,7 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = mock
       trend.value = nextTrend
       taskSummaries.value = nextTasks
       recentBatches.value = nextBatches
+      loadedProjectId = projectId.value
       // 无已发布 run = 尚未分析,与「没有匹配结果」区分(UI-13)
       status.value = nextSummary.run_id === null ? 'empty' : 'success'
       refreshing.value = false
@@ -71,12 +74,25 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = mock
       staleAt.value = null
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      if (hasData()) {
+      // 403 是权限拒绝,不是瞬时错误(风格规范 9.2);其余按刷新失败处理
+      if (err instanceof ApiHttpError && err.status === 403) {
+        status.value = 'forbidden'
+        refreshing.value = false
+        return
+      }
+      if (hasData() && loadedProjectId === projectId.value) {
         // 刷新失败:保留旧内容并显式标为过期(UI-14)
         stale.value = true
         staleAt.value = new Date().toLocaleString('zh-CN')
         refreshing.value = false
       } else {
+        // 首次失败或数据属于其他项目:不得沿用旧项目数据
+        summary.value = null
+        topics.value = []
+        trend.value = []
+        taskSummaries.value = []
+        recentBatches.value = []
+        loadedProjectId = null
         status.value = 'error'
         error.value = err instanceof Error ? err.message : String(err)
       }

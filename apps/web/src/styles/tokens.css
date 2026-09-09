@@ -126,6 +126,7 @@
   --vl-radius: var(--vl-radius-control);
   --vl-shadow-sm: var(--vl-shadow-panel);
   --vl-color-primary: var(--vl-color-brand);
+  --vl-color-white: var(--vl-color-surface);
   --vl-color-notice-bg: var(--vl-color-brand-soft);
   --vl-color-danger-soft: var(--vl-color-danger-bg);
   --vl-color-warning-soft: var(--vl-color-warning-bg);
