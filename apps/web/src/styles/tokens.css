@@ -96,43 +96,6 @@
   --vl-z-message: 3000;
 }
 
-/* 迁移期别名 ①:风格规范 3.3 定义的旧变量。
- * 未迁移页面仍在使用;新组件禁止引用。后续轮次逐页迁移后删除。
- */
-:root {
-  --vl-ink: var(--vl-color-text);
-  --vl-muted: var(--vl-color-text-muted);
-  --vl-brand: var(--vl-color-brand);
-  --vl-bg: var(--vl-color-bg);
-  --vl-mint: var(--vl-color-brand-soft);
-  --vl-line: var(--vl-color-border);
-  --vl-amber: var(--vl-color-warning);
-  --vl-red: var(--vl-color-danger);
-  --vl-white: var(--vl-color-surface);
-  --vl-radius-card: var(--vl-radius-panel);
-  --vl-radius-button: var(--vl-radius-control);
-  --vl-font-body: var(--vl-text-sm);
-  --vl-font-title: var(--vl-text-xl);
-  --vl-font-family: var(--vl-font-sans);
-}
+/* 迁移期别名:风格规范 3.3 定义的旧变量。已无页面引用,随本轮全页迁移完成而删除。
+ * 仅保留注释说明;新组件一律使用 --vl-color-* 语义 token。 */
 
-/* 迁移期别名 ②:仓库存量页面实际使用的旧名(3.3 未列),同上处置。
- */
-:root {
-  --vl-surface: var(--vl-color-surface);
-  --vl-text: var(--vl-color-text);
-  --vl-border: var(--vl-color-border);
-  --vl-green: var(--vl-color-brand);
-  --vl-radius: var(--vl-radius-control);
-  --vl-shadow-sm: var(--vl-shadow-panel);
-  --vl-color-primary: var(--vl-color-brand);
-  --vl-color-white: var(--vl-color-surface);
-  --vl-color-notice-bg: var(--vl-color-brand-soft);
-  --vl-color-danger-soft: var(--vl-color-danger-bg);
-  --vl-color-warning-soft: var(--vl-color-warning-bg);
-  --vl-color-danger-strong: var(--vl-color-danger);
-  --vl-color-warning-strong: var(--vl-color-warning);
-  --vl-color-success-strong: var(--vl-color-success);
-  --vl-color-shadow: rgba(24, 43, 40, 0.12);
-  --vl-color-focus: var(--vl-color-brand);
-}
