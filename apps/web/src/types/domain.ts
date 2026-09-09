@@ -10,6 +10,15 @@ export interface ImportHealth {
   piiMasked: boolean
   timeFieldMissing: number
 }
+/** 工程计划 W05:上传→治理→分析后由服务端返回的批次健康视图 */
+export interface ImportHealthView {
+  inputRows: number
+  validRows: number
+  invalidRows: number
+  duplicateRows: number
+  redactedRows: number
+  undatedRows: number
+}
 export interface AnalysisRun {
   id: string
   status: 'queued' | 'running' | 'done' | 'error'
