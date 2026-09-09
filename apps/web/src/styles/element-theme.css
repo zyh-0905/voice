@@ -1,1 +1,63 @@
-:root{--el-color-primary:var(--vl-green);--el-border-radius-base:var(--vl-radius);--el-text-color-primary:var(--vl-text)}
+/* apps/web/src/styles/element-theme.css — Element Plus 变量与有限适配(风格规范 11.2)
+ * 业务页禁止使用 :deep(.el-*) 覆盖;确需覆盖的厂商选择器集中在此并注明所服务的公共组件。
+ */
+:root {
+  --el-font-family: var(--vl-font-sans);
+  --el-font-size-base: var(--vl-text-sm);
+  --el-color-primary: var(--vl-color-brand);
+  --el-color-primary-dark-2: var(--vl-color-brand-active);
+  --el-color-primary-light-3: var(--vl-color-brand);
+  --el-color-primary-light-5: var(--vl-color-brand-line);
+  --el-color-primary-light-7: var(--vl-color-brand-soft);
+  --el-color-primary-light-8: var(--vl-color-brand-soft);
+  --el-color-primary-light-9: var(--vl-color-brand-soft);
+  --el-color-success: var(--vl-color-success);
+  --el-color-success-light-9: var(--vl-color-success-bg);
+  --el-color-warning: var(--vl-color-warning);
+  --el-color-warning-light-9: var(--vl-color-warning-bg);
+  --el-color-danger: var(--vl-color-danger);
+  --el-color-danger-light-9: var(--vl-color-danger-bg);
+  --el-color-error: var(--vl-color-danger);
+  --el-color-info: var(--vl-color-info);
+  --el-color-info-light-9: var(--vl-color-info-bg);
+  --el-text-color-primary: var(--vl-color-text);
+  --el-text-color-regular: var(--vl-color-text-secondary);
+  --el-text-color-secondary: var(--vl-color-text-muted);
+  --el-text-color-placeholder: var(--vl-color-text-muted);
+  --el-bg-color: var(--vl-color-surface);
+  --el-bg-color-page: var(--vl-color-bg);
+  --el-bg-color-overlay: var(--vl-color-surface);
+  --el-fill-color-blank: var(--vl-color-surface);
+  --el-fill-color-light: var(--vl-color-subtle);
+  --el-border-color: var(--vl-color-border-control);
+  --el-border-color-light: var(--vl-color-border);
+  --el-border-radius-base: var(--vl-radius-control);
+  --el-component-size: var(--vl-control-height);
+  --el-component-size-large: var(--vl-control-height-touch);
+  --el-component-size-small: var(--vl-control-height-compact);
+}
+
+/* 服务 VlButton:主按钮深青绿实底白字,hover 用更深的品牌色避免浅底白字 */
+.vl-button.el-button--primary:not(.is-plain) {
+  --el-button-bg-color: var(--vl-color-brand);
+  --el-button-border-color: var(--vl-color-brand);
+  --el-button-text-color: var(--vl-color-surface);
+  --el-button-hover-bg-color: var(--vl-color-brand-hover);
+  --el-button-hover-border-color: var(--vl-color-brand-hover);
+  --el-button-hover-text-color: var(--vl-color-surface);
+  --el-button-active-bg-color: var(--vl-color-brand-active);
+  --el-button-active-border-color: var(--vl-color-brand-active);
+}
+.vl-button.is-disabled {
+  opacity: 1;
+  --el-button-disabled-bg-color: var(--vl-color-subtle);
+  --el-button-disabled-text-color: var(--vl-color-text-muted);
+  --el-button-disabled-border-color: var(--vl-color-border);
+}
+
+/* 服务表单字段(FilterBar 等):输入控件聚焦可见 */
+.vl-field .el-input__wrapper:focus-within,
+.vl-field .el-select__wrapper:focus-within {
+  outline: 2px solid var(--vl-color-brand);
+  outline-offset: 2px;
+}

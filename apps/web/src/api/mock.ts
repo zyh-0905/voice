@@ -1,19 +1,209 @@
 import type { ApiClient } from './client'
-import type { DatasetPreview } from '../types/domain'
+import type {
+  AiProvenance,
+  CpiResult,
+  DatasetBatch,
+  DatasetPreview,
+  EvidenceContext,
+  EvidenceQuoteItem,
+  SummaryResponse,
+  TaskSummary,
+  TopicRow,
+  TrendPoint,
+} from '../types/domain'
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Deterministic demo client. Supports legacy `upload(file)` and project-scoped `upload(projectId, file)`. */
 async function uploadMock(projectOrFile: string | File, fileOrSignal?: File | AbortSignal, _maybeSignal?: AbortSignal): Promise<DatasetPreview> {
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  await delay(300)
   const file = typeof projectOrFile === 'string' && fileOrSignal instanceof File ? fileOrSignal : projectOrFile
   const name = typeof file === 'string' ? file : file.name
   return { id: 'demo-1', name, rows: 1248, status: 'ready', hasTime: false }
 }
 
+// —— 合成 UI 契约样例(工程计划 7.7 自带样例):仅用于 UI 演示,
+// 常显 DemoNotice,不代表任何真实业务结果。后端 /summary 实现后替换。 ——
+const SYNTHETIC_SUMMARY: SummaryResponse = {
+  project_id: 'demo-project',
+  run_id: 'run_demo_001',
+  revision: 1,
+  denominator: 1000,
+  definition_version: 'summary-ui-v1',
+  computed_at: '2026-09-09T00:00:00+08:00',
+  filters: { start: '2026-08-25T00:00:00+08:00', end: '2026-09-01T00:00:00+08:00', channel: null, product: null },
+  insight_metrics: { scope: 'selected_analysis', valid_feedback_count: 1000, topic_count: 8, pending_risk_feedback_count: 12 },
+  action_metrics: { scope: 'project_all_runs', active_task_count: 18, overdue_task_count: 4, task_as_of: '2026-09-09T00:00:00+08:00' },
+}
+
+function cpi(display: string, provisional = false): CpiResult {
+  return {
+    display_value: display,
+    components: [
+      { label: '数量变化', displayValue: display, coverage: 100 },
+      { label: '严重度构成', displayValue: provisional ? '暂定' : display, coverage: provisional ? null : 100 },
+    ],
+    coverage: provisional ? null : 100,
+    provisional,
+  }
+}
+
+function quote(
+  feedbackId: string,
+  text: string,
+  start: number,
+  end: number,
+  channel: string,
+  occurredAt: string,
+  rowIndex: number,
+): EvidenceQuoteItem {
+  return { feedbackId, text, start, end, channel, occurredAt, rowIndex }
+}
+
+function provenance(origin: AiProvenance['origin'], needsReview: boolean, reviewer: string | null): AiProvenance {
+  return {
+    origin,
+    needsReview,
+    reviewRecord: reviewer ? { reviewer, reviewedAt: '2026-09-08T10:00:00+08:00' } : null,
+  }
+}
+
+interface SyntheticTopic {
+  id: string
+  title: string
+  feedbackCount: number
+  ratio: number
+  trend: TopicRow['trend']
+  cpiDisplayValue: string | null
+  reviewState: TopicRow['reviewState']
+  summary: string
+  quote: EvidenceQuoteItem
+  provenance: AiProvenance
+}
+
+// 前 3 条沿用原 demoAnalysis 的物流/退款/产品主题(合成样本);其余为补充合成主题。
+const SYNTHETIC_TOPICS: SyntheticTopic[] = [
+  {
+    id: 'delivery', title: '物流体验', feedbackCount: 218, ratio: 21.8, trend: 'down', cpiDisplayValue: '68', reviewState: 'confirmed',
+    summary: '配送等待与物流信息更新是主要关注点。',
+    quote: quote('fb_demo_001', '合成样本 DEMO-001:包裹等待了三天,物流信息一直没有更新。', 14, 32, '在线客服', '2026-08-26T09:12:00+08:00', 12),
+    provenance: provenance('ai', false, 'demo-user'),
+  },
+  {
+    id: 'refund', title: '退款进度', feedbackCount: 164, ratio: 16.4, trend: 'up', cpiDisplayValue: '82', reviewState: 'pending',
+    summary: '反馈关注退款处理时间和状态透明度。',
+    quote: quote('fb_demo_002', '合成样本 DEMO-002:申请退款后,希望能看到预计到账时间。', 14, 31, '电话', '2026-08-27T14:30:00+08:00', 37),
+    provenance: provenance('ai', true, null),
+  },
+  {
+    id: 'product', title: '产品使用', feedbackCount: 121, ratio: 12.1, trend: 'flat', cpiDisplayValue: '54', reviewState: 'pending',
+    summary: '使用引导与功能说明仍有改善空间。',
+    quote: quote('fb_demo_003', '合成样本 DEMO-003:第一次使用时没有找到操作说明。', 14, 28, '邮件', '2026-08-28T11:05:00+08:00', 58),
+    provenance: provenance('rule', true, null),
+  },
+  {
+    id: 'support', title: '客服响应', feedbackCount: 96, ratio: 9.6, trend: 'up', cpiDisplayValue: '77', reviewState: 'pending',
+    summary: '响应速度与问题一次解决率受到关注。',
+    quote: quote('fb_demo_004', '合成样本 DEMO-004:排队等待时间较长,转接后问题得到解决。', 14, 28, '在线客服', '2026-08-29T16:40:00+08:00', 81),
+    provenance: provenance('ai', true, null),
+  },
+  {
+    id: 'billing', title: '价格与账单', feedbackCount: 87, ratio: 8.7, trend: 'flat', cpiDisplayValue: '61', reviewState: 'confirmed',
+    summary: '账单明细与扣费说明需要更清晰。',
+    quote: quote('fb_demo_005', '合成样本 DEMO-005:账单金额与预期不符,希望展示明细。', 14, 28, '邮件', '2026-08-30T10:20:00+08:00', 104),
+    provenance: provenance('human', false, 'demo-user'),
+  },
+  {
+    id: 'stability', title: '应用稳定性', feedbackCount: 62, ratio: 6.2, trend: 'down', cpiDisplayValue: '73', reviewState: 'pending',
+    summary: '闪退与加载失败集中在特定版本。',
+    quote: quote('fb_demo_006', '合成样本 DEMO-006:打开应用时出现闪退,重装后恢复。', 14, 26, '在线客服', '2026-08-31T13:15:00+08:00', 129),
+    provenance: provenance('ai', true, null),
+  },
+  {
+    id: 'account', title: '账号与登录', feedbackCount: 41, ratio: 4.1, trend: 'new', cpiDisplayValue: null, reviewState: 'pending',
+    summary: '新主题,样本较少,待进一步归类。',
+    quote: quote('fb_demo_007', '合成样本 DEMO-007:更换手机号后无法登录原有账号。', 14, 26, '电话', '2026-09-01T09:50:00+08:00', 142),
+    provenance: provenance('unknown', true, null),
+  },
+  {
+    id: 'unclassified', title: '待归类', feedbackCount: 33, ratio: 3.3, trend: null, cpiDisplayValue: null, reviewState: 'pending',
+    summary: '暂未归入已有主题的反馈,保留原文可查看。',
+    quote: quote('fb_demo_008', '合成样本 DEMO-008:希望有更多配送方式可以选择。', 14, 24, '在线客服', '2026-09-01T18:25:00+08:00', 160),
+    provenance: provenance('rule', true, null),
+  },
+]
+
+function topicRow(topic: SyntheticTopic): TopicRow {
+  const evidence: EvidenceContext = {
+    topicId: topic.id,
+    topicTitle: topic.title,
+    runId: 'run_demo_001',
+    revision: 1,
+    summary: topic.summary,
+    cpi: topic.cpiDisplayValue === null ? null : cpi(topic.cpiDisplayValue, topic.reviewState === 'pending'),
+    quotes: [topic.quote],
+    aiProvenance: topic.provenance,
+  }
+  return {
+    id: topic.id,
+    title: topic.title,
+    feedbackCount: topic.feedbackCount,
+    denominator: SYNTHETIC_SUMMARY.denominator ?? 1000,
+    ratio: topic.ratio,
+    trend: topic.trend,
+    cpiDisplayValue: topic.cpiDisplayValue,
+    reviewState: topic.reviewState,
+    evidence,
+  }
+}
+
+const SYNTHETIC_TREND: TrendPoint[] = [
+  { date: '08-26', value: 142 },
+  { date: '08-27', value: 151 },
+  { date: '08-28', value: null },
+  { date: '08-29', value: 158 },
+  { date: '08-30', value: 149 },
+  { date: '08-31', value: 161 },
+  { date: '09-01', value: 155 },
+]
+
+const SYNTHETIC_TASKS: TaskSummary[] = [
+  { id: 'task_demo_001', title: '优化物流状态推送', status: 'IN_PROGRESS', dueAt: '2026-09-08T18:00:00+08:00', overdue: true },
+  { id: 'task_demo_002', title: '补充退款进度说明', status: 'OPEN', dueAt: '2026-09-12T18:00:00+08:00', overdue: false },
+  { id: 'task_demo_003', title: '更新产品使用引导', status: 'PENDING_REVIEW', dueAt: '2026-09-10T18:00:00+08:00', overdue: false },
+]
+
+const SYNTHETIC_BATCHES: DatasetBatch[] = [
+  { id: 'ds_demo_001', name: '8 月第 4 周反馈批次', rows: 1248, status: 'ready', createdAt: '2026-08-25T10:00:00+08:00' },
+  { id: 'ds_demo_002', name: '8 月第 3 周反馈批次', rows: 1105, status: 'ready', createdAt: '2026-08-18T10:00:00+08:00' },
+  { id: 'ds_demo_003', name: '8 月第 2 周反馈批次', rows: 987, status: 'ready', createdAt: '2026-08-11T10:00:00+08:00' },
+]
+
 export const mockApi: ApiClient = {
   upload: uploadMock,
   async health() { return { completeness: 0.98, piiMasked: true, timeFieldMissing: 12 } },
   async runAnalysis() {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    return { id: 'run-1', status: 'done', total: 1248 }
+    await delay(500)
+    return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
+  },
+  async summary() {
+    await delay(300)
+    return SYNTHETIC_SUMMARY
+  },
+  async topics() {
+    await delay(300)
+    return SYNTHETIC_TOPICS.map(topicRow)
+  },
+  async trend() {
+    await delay(300)
+    return SYNTHETIC_TREND
+  },
+  async taskSummaries() {
+    await delay(300)
+    return SYNTHETIC_TASKS
+  },
+  async recentBatches() {
+    await delay(300)
+    return SYNTHETIC_BATCHES
   },
 }
