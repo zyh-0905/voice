@@ -140,6 +140,16 @@ export interface TaskSummary {
   overdue: boolean
 }
 
+/** 风险队列:规则命中候选,severity 与复核状态分开;候选不是已确认事故 */
+export interface RiskItem {
+  id: string
+  title: string
+  rule: string
+  severity: string
+  reviewState: 'pending' | 'confirmed' | 'excluded'
+  status: string
+}
+
 export interface DatasetBatch {
   id: string
   name: string

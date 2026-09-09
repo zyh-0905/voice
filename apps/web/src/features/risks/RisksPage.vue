@@ -1,3 +1,209 @@
-<template><div class="page"><div class="heading"><div><h1>风险清单</h1><p>可追溯的规则命中与处置状态 <span class="demo">演示数据</span></p></div><button v-if="canAct" class="primary">创建风险</button></div><div v-if="error" class="state error">加载失败：{{ error }}</div><div v-else-if="!items.length" class="state">暂无风险</div><table v-else><thead><tr><th>风险</th><th>优先级</th><th>需复核</th><th>状态</th><th v-if="canAct">操作</th></tr></thead><tbody><tr v-for="r in items" :key="r.id"><td><b>{{r.title}}</b><small>{{r.rule}}</small></td><td><span :class="['pill',r.priority]">{{r.priority}}</span></td><td>{{r.needs_review?'是':'否'}}</td><td>{{r.status}}</td><td v-if="canAct"><button>查看</button><button v-if="r.needs_review">复核</button></td></tr></tbody></table></div></template>
-<script setup lang="ts">import {computed,ref} from 'vue';import {useSessionStore} from '../../stores/session';const session=useSessionStore();const canAct=computed(()=>((session.user as any)?.role||'VIEWER')!=='VIEWER');const error=ref('');const items=ref([{id:'r1',title:'退款率异常',rule:'R-204 · 近30天',priority:'HIGH',needs_review:true,status:'OPEN'},{id:'r2',title:'订单金额缺失',rule:'R-101 · 完整性',priority:'MEDIUM',needs_review:false,status:'IN_PROGRESS'}]);</script>
-<style scoped>.page{padding:32px;max-width:1100px;margin:auto}.heading{display:flex;justify-content:space-between;align-items:center}.demo{color:var(--vl-muted);font-size:12px;border:1px solid var(--vl-border);padding:3px 8px;border-radius:12px}table{width:100%;border-collapse:collapse;background:var(--vl-surface);border:1px solid var(--vl-border)}th,td{padding:14px;text-align:left;border-bottom:1px solid var(--vl-border)}small{display:block;color:var(--vl-muted);margin-top:4px}.pill{padding:3px 8px;border-radius:10px;font-size:12px}.HIGH{background:var(--vl-color-danger-soft);color:var(--vl-color-danger-strong)}.MEDIUM{background:var(--vl-color-warning-soft);color:var(--vl-color-warning-strong)}.primary{background:var(--vl-color-primary);color:white;border:0;padding:9px 14px;border-radius:8px}.state{padding:40px;text-align:center}.error{color:var(--vl-color-danger-strong)}</style>
+<template>
+  <div class="vl-page">
+    <PageHeader title="风险复核" description="待复核队列与原文;候选不是已确认事故,裁决须填写理由。">
+      <template #actions>
+        <VlButton variant="ghost" data-testid="view-pending" @click="filterPending = !filterPending">
+          {{ filterPending ? '查看全部风险' : '只看待复核' }}
+        </VlButton>
+      </template>
+    </PageHeader>
+
+    <div class="vl-table-scroll">
+      <table class="vl-risk-table" data-testid="risk-table">
+        <thead>
+          <tr>
+            <th scope="col">风险候选</th>
+            <th scope="col">严重度</th>
+            <th scope="col">复核状态</th>
+            <th scope="col">处置状态</th>
+            <th scope="col"><span class="vl-sr-only">操作</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="risk in visible" :key="risk.id" :data-resource-id="risk.id">
+            <th scope="row" class="vl-risk-table__title">
+              {{ risk.title }}
+              <span class="vl-risk-table__rule">{{ risk.rule }}</span>
+            </th>
+            <td><StatusBadge kind="severity" :state="risk.severity" /></td>
+            <td><StatusBadge kind="review" :state="risk.reviewState" /></td>
+            <td><StatusBadge kind="task" :state="risk.status" /></td>
+            <td>
+              <VlButton
+                v-if="canAct && risk.reviewState === 'pending'"
+                variant="secondary"
+                size="small"
+                data-testid="risk-confirm"
+                @click="openReview(risk)"
+              >
+                复核并裁决
+              </VlButton>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p v-if="!visible.length" class="vl-risk-table__empty">当前筛选下没有风险候选。</p>
+
+    <el-dialog
+      v-model="reviewOpen"
+      title="复核风险候选"
+      width="480px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <div v-if="current" class="vl-risk-review">
+        <p class="vl-risk-review__title">{{ current.title }}</p>
+        <p class="vl-risk-review__meta">{{ current.rule }} · 合成演示数据,请对照原文核验</p>
+        <div class="vl-field">
+          <label for="vl-risk-reason" class="vl-risk-review__label">裁决理由(必填)</label>
+          <textarea
+            id="vl-risk-reason"
+            v-model="reason"
+            rows="3"
+            class="vl-risk-review__input"
+            placeholder="说明依据:命中规则、证据原文与业务上下文"
+          ></textarea>
+          <span v-if="reasonError" class="vl-risk-review__error" data-testid="risk-reason-error">请填写裁决理由</span>
+        </div>
+        <div class="vl-risk-review__actions">
+          <VlButton variant="danger" data-testid="risk-exclude" :disabled="!reason.trim()" @click="decide('excluded')">
+            排除候选
+          </VlButton>
+          <VlButton variant="primary" data-testid="risk-confirm-submit" :disabled="!reason.trim()" @click="decide('confirmed')">
+            确认风险
+          </VlButton>
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+// RisksPage — 工程计划 W14:待复核队列 + 原文 + 裁决区;
+// severity 与 review_state 分开显示;critical 置顶;VIEWER 只读;复核理由必填。
+import { computed, ref } from 'vue'
+import { useSessionStore } from '../../stores/session'
+import PageHeader from '../../components/common/PageHeader.vue'
+import VlButton from '../../components/common/VlButton.vue'
+import StatusBadge from '../../components/common/StatusBadge.vue'
+import { syntheticRisks, type RiskStatus } from './service'
+import type { RiskItem } from '../../types/domain'
+
+const session = useSessionStore()
+const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
+
+// 排序优先遵循后端:critical 置顶不能被美观排序覆盖
+const items = ref<RiskItem[]>(syntheticRisks())
+const filterPending = ref(false)
+const visible = computed(() => {
+  const list = filterPending.value ? items.value.filter(r => r.reviewState === 'pending') : items.value
+  return [...list].sort((a, b) => Number(b.severity === 'CRITICAL') - Number(a.severity === 'CRITICAL'))
+})
+
+const reviewOpen = ref(false)
+const current = ref<RiskItem | null>(null)
+const reason = ref('')
+const reasonError = ref(false)
+
+function openReview(risk: RiskItem) {
+  current.value = risk
+  reason.value = ''
+  reasonError.value = false
+  reviewOpen.value = true
+}
+
+function decide(next: 'confirmed' | 'excluded') {
+  if (!reason.value.trim()) {
+    reasonError.value = true
+    return
+  }
+  if (current.value) {
+    const target = items.value.find(r => r.id === current.value!.id)
+    if (target) {
+      target.reviewState = next
+      target.status = next === 'confirmed' ? 'OPEN' : 'CLOSED'
+    }
+  }
+  reviewOpen.value = false
+  current.value = null
+  reason.value = ''
+}
+</script>
+
+<style scoped>
+.vl-risk-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.vl-risk-table thead th {
+  padding: var(--vl-space-3);
+  background: var(--vl-color-subtle);
+  font-size: var(--vl-text-sm);
+  font-weight: 600;
+}
+.vl-risk-table tbody th,
+.vl-risk-table tbody td {
+  padding: var(--vl-space-3);
+  border-bottom: 1px solid var(--vl-color-border);
+  vertical-align: top;
+}
+.vl-risk-table__title {
+  font-weight: 600;
+}
+.vl-risk-table__rule {
+  display: block;
+  font-size: var(--vl-text-xs);
+  font-weight: 400;
+  color: var(--vl-color-text-muted);
+}
+.vl-risk-table__empty {
+  color: var(--vl-color-text-muted);
+}
+.vl-risk-review__title {
+  margin: 0 0 var(--vl-space-1);
+  font-weight: 600;
+}
+.vl-risk-review__meta {
+  margin: 0 0 var(--vl-space-4);
+  font-size: var(--vl-text-xs);
+  color: var(--vl-color-text-muted);
+}
+.vl-risk-review__label {
+  display: block;
+  margin-bottom: var(--vl-space-2);
+}
+.vl-risk-review__input {
+  width: 100%;
+  min-height: var(--vl-control-height-touch);
+  border: 1px solid var(--vl-color-border-control);
+  border-radius: var(--vl-radius-control);
+  padding: var(--vl-space-2) var(--vl-space-3);
+  font: inherit;
+}
+.vl-risk-review__error {
+  display: block;
+  margin-top: var(--vl-space-1);
+  color: var(--vl-color-danger);
+  font-size: var(--vl-text-xs);
+}
+.vl-risk-review__actions {
+  display: flex;
+  gap: var(--vl-space-3);
+  margin-top: var(--vl-space-4);
+  justify-content: flex-end;
+}
+.vl-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+</style>
