@@ -1,14 +1,14 @@
 <template>
   <main class="page">
-    <header class="heading"><div><h1>�����븴��</h1><p>Χ�ƹ̶������汾�˶�֤�ݲ���¼�˹����� <span class="demo">��ʾ����</span></p></div><span class="version">�����汾 v2026.09.09-01</span></header>
-    <div v-if="loading" class="state">���ڼ��ظ��˲��ϡ�</div>
-    <div v-else-if="error" class="state error">����ʧ�ܣ�{{ error }} <button @click="load">����</button></div>
-    <div v-else-if="!review" class="state">���޿ɸ��˵ķ����汾</div>
+    <header class="heading"><div><h1>复核与复盘</h1><p>围绕固定分析版本核对证据并记录人工结论 <span class="demo">演示数据</span></p></div><span class="version">分析版本 v2026.09.09-01</span></header>
+    <div v-if="loading" class="state">正在加载复核材料…</div>
+    <div v-else-if="error" class="state error">加载失败：{{ error }} <button @click="load">重试</button></div>
+    <div v-else-if="!review" class="state">暂无可复核的分析版本</div>
     <template v-else>
-      <section class="notice">���̽�����ڼ�¼�۲�������ж�����ǰ֤��ֻչʾ�����������������������ϵ���Զ�֤����ʩ��Ч��</section>
-      <section class="card"><h2>֤�ݶ���</h2><div class="evidence" v-for="item in review.evidence" :key="item.id"><div><b>{{ item.label }}</b><p>{{ item.detail }}</p></div><span class="tag">{{ item.source }}</span></div></section>
-      <section class="card"><h2>�˹�ȷ��</h2><p class="muted">�����ԭʼ��¼���ȷ�ϣ�ȷ�����ݽ�д�������־��</p><button class="primary" :disabled="confirmed" @click="confirmed=true">{{ confirmed ? '��ȷ�ϲ���¼' : 'ȷ�ϱ��θ���' }}</button></section>
-      <section class="card"><h2>���̽��</h2><dl><div><dt>�۲�</dt><dd>{{ review.observation }}</dd></div><div><dt>��������</dt><dd>{{ review.next }}</dd></div></dl></section>
+      <section class="notice">复盘结果用于记录观察与后续行动。当前证据只展示关联线索，不能宣称因果关系或自动证明措施有效。</section>
+      <section class="card"><h2>证据对照</h2><div class="evidence" v-for="item in review.evidence" :key="item.id"><div><b>{{ item.label }}</b><p>{{ item.detail }}</p></div><span class="tag">{{ item.source }}</span></div></section>
+      <section class="card"><h2>人工确认</h2><p class="muted">请基于原始记录完成确认，确认内容将写入审计日志。</p><button class="primary" :disabled="confirmed" @click="confirmed=true">{{ confirmed ? '已确认并记录' : '确认本次复核' }}</button></section>
+      <section class="card"><h2>复盘结果</h2><dl><div><dt>观察</dt><dd>{{ review.observation }}</dd></div><div><dt>后续动作</dt><dd>{{ review.next }}</dd></div></dl></section>
     </template>
   </main>
 </template>
@@ -16,7 +16,7 @@
 import { ref } from 'vue'
 const loading = ref(true); const error = ref(''); const confirmed = ref(false)
 const review = ref<any>(null)
-function load(){ loading.value=true; error.value=''; setTimeout(()=>{ review.value={evidence:[{id:'e1',label:'�˿�������',detail:'�� 30 ���˿��� 8.4%���ϻ��߸� 2.1 ���ٷֵ�',source:'���ݼ� orders.csv'},{id:'e2',label:'�ͷ��������',detail:'���˿��ӳ١�����ռ�� 14%�����쳣�����ص�',source:'������� v1'}],observation:'�쳣���˿��ӳ�������ʱ�䴰�����ص�����ҵ�����˽�һ���˶ԡ�',next:'�������� 20 �����������¸��汾�Ƚ�ָ�ꡣ'}; loading.value=false },180) }
+function load(){ loading.value=true; error.value=''; setTimeout(()=>{ review.value={evidence:[{id:'e1',label:'退款率上升',detail:'近 30 天退款率 8.4%，较基线高 2.1 个百分点',source:'数据集 orders.csv'},{id:'e2',label:'客服主题关联',detail:'“退款延迟”主题占比 14%，与异常窗口重叠',source:'主题分析 v1'}],observation:'异常与退款延迟主题在时间窗口上重叠，需业务负责人进一步核对。',next:'抽样复核 20 条订单并在下个版本比较指标。'}; loading.value=false },180) }
 load()
 </script>
 <style scoped>

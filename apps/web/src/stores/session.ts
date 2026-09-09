@@ -1,4 +1,4 @@
-﻿import { defineStore } from 'pinia'
+import { defineStore } from 'pinia'
 import { ref } from 'vue'
 type User = { id: string; name: string; email: string; role?: string }
 const DEMO_USER: User = { id: 'demo-user', name: 'Demo Reviewer', email: 'demo@voicelens.local', role: 'ANALYST' }

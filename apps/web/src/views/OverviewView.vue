@@ -1,46 +1,46 @@
 <template>
   <div>
-    <h1>¸ÅÀÀ</h1>
-    <p v-if="analysis" data-testid="demo-notice">ÑÝÊ¾Êý¾Ý ¡¤ ºÏ³É·ÖÎö°æ±¾ {{ analysis.version }}</p>
+    <h1>æ¦‚è§ˆ</h1>
+    <p v-if="analysis" data-testid="demo-notice">æ¼”ç¤ºæ•°æ® Â· åˆæˆåˆ†æžç‰ˆæœ¬ {{ analysis.version }}</p>
     <div v-if="analysis" class="metrics">
-      <article>´ý´¦Àí·çÏÕ <b data-testid="metric-pending-risks">3</b></article>
-      <article>ÓâÆÚÈÎÎñ <b data-testid="metric-overdue-tasks">2</b></article>
-      <article>½øÐÐÖÐÈÎÎñ <b data-testid="metric-active-tasks">8</b></article>
-      <article>ÓÐÐ§·´À¡ <b data-testid="metric-valid-feedback">{{ analysis.validFeedback }}</b></article>
+      <article>å¾…å¤„ç†é£Žé™© <b data-testid="metric-pending-risks">3</b></article>
+      <article>é€¾æœŸä»»åŠ¡ <b data-testid="metric-overdue-tasks">2</b></article>
+      <article>è¿›è¡Œä¸­ä»»åŠ¡ <b data-testid="metric-active-tasks">8</b></article>
+      <article>æœ‰æ•ˆåé¦ˆ <b data-testid="metric-valid-feedback">{{ analysis.validFeedback }}</b></article>
     </div>
     <section v-if="analysis" class="panel" aria-labelledby="analysis-title">
-      <h2 id="analysis-title">Ö÷Ìâ·ÖÎö</h2>
+      <h2 id="analysis-title">ä¸»é¢˜åˆ†æž</h2>
       <p data-testid="analysis-summary">{{ analysis.summary }}</p>
-      <p class="caption">Ã¿ÌõºÏ³É·´À¡¹éÈëÒ»¸öÖ÷Ìâ£»Õ¼±È·ÖÄ¸Îª {{ analysis.validFeedback }} ÌõÓÐÐ§·´À¡¡£</p>
+      <p class="caption">æ¯æ¡åˆæˆåé¦ˆå½’å…¥ä¸€ä¸ªä¸»é¢˜ï¼›å æ¯”åˆ†æ¯ä¸º {{ analysis.validFeedback }} æ¡æœ‰æ•ˆåé¦ˆã€‚</p>
       <ul class="topics" data-testid="topic-list">
         <li v-for="topic in analysis.topics" :key="topic.id">
-          <div class="topic-heading"><h3>{{ topic.title }}</h3><span>{{ topic.count }} Ìõ ¡¤ {{ percentage(topic.count) }}%</span></div>
+          <div class="topic-heading"><h3>{{ topic.title }}</h3><span>{{ topic.count }} æ¡ Â· {{ percentage(topic.count) }}%</span></div>
           <div class="bar-track" aria-hidden="true"><div class="bar" :style="{ width: `${percentage(topic.count)}%` }"></div></div>
           <p>{{ topic.summary }}</p>
-          <button @click="openEvidence(topic, $event)">²é¿´¡¸{{ topic.title }}¡¹Ö¤¾Ý</button>
+          <button @click="openEvidence(topic, $event)">æŸ¥çœ‹ã€Œ{{ topic.title }}ã€è¯æ®</button>
         </li>
       </ul>
-      <button data-testid="chart-data-toggle" :aria-expanded="showTable" aria-controls="topic-data-table" @click="showTable = !showTable">{{ showTable ? 'ÊÕÆðÊý¾Ý±í' : '²é¿´Êý¾Ý±í' }}</button>
+      <button data-testid="chart-data-toggle" :aria-expanded="showTable" aria-controls="topic-data-table" @click="showTable = !showTable">{{ showTable ? 'æ”¶èµ·æ•°æ®è¡¨' : 'æŸ¥çœ‹æ•°æ®è¡¨' }}</button>
       <div v-show="showTable" id="topic-data-table" class="table-wrapper">
         <table data-testid="chart-data-table">
-          <caption>Ö÷Ìâ·Ö²¼ ¡¤ ºÏ³ÉÑÝÊ¾Êý¾Ý</caption>
-          <thead><tr><th scope="col">Ö÷Ìâ</th><th scope="col">·´À¡Êý</th><th scope="col">Õ¼ÓÐÐ§·´À¡</th></tr></thead>
+          <caption>ä¸»é¢˜åˆ†å¸ƒ Â· åˆæˆæ¼”ç¤ºæ•°æ®</caption>
+          <thead><tr><th scope="col">ä¸»é¢˜</th><th scope="col">åé¦ˆæ•°</th><th scope="col">å æœ‰æ•ˆåé¦ˆ</th></tr></thead>
           <tbody><tr v-for="topic in analysis.topics" :key="topic.id"><th scope="row">{{ topic.title }}</th><td>{{ topic.count }}</td><td>{{ percentage(topic.count) }}%</td></tr></tbody>
         </table>
       </div>
     </section>
     <section v-else class="panel" data-testid="analysis-empty" aria-live="polite">
-      <h2>ÔÝÎÞ·ÖÎö½á¹û</h2><p>µ±Ç°ÏîÄ¿»¹Ã»ÓÐ¿ÉÕ¹Ê¾µÄ·ÖÎö½á¹û¡£ÇëÏÈµ¼Èë·´À¡²¢Íê³É·ÖÎö¡£</p>
+      <h2>æš‚æ— åˆ†æžç»“æžœ</h2><p>å½“å‰é¡¹ç›®è¿˜æ²¡æœ‰å¯å±•ç¤ºçš„åˆ†æžç»“æžœã€‚è¯·å…ˆå¯¼å…¥åé¦ˆå¹¶å®Œæˆåˆ†æžã€‚</p>
     </section>
     <section v-if="analysis" class="panel" data-testid="evidence-panel">
-      <h2>Ö¤¾ÝÓëÀ´Ô´</h2>
-      <p data-testid="ai-provenance">AI ÑÝÊ¾·ÖÎö ¡¤ À´Ô´ÎªºÏ³ÉÑù±¾£¬Î´¾­ÈË¹¤¸´ºË</p>
-      <ul><li v-for="item in analysis.topics" :key="item.id"><button @click="openEvidence(item, $event)">{{ item.title }} ¡¤ ²é¿´Ö¤¾Ý</button></li></ul>
+      <h2>è¯æ®ä¸Žæ¥æº</h2>
+      <p data-testid="ai-provenance">AI æ¼”ç¤ºåˆ†æž Â· æ¥æºä¸ºåˆæˆæ ·æœ¬ï¼Œæœªç»äººå·¥å¤æ ¸</p>
+      <ul><li v-for="item in analysis.topics" :key="item.id"><button @click="openEvidence(item, $event)">{{ item.title }} Â· æŸ¥çœ‹è¯æ®</button></li></ul>
     </section>
     <aside v-if="selected" class="drawer" data-testid="evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="evidence-title" @keydown.tab.prevent="closeButton?.focus()">
-      <button ref="closeButton" data-testid="evidence-close" @click="close">¹Ø±Õ</button>
+      <button ref="closeButton" data-testid="evidence-close" @click="close">å…³é—­</button>
       <h3 id="evidence-title">{{ selected.title }}</h3><p>{{ selected.evidence }}</p>
-      <p>À´Ô´£º{{ analysis?.version }} ¡¤ ºÏ³É·´À¡£¬½öÓÃÓÚÑÝÊ¾</p>
+      <p>æ¥æºï¼š{{ analysis?.version }} Â· åˆæˆåé¦ˆï¼Œä»…ç”¨äºŽæ¼”ç¤º</p>
     </aside>
   </div>
 </template>

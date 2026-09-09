@@ -1,1 +1,1 @@
-<script setup lang="ts">import {useProjectStore} from '../stores/project';const s=useProjectStore();</script><template><div><h1>ÏîÄ¿Ñ¡Ôñ</h1><button v-for="p in s.projects" :key="p.id" @click="s.selectedProjectId=p.id">{{p.name}}</button></div></template>
+<script setup lang="ts">import {useProjectStore} from '../stores/project';const s=useProjectStore();</script><template><div><h1>é¡¹ç›®é€‰æ‹©</h1><button v-for="p in s.projects" :key="p.id" @click="s.selectedProjectId=p.id">{{p.name}}</button></div></template>
