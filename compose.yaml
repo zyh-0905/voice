@@ -80,6 +80,4 @@
     depends_on:
       redis:
         condition: service_healthy
-        condition: service_healthy
-        condition: service_healthy
 
