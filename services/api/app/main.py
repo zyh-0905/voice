@@ -196,6 +196,49 @@ def get_project(project_id: str, user: dict = Depends(require_project_access)):
     project = repository.get_project(project_id)
     if not project: raise HTTPException(404, detail={'code':'project_not_found'})
     return project
+
+# —— 工程计划 7.7:行动首页只读聚合契约 ——
+@app.get('/api/v1/projects/{project_id}/summary')
+def project_summary(project_id: str, user: dict = Depends(require_project_access)):
+    """行动首页聚合。insight 绑定所选分析;action 为项目全部运行。
+    演示环境返回合成契约样例,并显式标注合成身份;真实实现以数据库查询为准。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    # 合成样例(与前端 mock 同源,规范 7.7):不冒充业务结果
+    return {
+        'project_id': project_id,
+        'run_id': 'run_demo_001',
+        'revision': 1,
+        'denominator': 1000,
+        'definition_version': 'summary-ui-v1',
+        'computed_at': '2026-09-09T00:00:00+08:00',
+        'filters': {'start': '2026-08-25T00:00:00+08:00', 'end': '2026-09-01T00:00:00+08:00', 'channel': None, 'product': None},
+        'insight_metrics': {'scope': 'selected_analysis', 'valid_feedback_count': 1000, 'topic_count': 8, 'pending_risk_feedback_count': 12},
+        'action_metrics': {'scope': 'project_all_runs', 'active_task_count': 18, 'overdue_task_count': 4, 'task_as_of': '2026-09-09T00:00:00+08:00'},
+    }
+@app.get('/api/v1/projects/{project_id}/topics')
+def list_topics(project_id: str, user: dict = Depends(require_project_access)):
+    """主题洞察列表。演示环境返回合成主题行;后续按数据库聚合替换。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    rows = [
+        {'id': 'delivery', 'title': '物流体验', 'feedbackCount': 218, 'denominator': 1000, 'ratio': 21.8, 'trend': 'down', 'cpiDisplayValue': '68', 'reviewState': 'confirmed', 'evidence': {'topicId': 'delivery', 'topicTitle': '物流体验', 'runId': 'run_demo_001', 'revision': 1, 'summary': '配送等待与物流信息更新是主要关注点。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': False, 'reviewRecord': None}}},
+        {'id': 'refund', 'title': '退款进度', 'feedbackCount': 164, 'denominator': 1000, 'ratio': 16.4, 'trend': 'up', 'cpiDisplayValue': '82', 'reviewState': 'pending', 'evidence': {'topicId': 'refund', 'topicTitle': '退款进度', 'runId': 'run_demo_001', 'revision': 1, 'summary': '反馈关注退款处理时间和状态透明度。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': True, 'reviewRecord': None}}},
+        {'id': 'product', 'title': '产品使用', 'feedbackCount': 121, 'denominator': 1000, 'ratio': 12.1, 'trend': 'flat', 'cpiDisplayValue': '54', 'reviewState': 'pending', 'evidence': {'topicId': 'product', 'topicTitle': '产品使用', 'runId': 'run_demo_001', 'revision': 1, 'summary': '使用引导与功能说明仍有改善空间。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}}},
+    ]
+    return {'items': rows, 'total': len(rows)}
+@app.get('/api/v1/projects/{project_id}/trend')
+def list_trend(project_id: str, user: dict = Depends(require_project_access)):
+    """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    points = [
+        {'date': '08-26', 'value': 142}, {'date': '08-27', 'value': 151},
+        {'date': '08-28', 'value': None}, {'date': '08-29', 'value': 158},
+        {'date': '08-30', 'value': 149}, {'date': '08-31', 'value': 161},
+        {'date': '09-01', 'value': 155},
+    ]
+    return {'items': points, 'total': len(points)}
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
