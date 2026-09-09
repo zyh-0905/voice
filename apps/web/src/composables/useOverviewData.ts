@@ -3,8 +3,7 @@
 // 校验响应 project_id 上下文;服务端数据由 composable 管理,不复制进 Pinia。
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { DatasetBatch, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
-import { ApiHttpError, type ApiClient } from '../api/client'
-import { mockApi } from '../api/mock'
+import { ApiHttpError, apiClient, type ApiClient } from '../api/client'
 
 export type AsyncStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'forbidden'
 
@@ -22,7 +21,7 @@ export interface OverviewData {
   reload: () => void
 }
 
-export function useOverviewData(projectId: Ref<string>, client: ApiClient = mockApi): OverviewData {
+export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiClient()): OverviewData {
   const summary = ref<SummaryResponse | null>(null)
   const topics = ref<TopicRow[]>([])
   const trend = ref<TrendPoint[]>([])

@@ -52,19 +52,37 @@
 // 数据用途说明、只读合成演示入口、通用错误(不泄露账号存在性)。
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { DEMO_USER, DEMO_VIEWER, useSessionStore } from '../stores/session'
-import { setAccessToken } from '../api/client'
+import { DEMO_USER, DEMO_VIEWER, useSessionStore, type User } from '../stores/session'
+import { apiClient, ApiHttpError, setAccessToken } from '../api/client'
 import VlButton from '../components/common/VlButton.vue'
 
 const router = useRouter()
 const session = useSessionStore()
+const client = apiClient()
+const isRealMode = import.meta.env.VITE_USE_MOCK === 'false'
 const username = ref('')
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
 
-function submit() {
-  // 演示模式在本地核对两个演示账号,与后端 auth 模块一致;真实环境由后端校验。
+async function submit() {
+  error.value = ''
+  if (isRealMode) {
+    // 真实环境由后端校验;401 一律显示通用错误,不泄露账号存在性
+    busy.value = true
+    try {
+      const result = await client.login(username.value, password.value)
+      setAccessToken(result.access_token)
+      session.loginAs({ id: result.user.id, name: result.user.name, email: result.user.email, role: (result.user.role as User['role']) || 'VIEWER' })
+      void router.push('/overview')
+    } catch (err) {
+      error.value = err instanceof ApiHttpError && err.status === 401 ? '用户名或密码不正确' : '暂时无法登录,请稍后重试'
+    } finally {
+      busy.value = false
+    }
+    return
+  }
+  // 演示模式在本地核对两个演示账号,与后端 auth 模块一致
   const match = username.value === 'demo' && password.value === 'demo'
     ? DEMO_USER
     : username.value === 'viewer' && password.value === 'viewer'

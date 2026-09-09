@@ -3,11 +3,27 @@ import type {
   DatasetBatch,
   DatasetPreview,
   ImportHealth,
+  RiskItem,
   SummaryResponse,
   TaskSummary,
   TopicRow,
   TrendPoint,
 } from '../types/domain'
+import { mockApi } from './mock'
+
+export interface LoginUser {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+
+export interface LoginResponse {
+  access_token: string
+  token_type: string
+  expires_in: number
+  user: LoginUser
+}
 
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
@@ -16,12 +32,22 @@ export interface ApiClient {
   health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealth>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
+  /** POST /auth/login,返回真实 access_token 与用户 */
+  login(username: string, password: string): Promise<LoginResponse>
   /** 工程计划 7.7:行动首页只读聚合 */
   summary(projectId: string, signal?: AbortSignal): Promise<SummaryResponse>
   topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
   trend(projectId: string, signal?: AbortSignal): Promise<TrendPoint[]>
   taskSummaries(projectId: string, signal?: AbortSignal): Promise<TaskSummary[]>
+  listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
+  /** GET /exports/redacted.csv,返回脱敏导出文件 */
+  exportRedactedCsv(projectId: string, signal?: AbortSignal): Promise<Blob>
+}
+
+/** 按 VITE_USE_MOCK 选择真实/mock 客户端;所有页面与 composable 统一走此入口 */
+export function apiClient(): ApiClient {
+  return import.meta.env.VITE_USE_MOCK !== 'false' ? mockApi : fetchHttpClient()
 }
 
 export interface ApiErrorBody { detail?: string; message?: string }
@@ -76,6 +102,18 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
       return request<AnalysisRun>(`${project(projectId)}/analyses`, { method: 'POST', body: JSON.stringify({ dataset_ids: [id] }), headers: { 'Content-Type': 'application/json' }, signal })
     },
+    login(username: string, password: string) {
+      return request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), headers: { 'Content-Type': 'application/json' } })
+    },
+    async exportRedactedCsv(projectId: string, signal?: AbortSignal) {
+      const token = getAccessToken()
+      const response = await fetch(`${base}${project(projectId)}/exports/redacted.csv`, {
+        signal,
+        headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      })
+      if (!response.ok) throw new ApiHttpError(response.status, `Export failed (${response.status})`)
+      return response.blob()
+    },
     summary(projectId: string, signal?: AbortSignal) {
       return request<SummaryResponse>(`${project(projectId)}/summary`, { signal })
     },
@@ -88,8 +126,19 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     taskSummaries(projectId: string, signal?: AbortSignal) {
       return list<TaskSummary>(`${project(projectId)}/tasks`, signal)
     },
-    recentBatches(projectId: string, signal?: AbortSignal) {
-      return list<DatasetBatch>(`${project(projectId)}/datasets`, signal)
+    listRisks(projectId: string, signal?: AbortSignal) {
+      return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    async recentBatches(projectId: string, signal?: AbortSignal) {
+      // 后端数据集实体为 snake_case 规范形状,此处映射为前端 DatasetBatch 契约
+      const rows = await list<Record<string, unknown>>(`${project(projectId)}/datasets`, signal)
+      return rows.map((it) => ({
+        id: String(it.id ?? ''),
+        name: String(it.name ?? it.id ?? ''),
+        rows: Number(it.rows ?? 0),
+        status: String(it.status ?? ''),
+        createdAt: String(it.created_at ?? ''),
+      })) as DatasetBatch[]
     },
   }
 }

@@ -12,8 +12,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { mockApi } from '../../api/mock'
+import { apiClient } from '../../api/client'
 import type { AnalysisRun } from '../../types/domain'
+
+const client = apiClient()
 
 const route = useRoute()
 // 路由仅参数变化时组件会被复用,projectId/datasetId 必须是响应式派生值
@@ -46,7 +48,7 @@ async function start() {
   run.value = { id: 'pending', status: 'running' }
   sessionStorage.setItem(storageKey.value, JSON.stringify(run.value))
   try {
-    run.value = await mockApi.runAnalysis(datasetId.value)
+    run.value = await client.runAnalysis(datasetId.value)
     sessionStorage.setItem(storageKey.value, JSON.stringify(run.value))
   } catch {
     run.value = { id: 'pending', status: 'error' }

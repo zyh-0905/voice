@@ -138,6 +138,10 @@ export interface TaskSummary {
   status: TaskStatus
   dueAt: string | null
   overdue: boolean
+  /** 真实 /tasks 契约扩展字段(演示数据同源) */
+  owner?: string
+  priority?: string
+  source?: string
 }
 
 /** 风险队列:规则命中候选,severity 与复核状态分开;候选不是已确认事故 */

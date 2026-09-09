@@ -6,6 +6,7 @@ import type {
   DatasetPreview,
   EvidenceContext,
   EvidenceQuoteItem,
+  RiskItem,
   SummaryResponse,
   TaskSummary,
   TopicRow,
@@ -168,9 +169,15 @@ const SYNTHETIC_TREND: TrendPoint[] = [
 ]
 
 const SYNTHETIC_TASKS: TaskSummary[] = [
-  { id: 'task_demo_001', title: '优化物流状态推送', status: 'IN_PROGRESS', dueAt: '2026-09-08T18:00:00+08:00', overdue: true },
-  { id: 'task_demo_002', title: '补充退款进度说明', status: 'OPEN', dueAt: '2026-09-12T18:00:00+08:00', overdue: false },
-  { id: 'task_demo_003', title: '更新产品使用引导', status: 'PENDING_REVIEW', dueAt: '2026-09-10T18:00:00+08:00', overdue: false },
+  { id: 'task-001', title: '退款率异常整改', status: 'IN_PROGRESS', dueAt: '2026-09-08T18:00:00+08:00', overdue: true, owner: '数据团队', priority: 'HIGH', source: '关联风险 R-204' },
+  { id: 'task-002', title: '支付失败率复盘', status: 'OPEN', dueAt: '2026-09-15T18:00:00+08:00', overdue: false, owner: '运营团队', priority: 'CRITICAL', source: '关联风险 R-302' },
+  { id: 'task-003', title: '字段治理复核', status: 'PENDING_REVIEW', dueAt: '2026-09-20T18:00:00+08:00', overdue: false, owner: '运营团队', priority: 'MEDIUM', source: '关联风险 R-101' },
+]
+
+const SYNTHETIC_RISKS: RiskItem[] = [
+  { id: 'risk-001', title: '退款率异常', rule: 'R-204 · 近30天', severity: 'HIGH', reviewState: 'pending', status: 'OPEN' },
+  { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN' },
+  { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
 ]
 
 const SYNTHETIC_BATCHES: DatasetBatch[] = [
@@ -185,6 +192,19 @@ export const mockApi: ApiClient = {
   async runAnalysis() {
     await delay(500)
     return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
+  },
+  async login() {
+    await delay(200)
+    return {
+      access_token: 'demo-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+      user: { id: 'demo-user', name: 'Demo Analyst', email: 'demo@voicelens.local', role: 'ANALYST' },
+    }
+  },
+  async exportRedactedCsv() {
+    await delay(200)
+    return new Blob(['dataset_id,row_index,data\n'], { type: 'text/csv;charset=utf-8' })
   },
   async summary(projectId: string) {
     await delay(300)
@@ -202,6 +222,10 @@ export const mockApi: ApiClient = {
   async taskSummaries() {
     await delay(300)
     return SYNTHETIC_TASKS
+  },
+  async listRisks() {
+    await delay(300)
+    return SYNTHETIC_RISKS
   },
   async recentBatches() {
     await delay(300)

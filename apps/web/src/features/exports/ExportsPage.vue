@@ -33,10 +33,13 @@ import PageHeader from '../../components/common/PageHeader.vue'
 import VlPanel from '../../components/common/VlPanel.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import { apiClient } from '../../api/client'
 import type { DatasetPreview } from '../../types/domain'
 
 const route = useRoute()
 const projectId = String(route.params.p)
+const client = apiClient()
+const isRealMode = import.meta.env.VITE_USE_MOCK === 'false'
 
 const status = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('success')
 const error = ref('')
@@ -48,8 +51,24 @@ function reload() {
   status.value = 'success'
 }
 
-function download() {
-  // 演示:构造脱敏样例 CSV;接入后端后替换为真实导出下载
+async function download() {
+  if (isRealMode) {
+    // 真实环境:下载后端脱敏导出文件,不在浏览器内拼接
+    try {
+      const blob = await client.exportRedactedCsv(projectId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${projectId}-redacted.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      status.value = 'error'
+      error.value = err instanceof Error ? err.message : String(err)
+    }
+    return
+  }
+  // 演示:构造脱敏样例 CSV
   const csv = ['id,name,rows,status', ...rows.value.map(r => `${r.id},${r.name},${r.rows},${r.status}`)].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)

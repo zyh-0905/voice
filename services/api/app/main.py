@@ -1,4 +1,5 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Response
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Response, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -17,6 +18,15 @@ import os
 validate_production_settings()
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
+# 开发环境跨域:默认放行本地 vite/nginx 来源,生产用 CORS_ORIGINS 覆盖。
+# 认证走 Authorization: Bearer 头,不依赖 cookie,无需 allow_credentials。
+_cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173,http://localhost:8080,http://127.0.0.1:8080').split(',') if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(WriteRateLimitMiddleware)
 app.include_router(auth_router)
@@ -92,7 +102,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': f'invalid UTF-8 CSV at byte {exc.start}'}) from exc
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
-    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
+    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
 def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
@@ -179,9 +189,14 @@ if not repository.get_project('demo-project'):
     except ValueError:
         pass
 reviews = {}
+# 演示种子:severity/review_state/task 状态使用规范枚举,仅 InMemory 演示环境注入
 if repository.__class__.__name__ == 'InMemoryRepository':
-    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'Missing time field','severity':'high','status':'open','evidence_count':2})
-    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'Missing time field','owner':'analyst','status':'todo','priority':'high'})
+    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
+    repository.risks.setdefault('risk-002', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
+    repository.risks.setdefault('risk-003', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
+    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
+    repository.tasks.setdefault('task-002', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
+    repository.tasks.setdefault('task-003', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
     repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
 def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
@@ -241,10 +256,48 @@ def list_trend(project_id: str, user: dict = Depends(require_project_access)):
     return {'items': points, 'total': len(points)}
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
-    items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
+    """风险队列(前端契约):severity 与 review_state 分开,候选不是已确认事故。"""
+    mapped = []
+    for r in repository.list_entities('risks', project_id):
+        mapped.append({
+            'id': r.get('id'),
+            'title': r.get('title', ''),
+            'rule': r.get('rule', ''),
+            'severity': str(r.get('severity', 'MEDIUM')).upper(),
+            'reviewState': r.get('review_state', 'pending'),
+            'status': str(r.get('status', 'OPEN')).upper(),
+        })
+    return {'items': mapped, 'total': len(mapped)}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str, user: dict = Depends(require_project_access)):
-    items=repository.list_entities('tasks', project_id); return {'items':items, 'total':len(items)}
+def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: bool = False, user: dict = Depends(require_project_access)):
+    """任务列表(前端契约):state 可多值,overdue=true 限定未关闭且逾期,取交集。"""
+    _as_of = datetime.now(timezone.utc)
+    mapped = []
+    for t in repository.list_entities('tasks', project_id):
+        due_at = t.get('due_at') or t.get('due')
+        due_at = due_at if isinstance(due_at, str) else None
+        is_overdue = False
+        if due_at:
+            try:
+                is_overdue = datetime.fromisoformat(due_at) < _as_of
+            except ValueError:
+                is_overdue = False
+        item = {
+            'id': t.get('id'),
+            'title': t.get('title', ''),
+            'status': str(t.get('status', 'OPEN')).upper(),
+            'dueAt': due_at,
+            'overdue': is_overdue,
+            'owner': t.get('owner'),
+            'priority': str(t.get('priority', 'MEDIUM')).upper(),
+            'source': t.get('source'),
+        }
+        if state and item['status'] not in {s.upper() for s in state}:
+            continue
+        if overdue and not is_overdue:
+            continue
+        mapped.append(item)
+    return {'items': mapped, 'total': len(mapped)}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('reviews', project_id)

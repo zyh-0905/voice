@@ -2,12 +2,11 @@
 // 服务端排序/分页契约先行;当前演示数据在前端完成排序与分页,mock 由分页 size 示意。
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { TopicRow } from '../types/domain'
-import { ApiHttpError, type ApiClient } from '../api/client'
-import { mockApi } from '../api/mock'
+import { ApiHttpError, apiClient, type ApiClient } from '../api/client'
 
 export type TopicsStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'forbidden'
 
-export function useTopicsData(projectId: Ref<string>, client: ApiClient = mockApi) {
+export function useTopicsData(projectId: Ref<string>, client: ApiClient = apiClient()) {
   const topics = ref<TopicRow[]>([])
   const total = ref(0)
   const status = ref<TopicsStatus>('idle')

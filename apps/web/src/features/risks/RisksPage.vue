@@ -8,43 +8,47 @@
       </template>
     </PageHeader>
 
-    <div class="vl-table-scroll">
-      <table class="vl-risk-table" data-testid="risk-table">
-        <thead>
-          <tr>
-            <th scope="col">风险候选</th>
-            <th scope="col">严重度</th>
-            <th scope="col">复核状态</th>
-            <th scope="col">处置状态</th>
-            <th scope="col"><span class="vl-sr-only">操作</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="risk in visible" :key="risk.id" :data-resource-id="risk.id">
-            <th scope="row" class="vl-risk-table__title">
-              {{ risk.title }}
-              <span class="vl-risk-table__rule">{{ risk.rule }}</span>
-            </th>
-            <td><StatusBadge kind="severity" :state="risk.severity" /></td>
-            <td><StatusBadge kind="review" :state="risk.reviewState" /></td>
-            <td><StatusBadge kind="task" :state="risk.status" /></td>
-            <td>
-              <VlButton
-                v-if="canAct && risk.reviewState === 'pending'"
-                variant="secondary"
-                size="small"
-                data-testid="risk-confirm"
-                @click="openReview(risk)"
-              >
-                复核并裁决
-              </VlButton>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <p v-if="!isDemoMode" class="vl-risks__note" data-testid="demo-notice-real">
+      当前为真实 API 模式:裁决需等服务端状态机端点,列表来自 GET /risks。
+    </p>
 
-    <p v-if="!visible.length" class="vl-risk-table__empty">当前筛选下没有风险候选。</p>
+    <AsyncState :status="status" :message="error ?? undefined" empty-message="当前筛选下没有风险候选。">
+      <div class="vl-table-scroll">
+        <table class="vl-risk-table" data-testid="risk-table">
+          <thead>
+            <tr>
+              <th scope="col">风险候选</th>
+              <th scope="col">严重度</th>
+              <th scope="col">复核状态</th>
+              <th scope="col">处置状态</th>
+              <th scope="col"><span class="vl-sr-only">操作</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="risk in visible" :key="risk.id" :data-resource-id="risk.id">
+              <th scope="row" class="vl-risk-table__title">
+                {{ risk.title }}
+                <span class="vl-risk-table__rule">{{ risk.rule }}</span>
+              </th>
+              <td><StatusBadge kind="severity" :state="risk.severity" /></td>
+              <td><StatusBadge kind="review" :state="risk.reviewState" /></td>
+              <td><StatusBadge kind="task" :state="risk.status" /></td>
+              <td>
+                <VlButton
+                  v-if="canAct && isDemoMode && risk.reviewState === 'pending'"
+                  variant="secondary"
+                  size="small"
+                  data-testid="risk-confirm"
+                  @click="openReview(risk)"
+                >
+                  复核并裁决
+                </VlButton>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </AsyncState>
 
     <el-dialog
       v-model="reviewOpen"
@@ -83,20 +87,42 @@
 <script setup lang="ts">
 // RisksPage — 工程计划 W14:待复核队列 + 原文 + 裁决区;
 // severity 与 review_state 分开显示;critical 置顶;VIEWER 只读;复核理由必填。
-import { computed, ref } from 'vue'
+// 真实模式:列表来自 GET /risks,裁决待服务端状态机端点。
+import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSessionStore } from '../../stores/session'
+import { apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
-import { syntheticRisks, type RiskStatus } from './service'
+import AsyncState from '../../components/common/AsyncState.vue'
 import type { RiskItem } from '../../types/domain'
 
 const session = useSessionStore()
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
+const isDemoMode = import.meta.env.VITE_USE_MOCK !== 'false'
+const client = apiClient()
+
+const route = useRoute()
+const projectId = computed(() => String(route.params.p))
+
+const items = ref<RiskItem[]>([])
+const status = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle')
+const error = ref('')
+const filterPending = ref(false)
+
+onMounted(async () => {
+  status.value = 'loading'
+  try {
+    items.value = await client.listRisks(projectId.value)
+    status.value = items.value.length ? 'success' : 'empty'
+  } catch (err) {
+    status.value = 'error'
+    error.value = err instanceof Error ? err.message : String(err)
+  }
+})
 
 // 排序优先遵循后端:critical 置顶不能被美观排序覆盖
-const items = ref<RiskItem[]>(syntheticRisks())
-const filterPending = ref(false)
 const visible = computed(() => {
   const list = filterPending.value ? items.value.filter(r => r.reviewState === 'pending') : items.value
   return [...list].sort((a, b) => Number(b.severity === 'CRITICAL') - Number(a.severity === 'CRITICAL'))
@@ -133,6 +159,14 @@ function decide(next: 'confirmed' | 'excluded') {
 </script>
 
 <style scoped>
+.vl-risks__note {
+  margin: 0 0 var(--vl-space-4);
+  padding: var(--vl-space-2) var(--vl-space-3);
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-info-bg);
+  color: var(--vl-color-info);
+  font-size: var(--vl-text-xs);
+}
 .vl-risk-table {
   width: 100%;
   border-collapse: collapse;
@@ -157,9 +191,6 @@ function decide(next: 'confirmed' | 'excluded') {
   display: block;
   font-size: var(--vl-text-xs);
   font-weight: 400;
-  color: var(--vl-color-text-muted);
-}
-.vl-risk-table__empty {
   color: var(--vl-color-text-muted);
 }
 .vl-risk-review__title {
