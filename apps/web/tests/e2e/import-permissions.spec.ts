@@ -1,4 +1,5 @@
-﻿import { test, expect } from './ui-fixtures'
+import { test, expect } from './ui-fixtures'
+import { test as raw } from '@playwright/test'
 
 test('demo user can complete import mapping and see governance report', async ({ page }) => {
   await page.goto('/p/demo-project/imports')
@@ -13,14 +14,18 @@ test('demo user can complete import mapping and see governance report', async ({
   await expect(page.getByTestId('import-health')).toBeVisible()
 })
 
-test('viewer sees demo risks and tasks without mutation actions', async ({ page }) => {
+// viewer 场景独立登录(login-readonly),不与 ANALYST 共享 fixture 混用
+raw('viewer sees demo risks and tasks without mutation actions', async ({ page }) => {
+  await page.goto('/login')
+  await page.getByTestId('login-readonly').click()
+  await expect(page).toHaveURL(/overview/)
+
   await page.goto('/p/demo-project/risks')
-  await expect(page.locator('.demo')).toBeVisible()
+  await expect(page.getByTestId('demo-notice').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '创建风险' })).toHaveCount(0)
+
   await page.goto('/p/demo-project/tasks')
-  await expect(page.locator('.demo')).toBeVisible()
+  await expect(page.getByTestId('demo-notice').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '创建任务' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '执行' })).toHaveCount(0)
 })
-
-

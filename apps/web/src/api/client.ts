@@ -1,4 +1,13 @@
-import type {DatasetPreview,ImportHealth,AnalysisRun} from '../types/domain'
+import type {
+  AnalysisRun,
+  DatasetBatch,
+  DatasetPreview,
+  ImportHealth,
+  SummaryResponse,
+  TaskSummary,
+  TopicRow,
+  TrendPoint,
+} from '../types/domain'
 
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
@@ -7,6 +16,12 @@ export interface ApiClient {
   health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealth>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
+  /** 工程计划 7.7:行动首页只读聚合 */
+  summary(projectId: string, signal?: AbortSignal): Promise<SummaryResponse>
+  topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
+  trend(projectId: string, signal?: AbortSignal): Promise<TrendPoint[]>
+  taskSummaries(projectId: string, signal?: AbortSignal): Promise<TaskSummary[]>
+  recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
 }
 
 export interface ApiErrorBody { detail?: string; message?: string }
@@ -34,6 +49,12 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     }
     return response.json() as Promise<T>
   }
+  /** 列表端点沿用服务端 {items, total} 分页信封;最终契约以 OpenAPI 为准。 */
+  async function list<T>(path: string, signal?: AbortSignal): Promise<T[]> {
+    const response = await request<{ items: T[] } | T[]>(path, { signal })
+    return Array.isArray(response) ? response : response.items
+  }
+  const project = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`
   return {
     upload(projectOrFile: string | File, fileOrSignal?: File | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof projectOrFile === 'string' ? projectOrFile : 'demo-project'
@@ -41,19 +62,34 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       const signal = typeof projectOrFile === 'string' ? maybeSignal : fileOrSignal as AbortSignal | undefined
       const form = new FormData(); form.append('file', file)
       form.append('consent', 'true')
-      return request<DatasetPreview>(`/projects/${encodeURIComponent(projectId)}/datasets`, { method: 'POST', body: form, signal })
+      return request<DatasetPreview>(`${project(projectId)}/datasets`, { method: 'POST', body: form, signal })
     },
     health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
       const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
       const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
-      return request<ImportHealth>(`/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(id)}/validate`, { method: 'POST', body: '{}', headers: {'Content-Type':'application/json'}, signal })
+      return request<ImportHealth>(`${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' }, signal })
     },
     runAnalysis(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
       const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
       const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
-      return request<AnalysisRun>(`/projects/${encodeURIComponent(projectId)}/analyses`, { method: 'POST', body: JSON.stringify({ dataset_ids: [id] }), headers: { 'Content-Type': 'application/json' }, signal })
+      return request<AnalysisRun>(`${project(projectId)}/analyses`, { method: 'POST', body: JSON.stringify({ dataset_ids: [id] }), headers: { 'Content-Type': 'application/json' }, signal })
+    },
+    summary(projectId: string, signal?: AbortSignal) {
+      return request<SummaryResponse>(`${project(projectId)}/summary`, { signal })
+    },
+    topics(projectId: string, signal?: AbortSignal) {
+      return list<TopicRow>(`${project(projectId)}/topics`, signal)
+    },
+    trend(projectId: string, signal?: AbortSignal) {
+      return list<TrendPoint>(`${project(projectId)}/trend`, signal)
+    },
+    taskSummaries(projectId: string, signal?: AbortSignal) {
+      return list<TaskSummary>(`${project(projectId)}/tasks`, signal)
+    },
+    recentBatches(projectId: string, signal?: AbortSignal) {
+      return list<DatasetBatch>(`${project(projectId)}/datasets`, signal)
     },
   }
 }

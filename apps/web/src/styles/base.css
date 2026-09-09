@@ -1,1 +1,94 @@
-*{box-sizing:border-box}body{margin:0;background:var(--vl-bg);color:var(--vl-text)}:focus-visible{outline:3px solid var(--vl-color-focus);outline-offset:2px}
+/* apps/web/src/styles/base.css — 排版、布局、焦点与减少动效(风格规范 5.4/10) */
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body {
+  margin: 0;
+  color: var(--vl-color-text);
+  background: var(--vl-color-bg);
+  font-family: var(--vl-font-sans);
+  font-size: var(--vl-text-sm);
+  line-height: var(--vl-leading-body);
+}
+button, input, select, textarea { font: inherit; }
+
+/* 工作台布局基础 */
+.vl-shell { min-height: 100dvh; }
+.vl-main { min-width: 0; }
+.vl-page {
+  width: 100%;
+  max-width: var(--vl-content-max);
+  margin-inline: auto;
+  padding: var(--vl-space-6);
+}
+.vl-panel {
+  min-width: 0;
+  border: 1px solid var(--vl-color-border);
+  border-radius: var(--vl-radius-panel);
+  background: var(--vl-color-surface);
+  padding: var(--vl-space-5);
+  box-shadow: var(--vl-shadow-panel);
+}
+.vl-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--vl-space-4);
+}
+.vl-overview-grid { display: grid; gap: var(--vl-space-4); }
+.vl-overview-primary { min-width: 0; display: grid; gap: var(--vl-space-4); }
+.vl-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
+.vl-evidence-text {
+  font-size: var(--vl-text-md);
+  line-height: var(--vl-leading-evidence);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.vl-number { font-variant-numeric: tabular-nums; }
+
+@media (min-width: 1024px) {
+  .vl-shell { display: grid; grid-template-columns: var(--vl-sidebar-width) minmax(0, 1fr); }
+}
+@media (min-width: 1440px) {
+  .vl-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .vl-overview-grid { grid-template-columns: minmax(0, 1fr) var(--vl-evidence-width); }
+}
+@media (max-width: 767px) {
+  .vl-page { padding: var(--vl-space-4); }
+  .vl-panel { padding: var(--vl-space-4); }
+  .vl-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 焦点与动效(风格规范第 10 节) */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--vl-color-brand);
+  outline-offset: 2px;
+}
+:where(a, button, input, select, textarea, [tabindex]) {
+  scroll-margin-block: 5rem;
+}
+.vl-button {
+  min-height: var(--vl-control-height);
+  border-radius: var(--vl-radius-control);
+  transition: background-color var(--vl-motion-fast) var(--vl-ease),
+              border-color var(--vl-motion-fast) var(--vl-ease);
+}
+.vl-skip-link {
+  position: fixed;
+  inset-inline-start: var(--vl-space-4);
+  inset-block-start: var(--vl-space-4);
+  z-index: var(--vl-z-message);
+  padding: var(--vl-space-3);
+  color: var(--vl-color-surface);
+  background: var(--vl-color-brand);
+  transform: translateY(-200%);
+}
+.vl-skip-link:focus { transform: translateY(0); }
+@media (pointer: coarse), (max-width: 767px) {
+  .vl-button { min-height: var(--vl-control-height-touch); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vl-shell *, .vl-overlay, .vl-overlay * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
