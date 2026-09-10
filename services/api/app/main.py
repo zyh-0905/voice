@@ -199,15 +199,18 @@ if not repository.get_project('demo-project'):
     except ValueError:
         pass
 reviews = {}
-# 演示种子:severity/review_state/task 状态使用规范枚举,仅 InMemory 演示环境注入
-if repository.__class__.__name__ == 'InMemoryRepository':
-    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
-    repository.risks.setdefault('risk-002', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
-    repository.risks.setdefault('risk-003', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
-    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
-    repository.tasks.setdefault('task-002', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
-    repository.tasks.setdefault('task-003', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
-    repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
+# 演示种子:severity/review_state/task 状态使用规范枚举;两种仓储均为「空则注入」。
+# SQL 模式下非模型列的富字段(rule/due_at 等)由仓储按列过滤,基础演示不受影响。
+if not repository.list_entities('risks', 'demo-project'):
+    repository.create_entity('risks', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
+    repository.create_entity('risks', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
+    repository.create_entity('risks', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
+if not repository.list_entities('tasks', 'demo-project'):
+    repository.create_entity('tasks', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
+    repository.create_entity('tasks', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
+    repository.create_entity('tasks', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
+if not repository.list_entities('reviews', 'demo-project'):
+    repository.create_entity('reviews', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
 def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
 def list_projects(user: dict = Depends(require_user)):
