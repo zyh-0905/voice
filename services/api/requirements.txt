@@ -11,3 +11,6 @@ celery[redis]>=5.4
 openpyxl>=3.1
 numpy>=1.26
 PyYAML>=6.0
+# HDBSCAN 通过 scikit-learn 提供(>=1.3 内置):参数语义与 hdbscan 包一致,
+# 且 linux-aarch64 有预编译 wheel(hdbscan 包在 arm64 无 wheel 需源码编译)。
+scikit-learn>=1.5
