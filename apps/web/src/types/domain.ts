@@ -10,6 +10,15 @@ export interface ImportHealth {
   piiMasked: boolean
   timeFieldMissing: number
 }
+/** 工程计划 W05:上传→治理→分析后由服务端返回的批次健康视图 */
+export interface ImportHealthView {
+  inputRows: number
+  validRows: number
+  invalidRows: number
+  duplicateRows: number
+  redactedRows: number
+  undatedRows: number
+}
 export interface AnalysisRun {
   id: string
   status: 'queued' | 'running' | 'done' | 'error'
@@ -129,6 +138,20 @@ export interface TaskSummary {
   status: TaskStatus
   dueAt: string | null
   overdue: boolean
+  /** 真实 /tasks 契约扩展字段(演示数据同源) */
+  owner?: string
+  priority?: string
+  source?: string
+}
+
+/** 风险队列:规则命中候选,severity 与复核状态分开;候选不是已确认事故 */
+export interface RiskItem {
+  id: string
+  title: string
+  rule: string
+  severity: string
+  reviewState: 'pending' | 'confirmed' | 'excluded'
+  status: string
 }
 
 export interface DatasetBatch {

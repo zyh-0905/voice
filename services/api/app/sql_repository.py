@@ -1,7 +1,9 @@
 from collections.abc import MutableMapping
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from .db import Base, SessionLocal
-from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review
+from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review, IdempotencyKey
+from .repository import MAX_PUBLISH_ATTEMPTS
 
 
 class _EntityMap(MutableMapping):
@@ -152,4 +154,28 @@ class SQLAlchemyRepository:
         with self.session() as session, session.begin():
             obj = session.scalars(select(OutboxEvent).where(OutboxEvent.event_key==event_key)).first()
             if obj:
-                obj.payload = {**(obj.payload or {}), '_relay_error': str(error), '_relay_attempts': int((obj.payload or {}).get('_relay_attempts', 0)) + 1}
+                attempts = int((obj.payload or {}).get('_relay_attempts', 0)) + 1
+                obj.payload = {**(obj.payload or {}), '_relay_error': str(error), '_relay_attempts': attempts}
+                if attempts >= MAX_PUBLISH_ATTEMPTS:
+                    obj.status = 'failed'
+
+    def get_idempotency(self, key):
+        with self.session() as session:
+            obj = session.get(IdempotencyKey, key)
+            if obj is None:
+                return None
+            return {'key': obj.key, 'project_id': obj.project_id, 'fingerprint': obj.fingerprint, 'analysis_id': obj.analysis_id}
+
+    def create_idempotency(self, key, value):
+        with self.session() as session, session.begin():
+            session.add(IdempotencyKey(
+                key=key,
+                project_id=value['project_id'],
+                fingerprint=value['fingerprint'],
+                analysis_id=value['analysis_id'],
+            ))
+            try:
+                session.flush()
+            except IntegrityError:
+                raise ValueError(f'Idempotency key already exists: {key}') from None
+            return {'key': key, 'project_id': value['project_id'], 'fingerprint': value['fingerprint'], 'analysis_id': value['analysis_id']}

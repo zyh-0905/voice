@@ -1,4 +1,5 @@
-﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Response
+﻿from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Response, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -17,6 +18,15 @@ import os
 validate_production_settings()
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
+# 开发环境跨域:默认放行本地 vite/nginx 来源,生产用 CORS_ORIGINS 覆盖。
+# 认证走 Authorization: Bearer 头,不依赖 cookie,无需 allow_credentials。
+_cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173,http://localhost:8080,http://127.0.0.1:8080').split(',') if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(WriteRateLimitMiddleware)
 app.include_router(auth_router)
@@ -25,8 +35,6 @@ datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
-_idempotency = {}
-outbox_events = []
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -92,7 +100,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': f'invalid UTF-8 CSV at byte {exc.start}'}) from exc
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
-    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
+    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
     return repository.create_dataset(d)
 def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
@@ -118,11 +126,13 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
+    fingerprint = None
     if idempotency_key:
         fingerprint = hashlib.sha256((project_id + '|' + '|'.join(req.dataset_ids) + '|' + repr(req.config)).encode()).hexdigest()
-        previous = _idempotency.get(idempotency_key)
-        if previous and previous[0] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
-        if previous: return analyses[previous[1]]
+        previous = repository.get_idempotency(idempotency_key)
+        if previous:
+            if previous['fingerprint'] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
+            return analyses[previous['analysis_id']]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if sum(d['rows'] for d in ds if d) > 5000: raise HTTPException(422, detail={'code':'feedback_limit_exceeded'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
@@ -130,8 +140,18 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
     aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
     repository.create_outbox_event({'event_key': f'analysis.created:{aid}', 'event_type':'analysis.created', 'payload': {'analysis_id': aid, 'project_id': project_id}})
-    outbox_events.append({'event_id': 'evt_'+uuid4().hex[:10], 'event_type': 'analysis.created', 'analysis_id': aid, 'project_id': project_id, 'status': 'pending', 'created_at': now()})
-    if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
+    if idempotency_key:
+        try:
+            repository.create_idempotency(idempotency_key, {'project_id': project_id, 'fingerprint': fingerprint, 'analysis_id': aid})
+        except ValueError:
+            # 并发竞态:另一请求先写入;重读并按指纹裁决。
+            # 注:演示仓储下竞争窗口内的重复 analysis/outbox 为孤儿记录,无害;
+            # 生产实现应在同一事务内完成 analysis+outbox+幂等写入。
+            existing = repository.get_idempotency(idempotency_key)
+            if existing and existing['fingerprint'] != fingerprint:
+                raise HTTPException(409, detail={'code':'idempotency_conflict'})
+            if existing:
+                return analyses[existing['analysis_id']]
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return analyses[aid]
@@ -179,9 +199,14 @@ if not repository.get_project('demo-project'):
     except ValueError:
         pass
 reviews = {}
+# 演示种子:severity/review_state/task 状态使用规范枚举,仅 InMemory 演示环境注入
 if repository.__class__.__name__ == 'InMemoryRepository':
-    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'Missing time field','severity':'high','status':'open','evidence_count':2})
-    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'Missing time field','owner':'analyst','status':'todo','priority':'high'})
+    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
+    repository.risks.setdefault('risk-002', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
+    repository.risks.setdefault('risk-003', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
+    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
+    repository.tasks.setdefault('task-002', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
+    repository.tasks.setdefault('task-003', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
     repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
 def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
@@ -196,12 +221,93 @@ def get_project(project_id: str, user: dict = Depends(require_project_access)):
     project = repository.get_project(project_id)
     if not project: raise HTTPException(404, detail={'code':'project_not_found'})
     return project
+
+# —— 工程计划 7.7:行动首页只读聚合契约 ——
+@app.get('/api/v1/projects/{project_id}/summary')
+def project_summary(project_id: str, user: dict = Depends(require_project_access)):
+    """行动首页聚合。insight 绑定所选分析;action 为项目全部运行。
+    演示环境返回合成契约样例,并显式标注合成身份;真实实现以数据库查询为准。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    # 合成样例(与前端 mock 同源,规范 7.7):不冒充业务结果
+    return {
+        'project_id': project_id,
+        'run_id': 'run_demo_001',
+        'revision': 1,
+        'denominator': 1000,
+        'definition_version': 'summary-ui-v1',
+        'computed_at': '2026-09-09T00:00:00+08:00',
+        'filters': {'start': '2026-08-25T00:00:00+08:00', 'end': '2026-09-01T00:00:00+08:00', 'channel': None, 'product': None},
+        'insight_metrics': {'scope': 'selected_analysis', 'valid_feedback_count': 1000, 'topic_count': 8, 'pending_risk_feedback_count': 12},
+        'action_metrics': {'scope': 'project_all_runs', 'active_task_count': 18, 'overdue_task_count': 4, 'task_as_of': '2026-09-09T00:00:00+08:00'},
+    }
+@app.get('/api/v1/projects/{project_id}/topics')
+def list_topics(project_id: str, user: dict = Depends(require_project_access)):
+    """主题洞察列表。演示环境返回合成主题行;后续按数据库聚合替换。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    rows = [
+        {'id': 'delivery', 'title': '物流体验', 'feedbackCount': 218, 'denominator': 1000, 'ratio': 21.8, 'trend': 'down', 'cpiDisplayValue': '68', 'reviewState': 'confirmed', 'evidence': {'topicId': 'delivery', 'topicTitle': '物流体验', 'runId': 'run_demo_001', 'revision': 1, 'summary': '配送等待与物流信息更新是主要关注点。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': False, 'reviewRecord': None}}},
+        {'id': 'refund', 'title': '退款进度', 'feedbackCount': 164, 'denominator': 1000, 'ratio': 16.4, 'trend': 'up', 'cpiDisplayValue': '82', 'reviewState': 'pending', 'evidence': {'topicId': 'refund', 'topicTitle': '退款进度', 'runId': 'run_demo_001', 'revision': 1, 'summary': '反馈关注退款处理时间和状态透明度。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': True, 'reviewRecord': None}}},
+        {'id': 'product', 'title': '产品使用', 'feedbackCount': 121, 'denominator': 1000, 'ratio': 12.1, 'trend': 'flat', 'cpiDisplayValue': '54', 'reviewState': 'pending', 'evidence': {'topicId': 'product', 'topicTitle': '产品使用', 'runId': 'run_demo_001', 'revision': 1, 'summary': '使用引导与功能说明仍有改善空间。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}}},
+    ]
+    return {'items': rows, 'total': len(rows)}
+@app.get('/api/v1/projects/{project_id}/trend')
+def list_trend(project_id: str, user: dict = Depends(require_project_access)):
+    """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    points = [
+        {'date': '08-26', 'value': 142}, {'date': '08-27', 'value': 151},
+        {'date': '08-28', 'value': None}, {'date': '08-29', 'value': 158},
+        {'date': '08-30', 'value': 149}, {'date': '08-31', 'value': 161},
+        {'date': '09-01', 'value': 155},
+    ]
+    return {'items': points, 'total': len(points)}
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
-    items=repository.list_entities('risks', project_id); return {'items':items, 'total':len(items)}
+    """风险队列(前端契约):severity 与 review_state 分开,候选不是已确认事故。"""
+    mapped = []
+    for r in repository.list_entities('risks', project_id):
+        mapped.append({
+            'id': r.get('id'),
+            'title': r.get('title', ''),
+            'rule': r.get('rule', ''),
+            'severity': str(r.get('severity', 'MEDIUM')).upper(),
+            'reviewState': r.get('review_state', 'pending'),
+            'status': str(r.get('status', 'OPEN')).upper(),
+        })
+    return {'items': mapped, 'total': len(mapped)}
 @app.get('/api/v1/projects/{project_id}/tasks')
-def list_tasks(project_id: str, user: dict = Depends(require_project_access)):
-    items=repository.list_entities('tasks', project_id); return {'items':items, 'total':len(items)}
+def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: bool = False, user: dict = Depends(require_project_access)):
+    """任务列表(前端契约):state 可多值,overdue=true 限定未关闭且逾期,取交集。"""
+    _as_of = datetime.now(timezone.utc)
+    mapped = []
+    for t in repository.list_entities('tasks', project_id):
+        due_at = t.get('due_at') or t.get('due')
+        due_at = due_at if isinstance(due_at, str) else None
+        is_overdue = False
+        if due_at:
+            try:
+                is_overdue = datetime.fromisoformat(due_at) < _as_of
+            except ValueError:
+                is_overdue = False
+        item = {
+            'id': t.get('id'),
+            'title': t.get('title', ''),
+            'status': str(t.get('status', 'OPEN')).upper(),
+            'dueAt': due_at,
+            'overdue': is_overdue,
+            'owner': t.get('owner'),
+            'priority': str(t.get('priority', 'MEDIUM')).upper(),
+            'source': t.get('source'),
+        }
+        if state and item['status'] not in {s.upper() for s in state}:
+            continue
+        if overdue and not is_overdue:
+            continue
+        mapped.append(item)
+    return {'items': mapped, 'total': len(mapped)}
 @app.get('/api/v1/projects/{project_id}/reviews')
 def list_reviews(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('reviews', project_id)

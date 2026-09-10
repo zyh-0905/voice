@@ -206,17 +206,23 @@ const { summary, topics, trend, taskSummaries, recentBatches, status, refreshing
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
 
 // —— 筛选:URL 只保存 ID、时间和枚举(风格规范 9.3) ——
-const filters = ref<FilterValues>({
-  runId: typeof route.query.run === 'string' ? route.query.run : null,
-  start: typeof route.query.start === 'string' ? route.query.start : null,
-  end: typeof route.query.end === 'string' ? route.query.end : null,
-  channel: typeof route.query.channel === 'string' ? route.query.channel : null,
-  product: typeof route.query.product === 'string' ? route.query.product : null,
-})
+function readFiltersFromQuery(): FilterValues {
+  return {
+    runId: typeof route.query.run === 'string' ? route.query.run : null,
+    start: typeof route.query.start === 'string' ? route.query.start : null,
+    end: typeof route.query.end === 'string' ? route.query.end : null,
+    channel: typeof route.query.channel === 'string' ? route.query.channel : null,
+    product: typeof route.query.product === 'string' ? route.query.product : null,
+  }
+}
+const filters = ref<FilterValues>(readFiltersFromQuery())
 
-const runs = computed(() => [
-  { id: summary.value?.run_id ?? 'run_demo_001', label: summary.value ? `${summary.value.run_id}·revision ${summary.value.revision}` : 'run_demo_001' },
-])
+const runs = computed(() => {
+  const current = summary.value
+  // 无已发布 run(未分析态)时不提供可选分析,避免渲染「null·revision null」
+  if (!current?.run_id) return []
+  return [{ id: current.run_id, label: `${current.run_id}·revision ${current.revision ?? '—'}` }]
+})
 const channelOptions = [
   { value: 'phone', label: '电话' },
   { value: 'chat', label: '在线客服' },
@@ -236,6 +242,8 @@ function applyFilters(next: FilterValues) {
   if (next.channel) query.channel = next.channel
   if (next.product) query.product = next.product
   void router.replace({ query })
+  // 筛选变化须取消旧请求并按新条件重载(风格规范 9.3)
+  reload()
 }
 function clearFilters() {
   applyFilters({ runId: null, start: null, end: null, channel: null, product: null })
@@ -271,7 +279,11 @@ function closeEvidence() {
   trigger?.focus()
   trigger = null
 }
-watch(projectId, () => closeEvidence())
+watch(projectId, () => {
+  closeEvidence()
+  // 切项目后筛选不得沿用上一项目的条件(URL 已不含旧 query 时重读为空)
+  filters.value = readFiltersFromQuery()
+})
 
 // ≥1440 非模态侧栏;<1440 模态抽屉(风格规范 5.2 断点矩阵)
 const isWide = ref(false)

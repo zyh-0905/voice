@@ -1,0 +1,37 @@
+policy_id: ecommerce-v1
+# 独立风险扫描策略:全量规则,独立于向量与聚类;命中产生候选(恒 PENDING),不生成 CONFIRMED。
+# guards 为排除词:出现在命中关键词前 6 字符窗口内时视为否定/假设/转述,不产生候选。
+guards:
+  - 没有
+  - 未
+  - 并无
+  - 不会
+  - 如果
+  - 万一
+  - 假设
+  - 要是
+  - 听说
+  - 据说
+  - 有人说
+  - 传闻
+rules:
+  - rule_id: safety_fire
+    severity: critical
+    patterns: ["起火", "冒烟", "燃烧", "自燃"]
+    reason: 描述燃烧类安全事件,需立即人工核验
+  - rule_id: safety_injury
+    severity: critical
+    patterns: ["烫伤", "烧伤", "触电", "受伤"]
+    reason: 描述人身伤害,需立即人工核验
+  - rule_id: charging_fault
+    severity: high
+    patterns: ["充电异常", "无法充电", "充电口损坏", "充不进电"]
+    reason: 充电故障,影响使用安全
+  - rule_id: duplicate_charge
+    severity: high
+    patterns: ["重复扣款", "多扣了", "乱扣费", "扣了两次"]
+    reason: 异常扣款,涉及资金问题
+  - rule_id: payment_failed
+    severity: medium
+    patterns: ["支付失败", "无法支付", "付款失败"]
+    reason: 支付失败,影响订单完成

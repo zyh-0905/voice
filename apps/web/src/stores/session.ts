@@ -24,9 +24,11 @@ export const useSessionStore = defineStore('session', () => {
   }
   function login() { apply(DEMO_USER) }
   function loginAsViewer() { apply(DEMO_VIEWER) }
+  /** 真实登录:用后端返回的用户身份写入会话 */
+  function loginAs(next: User) { apply(next) }
   function logout() {
     user.value = null
     if (typeof window !== 'undefined') window.sessionStorage.removeItem(SESSION_KEY)
   }
-  return { user, isDemo, login, loginAsViewer, logout }
+  return { user, isDemo, login, loginAsViewer, loginAs, logout }
 })
