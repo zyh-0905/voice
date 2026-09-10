@@ -6,6 +6,7 @@ mock 与 provider 实现同一接口,origin 分别记录(provider/mock/rule_fall
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
 
@@ -39,25 +40,38 @@ class TopicProvider(Protocol):
 
 @dataclass
 class MockTopicProvider:
-    """确定性 mock:输出契约合法且引文真实存在于证据原文。"""
+    """确定性 mock:输出契约合法且引文真实存在于证据原文;主题名由证据高频词生成。"""
 
     origin: str = 'mock'
 
     def name_topic(self, evidence: Sequence[Mapping[str, str]], context: Mapping[str, object]) -> dict:
         rows = list(evidence)
         first = rows[0] if rows else {'evidence_id': 'fb_missing', 'text': '占位证据'}
+        text = ' '.join(row.get('text', '') for row in rows)
         quote = first['text'][:12]
         return {
-            'topic_name': '物流体验',
-            'summary': f'证据共 {len(rows)} 条,聚焦物流更新与配送等待。',
+            'topic_name': _deterministic_name(text),
+            'summary': f'证据共 {len(rows)} 条,聚焦 {_deterministic_name(text)} 相关反馈。',
             'severity': 'medium',
             'department': '运营',
             'evidence_ids': [row['evidence_id'] for row in rows] or ['fb_missing'],
             'claims': [{'evidence_id': first['evidence_id'], 'quote': quote, 'claim': f'反馈提及:{quote}'}],
-            'suggested_action': '核验物流通知机制',
+            'suggested_action': '核验相关流程机制',
             'needs_review': True,
             'limitations': ['演示输出,需人工核验'],
         }
+
+
+def _deterministic_name(text: str) -> str:
+    """确定性命名:去掉标点/空白后取前 4 个字符;空文本用占位名。
+
+    演示 mock 的稳定命名策略——不同证据簇得到不同且可读的名字;
+    真实命名由 TopicProvider 实现(见 contracts/llm_topic.schema.json)。
+    """
+    cleaned = re.sub(r'[\s，。！？、；：""''（）【】,;:!?.]+', '', text)
+    if not cleaned:
+        return FALLBACK_TOPIC_NAME
+    return cleaned[:4]
 
 
 def _rule_fallback(evidence: Sequence[Mapping[str, str]], reason: str) -> TopicCandidate:

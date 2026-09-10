@@ -10,6 +10,7 @@
         "test:e2e": "playwright test",
         "test:ui": "playwright test overview-ui evidence-ui",
         "test:a11y": "playwright test accessibility",
+        "test:visual": "playwright test visual",
         "lint:style": "node scripts/check-style-tokens.mjs"
     },
     "dependencies": {

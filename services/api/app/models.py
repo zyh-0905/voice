@@ -59,6 +59,16 @@ class IdempotencyKey(Base):
     analysis_id: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+class SessionToken(Base):
+    """阶段三:服务端会话持久化(SESSION_STORE=db)。"""
+    __tablename__ = "session_tokens"
+    token: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    projects: Mapped[list] = mapped_column(JSON, nullable=False)
+    issued_at: Mapped[float] = mapped_column(nullable=False)
+    exp: Mapped[float] = mapped_column(nullable=False)
+
 class Risk(Base):
     __tablename__ = 'risks'
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

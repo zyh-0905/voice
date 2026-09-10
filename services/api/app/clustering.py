@@ -43,6 +43,14 @@ def cluster_embeddings(vectors, method: str = 'hdbscan', config: dict | None = N
             method=method,
             config=cfg,
         )
+    # 样本不足(<2 无法聚类):全部保留为待归类,不产生簇
+    if vectors.shape[0] < 2:
+        return ClusterResult(
+            labels=np.full(vectors.shape[0], -1, dtype=int),
+            noise_indices=frozenset(range(vectors.shape[0])),
+            method=method,
+            config=cfg,
+        )
     # scikit-learn >=1.3 内置 HDBSCAN,参数语义与 hdbscan 包一致;
     # 惰性导入,未安装时仅聚类路径报错
     from sklearn.cluster import HDBSCAN

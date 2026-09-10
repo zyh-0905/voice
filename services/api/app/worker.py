@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 from typing import MutableMapping
-from .analysis import analyze_feedback
 
 LEASE_TIMEOUT_SECONDS = float(os.getenv('ANALYSIS_LEASE_TIMEOUT_SECONDS', '300'))
 MAX_RECOVERY_ATTEMPTS = int(os.getenv('ANALYSIS_MAX_ATTEMPTS', '3'))
@@ -17,9 +16,26 @@ def _now() -> float:
     return time.time()
 
 
+class _AnalysisStoreAdapter:
+    """把 analyses 映射适配为 publishing.AnalysisStore;共享主进程仓储实例。"""
+
+    def __init__(self, analyses: MutableMapping[str, dict]):
+        self._analyses = analyses
+
+    def get_analysis(self, analysis_id: str) -> dict | None:
+        return self._analyses.get(analysis_id)
+
+    def update_analysis(self, analysis_id: str, changes: dict) -> dict:
+        current = dict(self._analyses.get(analysis_id) or {})
+        current.update(changes)
+        self._analyses[analysis_id] = current
+        return current
+
+
 class AnalysisWorker:
     def __init__(self, analyses: MutableMapping[str, dict]):
         self.analyses = analyses
+        self.store = _AnalysisStoreAdapter(analyses)
         self.lease_owner = f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
     def run(self, analysis_id: str) -> dict:
@@ -30,11 +46,10 @@ class AnalysisWorker:
                    lease_expires_at=_now() + LEASE_TIMEOUT_SECONDS)
         self.analyses[analysis_id] = run
         try:
-            rows = []
-            for dataset in run.get("datasets", []):
-                rows.extend(dataset.get("preview", {}).get("rows", []))
-            if rows:
-                run["analysis"] = analyze_feedback(rows)
+            # W11:分析阶段执行完整流水线(风险扫描 → 分块/向量/聚类/命名 → 发布 revision)
+            from .pipeline import run_analysis_pipeline
+            run_analysis_pipeline(self.store, analysis_id)
+            run = self.analyses[analysis_id]
             run.update(status="done", stage="completed", progress=int(run.get("total") or 0),
                        lease_owner=None, lease_expires_at=None)
         except Exception as exc:

@@ -119,7 +119,7 @@ def test_budget_exhausted_degrades(evidence, allowed):
 def test_mock_provider_records_origin_and_valid_quotes(evidence, allowed):
     candidate = TopicNamer(MockTopicProvider(), allowed).name_topic(evidence)
     assert candidate.origin == 'mock'
-    assert candidate.topic_name == '物流体验'
+    assert candidate.topic_name == '物流信息'
     assert candidate.claims
 
 

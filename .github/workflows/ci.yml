@@ -62,6 +62,8 @@ jobs:
       - working-directory: apps/web
         run: npm ci
       - working-directory: apps/web
+        run: npm run lint:style
+      - working-directory: apps/web
         run: npm run typecheck
       - working-directory: apps/web
         run: npm run test:unit -- --run

@@ -15,3 +15,4 @@ PyYAML>=6.0
 # 且 linux-aarch64 有预编译 wheel(hdbscan 包在 arm64 无 wheel 需源码编译)。
 scikit-learn>=1.5
 jsonschema>=4.20
+argon2-cffi>=23.1

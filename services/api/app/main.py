@@ -243,15 +243,106 @@ def project_summary(project_id: str, user: dict = Depends(require_project_access
     }
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
-    """主题洞察列表。演示环境返回合成主题行;后续按数据库聚合替换。"""
+    """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
+    published = _latest_published_run(project_id)
+    if published is not None:
+        from .topics import list_topics_from_run
+        snapshot = published.get('result') or {}
+        total = int(snapshot.get('unassigned_count') or 0) + sum(
+            int(t.get('feedback_count') or 0) for t in snapshot.get('topics') or []
+        )
+        rows = [
+            {
+                'id': t['topic_id'], 'title': t['name'], 'feedbackCount': t['feedback_count'],
+                'denominator': total, 'ratio': round((t['feedback_count'] / total) * 100, 1) if total else 0,
+                'trend': None, 'cpiDisplayValue': None, 'reviewState': 'pending',
+                'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
+                             'revision': snapshot['revision'], 'summary': t.get('summary', ''),
+                             'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
+            }
+            for t in snapshot.get('topics') or []
+        ]
+        return {'items': rows, 'total': len(rows)}
     rows = [
         {'id': 'delivery', 'title': '物流体验', 'feedbackCount': 218, 'denominator': 1000, 'ratio': 21.8, 'trend': 'down', 'cpiDisplayValue': '68', 'reviewState': 'confirmed', 'evidence': {'topicId': 'delivery', 'topicTitle': '物流体验', 'runId': 'run_demo_001', 'revision': 1, 'summary': '配送等待与物流信息更新是主要关注点。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': False, 'reviewRecord': None}}},
         {'id': 'refund', 'title': '退款进度', 'feedbackCount': 164, 'denominator': 1000, 'ratio': 16.4, 'trend': 'up', 'cpiDisplayValue': '82', 'reviewState': 'pending', 'evidence': {'topicId': 'refund', 'topicTitle': '退款进度', 'runId': 'run_demo_001', 'revision': 1, 'summary': '反馈关注退款处理时间和状态透明度。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': True, 'reviewRecord': None}}},
         {'id': 'product', 'title': '产品使用', 'feedbackCount': 121, 'denominator': 1000, 'ratio': 12.1, 'trend': 'flat', 'cpiDisplayValue': '54', 'reviewState': 'pending', 'evidence': {'topicId': 'product', 'topicTitle': '产品使用', 'runId': 'run_demo_001', 'revision': 1, 'summary': '使用引导与功能说明仍有改善空间。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}}},
     ]
     return {'items': rows, 'total': len(rows)}
+
+def _latest_published_run(project_id: str) -> dict | None:
+    """本项目最近已发布 revision 的 run;无发布返回 None。"""
+    published = None
+    for run in analyses.values():
+        if run.get('project_id') != project_id:
+            continue
+        revision = (run.get('result') or {}).get('revision')
+        if not revision:
+            continue
+        if published is None or int(revision) >= int(published['result']['revision']):
+            published = run
+    return published
+
+@app.get('/api/v1/projects/{project_id}/topics/{topic_id}/evidence')
+def get_topic_evidence(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
+    """主题证据:仅返回本 run 输入内的记录;版本不匹配/不存在返回 404。"""
+    from .topics import RevisionNotFound, TopicNotFound, topic_evidence_from_run
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    try:
+        items = topic_evidence_from_run(published, topic_id, topic_version_id)
+    except (TopicNotFound, RevisionNotFound):
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    return {'items': items, 'total': len(items)}
+class CorrectionRequest(BaseModel):
+    operation: str
+    expected_revision: int
+    name: str | None = None
+    source_topic_ids: list[str] | None = None
+    feedback_ids: list[str] | None = None
+    reason: str = Field(min_length=1)
+
+@app.post('/api/v1/projects/{project_id}/topics/{topic_id}/corrections', status_code=201)
+def correct_topic(project_id: str, topic_id: str, req: CorrectionRequest, user: dict = Depends(require_project_analyst)):
+    """W13 校正:RENAME/MERGE/SPLIT/CREATE;乐观锁 expected_revision,并发只有一个成功(409);
+    新快照 revision+1,旧版本保留在 revision_history。"""
+    from .pipeline import _flatten_rows
+    from .versioning import CorrectionConflict, TopicNotFound, apply_correction
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    _rows, sources, _total = _flatten_rows(published)
+    params = {'topic_id': topic_id, 'name': req.name,
+              'source_topic_ids': req.source_topic_ids, 'feedback_ids': req.feedback_ids}
+    try:
+        new_snapshot, history, affected = apply_correction(
+            published, req.operation, req.expected_revision, params, req.reason, sources)
+    except CorrectionConflict:
+        raise HTTPException(409, detail={'code': 'correction_conflict'})
+    except TopicNotFound:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    except ValueError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_correction', 'message': str(exc)})
+    repository.update_analysis(published['id'], {'result': new_snapshot, 'revision_history': history})
+    return {'revision': new_snapshot['revision'], 'affected_topic_ids': affected}
+
+@app.get('/api/v1/projects/{project_id}/topics/{topic_id}')
+def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
+    """主题详情:默认当前 revision,传 topic_version_id 可查任意旧版本(不可变)。"""
+    from .versioning import snapshot_at
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    snapshot = snapshot_at(published, topic_version_id) if topic_version_id is not None else (published.get('result') or {})
+    if not snapshot:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    topic = next((t for t in snapshot.get('topics') or [] if t['topic_id'] == topic_id), None)
+    if topic is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    return {'topic': topic, 'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []), 'revision': snapshot.get('revision')}
 @app.get('/api/v1/projects/{project_id}/trend')
 def list_trend(project_id: str, user: dict = Depends(require_project_access)):
     """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
@@ -295,7 +386,7 @@ def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: 
         item = {
             'id': t.get('id'),
             'title': t.get('title', ''),
-            'status': str(t.get('status', 'OPEN')).upper(),
+            'status': str(t.get('state') or t.get('status') or 'OPEN').upper(),
             'dueAt': due_at,
             'overdue': is_overdue,
             'owner': t.get('owner'),
@@ -312,6 +403,133 @@ def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: 
 def list_reviews(project_id: str, user: dict = Depends(require_project_access)):
     items=repository.list_entities('reviews', project_id)
     return {'items':items,'total':len(items)}
+
+# —— W15 任务状态机路由 ——
+class TaskDraftRequest(BaseModel):
+    source_topic_version_id: str | None = None
+    evidence_ids: list[str] = []
+    title: str = Field(min_length=1)
+
+class TaskConfirmRequest(BaseModel):
+    expected_version: int
+    owner_id: str
+    due_at: str
+    acceptance: str
+
+class TaskTransitionRequest(BaseModel):
+    action: str
+    expected_version: int
+    comment: str = ''
+    material_refs: list[str] = []
+
+def _find_task(project_id: str, task_id: str) -> dict | None:
+    for task in repository.list_entities('tasks', project_id):
+        if task.get('id') == task_id:
+            return task
+    return None
+
+@app.post('/api/v1/projects/{project_id}/tasks/drafts', status_code=201)
+def create_task_draft(project_id: str, req: TaskDraftRequest, user: dict = Depends(require_project_analyst)):
+    """草稿:来源为已保存主题版本/规则模板,响应不等待外部 LLM。"""
+    task = {
+        'id': 'task_' + uuid4().hex[:8], 'project_id': project_id, 'title': req.title,
+        'source': req.source_topic_version_id or 'manual', 'owner_id': None, 'due_at': None,
+        'acceptance': None, 'state': 'DRAFT', 'version': 1, 'priority': 'MEDIUM',
+        'events': [], 'effect_status': 'NOT_EVALUATED', 'idempotency_keys': [],
+    }
+    repository.create_entity('tasks', task)
+    return task
+
+@app.post('/api/v1/projects/{project_id}/tasks/{task_id}/confirm')
+def confirm_task(project_id: str, task_id: str, req: TaskConfirmRequest, idempotency_key: str | None = Header(None), user: dict = Depends(require_project_analyst)):
+    """草稿确认:owner/due/acceptance 必填;同 Idempotency-Key 重复确认不产生第二次事件。"""
+    task = _find_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(404, detail={'code': 'task_not_found'})
+    if idempotency_key and idempotency_key in task.get('idempotency_keys', []):
+        return task
+    try:
+        from .tasks import FieldValidationError, InvalidTransition, VersionConflict, confirm_draft
+        confirm_draft(task, req.expected_version, req.owner_id, req.due_at, req.acceptance, user.get('id', 'demo-user'))
+    except VersionConflict:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    except InvalidTransition:
+        raise HTTPException(409, detail={'code': 'INVALID_TRANSITION'})
+    except FieldValidationError as exc:
+        raise HTTPException(422, detail={'code': 'field_required', 'message': str(exc)})
+    if idempotency_key:
+        task.setdefault('idempotency_keys', []).append(idempotency_key)
+    # list_entities 返回快照副本,状态与事件必须显式写回仓储(同一次更新)
+    repository.update_entity('tasks', task_id, task)
+    return task
+
+@app.post('/api/v1/projects/{project_id}/tasks/{task_id}/transition')
+def transition_task_route(project_id: str, task_id: str, req: TaskTransitionRequest, idempotency_key: str | None = Header(None), user: dict = Depends(require_project_analyst)):
+    """状态机流转:草稿不能直接验收;负责人不得自验收;事件与状态同次提交。"""
+    task = _find_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(404, detail={'code': 'task_not_found'})
+    if idempotency_key and idempotency_key in task.get('idempotency_keys', []):
+        return task
+    is_assignee = bool(task.get('owner_id')) and task.get('owner_id') == user.get('id')
+    try:
+        from .tasks import InvalidTransition, VersionConflict, transition_task
+        transition_task(task, req.action, req.expected_version, user.get('id', 'demo-user'),
+                        user.get('role', 'ANALYST'), is_assignee, req.comment)
+    except VersionConflict:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    except InvalidTransition:
+        raise HTTPException(409, detail={'code': 'INVALID_TRANSITION'})
+    if idempotency_key:
+        task.setdefault('idempotency_keys', []).append(idempotency_key)
+    # list_entities 返回快照副本,状态与事件必须显式写回仓储(同一次更新)
+    repository.update_entity('tasks', task_id, task)
+    return task
+
+@app.get('/api/v1/projects/{project_id}/tasks/{task_id}')
+def get_task(project_id: str, task_id: str, user: dict = Depends(require_project_access)):
+    """任务详情:task + source_snapshot + events + version。"""
+    task = _find_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(404, detail={'code': 'task_not_found'})
+    return {'task': task, 'source_snapshot': task.get('source'), 'events': task.get('events', []),
+            'version': task.get('version', 1)}
+
+# —— W17 复盘路由 ——
+class ReviewCreateRequest(BaseModel):
+    task_id: str | None = None
+    run_id: str
+    revision: int
+    topic_version_ids: list[str] = []
+    n_before: int
+    N_before: int
+    n_after: int
+    N_after: int
+
+@app.post('/api/v1/projects/{project_id}/reviews', status_code=201)
+def create_review(project_id: str, req: ReviewCreateRequest, user: dict = Depends(require_project_analyst)):
+    """复盘创建:同口径计算,结果不可变保存;不可比 → insufficient,不输出改善结论。"""
+    from .review_metrics import compare_counts, effect_status
+    metrics = compare_counts(req.n_before, req.N_before, req.n_after, req.N_after)
+    review = {
+        'id': 'review_' + uuid4().hex[:8], 'project_id': project_id, 'run_id': req.run_id,
+        'revision': req.revision, 'topic_version_ids': req.topic_version_ids, 'task_id': req.task_id,
+        'before': {'n': req.n_before, 'N': req.N_before}, 'after': {'n': req.n_after, 'N': req.N_after},
+        'metrics': metrics.__dict__,
+        'effect_status': effect_status(metrics),
+        'limitations': [] if metrics.comparable else ['数据不足,暂不输出变化结论'],
+    }
+    repository.create_entity('reviews', review)
+    return review
+
+@app.get('/api/v1/projects/{project_id}/reviews/{review_id}')
+def get_review(project_id: str, review_id: str, user: dict = Depends(require_project_access)):
+    """复盘详情:固定统计结果、分母、版本与限制;不可比不显示改善。"""
+    for review in repository.list_entities('reviews', project_id):
+        if review.get('id') == review_id:
+            return review
+    raise HTTPException(404, detail={'code': 'review_not_found'})
+
 @app.post('/api/v1/projects/{project_id}/reviews/{review_id}/confirm')
 def confirm_review(project_id: str, review_id: str, user: dict = Depends(require_project_analyst)):
     if not any(item['id'] == review_id for item in repository.list_entities('reviews', project_id)):

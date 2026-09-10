@@ -134,6 +134,11 @@ class SQLAlchemyRepository:
     def create_dataset(self, value): return self.datasets.write(value['id'], value, 'create')
     def update_dataset(self, key, changes): return self.datasets.write(key, changes, 'update')
     def delete_dataset(self, key): del self.datasets[key]
+    def get_analysis(self, key):
+        try:
+            return self.analyses[key]
+        except KeyError:
+            return None
     def create_analysis(self, value): return self.analyses.write(value['id'], value, 'create')
     def update_analysis(self, key, changes): return self.analyses.write(key, changes, 'update')
     def create_outbox_event(self, event):
