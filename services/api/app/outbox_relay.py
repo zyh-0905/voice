@@ -1,12 +1,14 @@
 """Publish pending outbox events to the analysis queue with retry-safe semantics."""
 from typing import Callable, Any
 
-from .repository import Repository, repository
+from .repository import Repository, get_repository
 
 
 class OutboxRelay:
     def __init__(self, repo: Repository | None = None, publisher: Callable[..., Any] | None = None):
-        self.repository = repo or repository
+        # 必须经 get_repository() 按 USE_DATABASE 选择仓库:
+        # relay 是独立进程,InMemory 单例不会共享 API 进程的 outbox 数据。
+        self.repository = repo or get_repository()
         if publisher is None:
             from .tasks import run_analysis_task
             publisher = run_analysis_task

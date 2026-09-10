@@ -35,8 +35,6 @@ datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses)
 MAX_BYTES = 50 * 1024 * 1024
-_idempotency = {}
-outbox_events = []
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -128,11 +126,13 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
+    fingerprint = None
     if idempotency_key:
         fingerprint = hashlib.sha256((project_id + '|' + '|'.join(req.dataset_ids) + '|' + repr(req.config)).encode()).hexdigest()
-        previous = _idempotency.get(idempotency_key)
-        if previous and previous[0] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
-        if previous: return analyses[previous[1]]
+        previous = repository.get_idempotency(idempotency_key)
+        if previous:
+            if previous['fingerprint'] != fingerprint: raise HTTPException(409, detail={'code':'idempotency_conflict'})
+            return analyses[previous['analysis_id']]
     if any(not d or d['project_id']!=project_id for d in ds): raise HTTPException(404, detail={'code':'dataset_not_found'})
     if sum(d['rows'] for d in ds if d) > 5000: raise HTTPException(422, detail={'code':'feedback_limit_exceeded'})
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
@@ -140,8 +140,18 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
     aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
     repository.create_outbox_event({'event_key': f'analysis.created:{aid}', 'event_type':'analysis.created', 'payload': {'analysis_id': aid, 'project_id': project_id}})
-    outbox_events.append({'event_id': 'evt_'+uuid4().hex[:10], 'event_type': 'analysis.created', 'analysis_id': aid, 'project_id': project_id, 'status': 'pending', 'created_at': now()})
-    if idempotency_key: _idempotency[idempotency_key] = (fingerprint, aid)
+    if idempotency_key:
+        try:
+            repository.create_idempotency(idempotency_key, {'project_id': project_id, 'fingerprint': fingerprint, 'analysis_id': aid})
+        except ValueError:
+            # 并发竞态:另一请求先写入;重读并按指纹裁决。
+            # 注:演示仓储下竞争窗口内的重复 analysis/outbox 为孤儿记录,无害;
+            # 生产实现应在同一事务内完成 analysis+outbox+幂等写入。
+            existing = repository.get_idempotency(idempotency_key)
+            if existing and existing['fingerprint'] != fingerprint:
+                raise HTTPException(409, detail={'code':'idempotency_conflict'})
+            if existing:
+                return analyses[existing['analysis_id']]
     if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1', 'true', 'yes'):
         worker.run(aid)
     return analyses[aid]

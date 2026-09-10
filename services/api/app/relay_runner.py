@@ -11,6 +11,8 @@ import signal
 import time
 
 from .outbox_relay import OutboxRelay
+from .repository import get_repository
+from .watchdog import RunWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,7 @@ def run() -> None:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     relay = OutboxRelay()
+    watchdog = RunWatchdog(get_repository().analyses)
     logger.info("outbox relay started (interval=%ss)", interval)
     while not stop:
         try:
@@ -35,6 +38,12 @@ def run() -> None:
                 logger.info("outbox relay pass: %s", result)
         except Exception:
             logger.exception("outbox relay pass failed")
+        try:
+            recovered = watchdog.recover_stale()
+            if recovered.get("recovered") or recovered.get("errored"):
+                logger.info("watchdog pass: %s", recovered)
+        except Exception:
+            logger.exception("watchdog pass failed")
         # A bounded sleep makes SIGTERM responsive without busy looping.
         deadline = time.monotonic() + interval
         while not stop and time.monotonic() < deadline:

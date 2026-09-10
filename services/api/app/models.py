@@ -50,6 +50,15 @@ class OutboxEvent(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+class IdempotencyKey(Base):
+    """W06:分析创建幂等键持久化(key → fingerprint + analysis_id)。"""
+    __tablename__ = "idempotency_keys"
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    analysis_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
 class Risk(Base):
     __tablename__ = 'risks'
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

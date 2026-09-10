@@ -3,6 +3,8 @@ from copy import deepcopy
 from typing import Protocol
 import os
 
+MAX_PUBLISH_ATTEMPTS = 3
+
 
 class Repository(Protocol):
     def list_projects(self) -> list[dict]: ...
@@ -21,6 +23,8 @@ class Repository(Protocol):
     def list_pending_outbox(self, limit: int | None = None) -> list[dict]: ...
     def mark_published(self, event_key: str) -> None: ...
     def mark_publish_failed(self, event_key: str, error: str) -> None: ...
+    def get_idempotency(self, key: str) -> dict | None: ...
+    def create_idempotency(self, key: str, value: dict) -> dict: ...
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
     def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
@@ -32,6 +36,7 @@ class InMemoryRepository:
         self.datasets = {}
         self.analyses = {}
         self.outbox = []
+        self.idempotency = {}
         self.risks, self.tasks, self.reviews = {}, {}, {}
 
     def _create(self, collection, value):
@@ -69,11 +74,24 @@ class InMemoryRepository:
         for e in self.outbox:
             if e['event_key'] == event_key: e['status'] = 'published'; return
     def mark_publish_failed(self, event_key, error):
+        # 重投安全:attempts 达上限才转 failed 死信,期间保持 pending 供下轮重试
         for e in self.outbox:
             if e['event_key'] == event_key:
                 e['last_error'] = str(error)
-                e['attempts'] = int(e.get('attempts', 0)) + 1
+                attempts = int(e.get('attempts', 0)) + 1
+                e['attempts'] = attempts
+                if attempts >= MAX_PUBLISH_ATTEMPTS:
+                    e['status'] = 'failed'
                 return
+
+    def get_idempotency(self, key):
+        return deepcopy(self.idempotency.get(key))
+
+    def create_idempotency(self, key, value):
+        if key in self.idempotency:
+            raise ValueError(f'Idempotency key already exists: {key}')
+        self.idempotency[key] = deepcopy(value)
+        return deepcopy(value)
 
 
 repository = InMemoryRepository()
