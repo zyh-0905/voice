@@ -243,15 +243,60 @@ def project_summary(project_id: str, user: dict = Depends(require_project_access
     }
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
-    """主题洞察列表。演示环境返回合成主题行;后续按数据库聚合替换。"""
+    """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
+    published = _latest_published_run(project_id)
+    if published is not None:
+        from .topics import list_topics_from_run
+        snapshot = published.get('result') or {}
+        total = int(snapshot.get('unassigned_count') or 0) + sum(
+            int(t.get('feedback_count') or 0) for t in snapshot.get('topics') or []
+        )
+        rows = [
+            {
+                'id': t['topic_id'], 'title': t['name'], 'feedbackCount': t['feedback_count'],
+                'denominator': total, 'ratio': round((t['feedback_count'] / total) * 100, 1) if total else 0,
+                'trend': None, 'cpiDisplayValue': None, 'reviewState': 'pending',
+                'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
+                             'revision': snapshot['revision'], 'summary': t.get('summary', ''),
+                             'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
+            }
+            for t in snapshot.get('topics') or []
+        ]
+        return {'items': rows, 'total': len(rows)}
     rows = [
         {'id': 'delivery', 'title': '物流体验', 'feedbackCount': 218, 'denominator': 1000, 'ratio': 21.8, 'trend': 'down', 'cpiDisplayValue': '68', 'reviewState': 'confirmed', 'evidence': {'topicId': 'delivery', 'topicTitle': '物流体验', 'runId': 'run_demo_001', 'revision': 1, 'summary': '配送等待与物流信息更新是主要关注点。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': False, 'reviewRecord': None}}},
         {'id': 'refund', 'title': '退款进度', 'feedbackCount': 164, 'denominator': 1000, 'ratio': 16.4, 'trend': 'up', 'cpiDisplayValue': '82', 'reviewState': 'pending', 'evidence': {'topicId': 'refund', 'topicTitle': '退款进度', 'runId': 'run_demo_001', 'revision': 1, 'summary': '反馈关注退款处理时间和状态透明度。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': True, 'reviewRecord': None}}},
         {'id': 'product', 'title': '产品使用', 'feedbackCount': 121, 'denominator': 1000, 'ratio': 12.1, 'trend': 'flat', 'cpiDisplayValue': '54', 'reviewState': 'pending', 'evidence': {'topicId': 'product', 'topicTitle': '产品使用', 'runId': 'run_demo_001', 'revision': 1, 'summary': '使用引导与功能说明仍有改善空间。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}}},
     ]
     return {'items': rows, 'total': len(rows)}
+
+def _latest_published_run(project_id: str) -> dict | None:
+    """本项目最近已发布 revision 的 run;无发布返回 None。"""
+    published = None
+    for run in analyses.values():
+        if run.get('project_id') != project_id:
+            continue
+        revision = (run.get('result') or {}).get('revision')
+        if not revision:
+            continue
+        if published is None or int(revision) >= int(published['result']['revision']):
+            published = run
+    return published
+
+@app.get('/api/v1/projects/{project_id}/topics/{topic_id}/evidence')
+def get_topic_evidence(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
+    """主题证据:仅返回本 run 输入内的记录;版本不匹配/不存在返回 404。"""
+    from .topics import RevisionNotFound, TopicNotFound, topic_evidence_from_run
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    try:
+        items = topic_evidence_from_run(published, topic_id, topic_version_id)
+    except (TopicNotFound, RevisionNotFound):
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    return {'items': items, 'total': len(items)}
 @app.get('/api/v1/projects/{project_id}/trend')
 def list_trend(project_id: str, user: dict = Depends(require_project_access)):
     """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
