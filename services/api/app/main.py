@@ -297,6 +297,52 @@ def get_topic_evidence(project_id: str, topic_id: str, topic_version_id: int | N
     except (TopicNotFound, RevisionNotFound):
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     return {'items': items, 'total': len(items)}
+class CorrectionRequest(BaseModel):
+    operation: str
+    expected_revision: int
+    name: str | None = None
+    source_topic_ids: list[str] | None = None
+    feedback_ids: list[str] | None = None
+    reason: str = Field(min_length=1)
+
+@app.post('/api/v1/projects/{project_id}/topics/{topic_id}/corrections', status_code=201)
+def correct_topic(project_id: str, topic_id: str, req: CorrectionRequest, user: dict = Depends(require_project_analyst)):
+    """W13 校正:RENAME/MERGE/SPLIT/CREATE;乐观锁 expected_revision,并发只有一个成功(409);
+    新快照 revision+1,旧版本保留在 revision_history。"""
+    from .pipeline import _flatten_rows
+    from .versioning import CorrectionConflict, TopicNotFound, apply_correction
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    _rows, sources, _total = _flatten_rows(published)
+    params = {'topic_id': topic_id, 'name': req.name,
+              'source_topic_ids': req.source_topic_ids, 'feedback_ids': req.feedback_ids}
+    try:
+        new_snapshot, history, affected = apply_correction(
+            published, req.operation, req.expected_revision, params, req.reason, sources)
+    except CorrectionConflict:
+        raise HTTPException(409, detail={'code': 'correction_conflict'})
+    except TopicNotFound:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    except ValueError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_correction', 'message': str(exc)})
+    repository.update_analysis(published['id'], {'result': new_snapshot, 'revision_history': history})
+    return {'revision': new_snapshot['revision'], 'affected_topic_ids': affected}
+
+@app.get('/api/v1/projects/{project_id}/topics/{topic_id}')
+def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
+    """主题详情:默认当前 revision,传 topic_version_id 可查任意旧版本(不可变)。"""
+    from .versioning import snapshot_at
+    published = _latest_published_run(project_id)
+    if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    snapshot = snapshot_at(published, topic_version_id) if topic_version_id is not None else (published.get('result') or {})
+    if not snapshot:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    topic = next((t for t in snapshot.get('topics') or [] if t['topic_id'] == topic_id), None)
+    if topic is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    return {'topic': topic, 'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []), 'revision': snapshot.get('revision')}
 @app.get('/api/v1/projects/{project_id}/trend')
 def list_trend(project_id: str, user: dict = Depends(require_project_access)):
     """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""

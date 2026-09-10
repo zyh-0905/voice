@@ -7,8 +7,6 @@ import pytest
 from app.main import repository
 from app.publishing import EvidenceRef, TopicDraft, publish_revision
 
-PROJECT_ID = 'demo-project'
-OTHER_PROJECT_ID = 'other-project'
 TOPIC_ID = 't1'
 REVISION = 1
 FEEDBACK_ID = 'fb_a'
@@ -17,12 +15,20 @@ FOREIGN_FEEDBACK_ID = 'fb_foreign'
 SOURCES = {
     FEEDBACK_ID: '物流信息一直没有更新,等待了三天。',
     'fb_b': '申请退款后,希望看到预计到账时间。',
+    'fb_free': '一条待归类的反馈。',
 }
+
+UNASSIGNED_FEEDBACK_ID = 'fb_free'
 
 
 @pytest.fixture
 def topic_case():
-    # run_id 动态生成:共享 InMemory 仓储下跨测试不撞键
+    # 项目与 run 均动态生成:共享 InMemory 仓储下 fixture 之间完全隔离,
+    # _latest_published_run 按项目过滤,不会取到其他测试发布的 revision
+    project_id = f'demo-project-{uuid4().hex[:8]}'
+    other_project_id = f'other-project-{uuid4().hex[:8]}'
+    repository.create_project({'id': project_id, 'name': 'Topics Case Project'})
+    repository.create_project({'id': other_project_id, 'name': 'Other Project'})
     run_id = f'run_topics_case_{uuid4().hex[:8]}'
     # 本项目 run:两主题、各一条证据,成功发布 revision
     drafts = [
@@ -35,13 +41,19 @@ def topic_case():
             evidence=[EvidenceRef('fb_b', 1, '申请退款后', 0, 5)],
         ),
     ]
-    repository.create_analysis({'id': run_id, 'project_id': PROJECT_ID, 'dataset_ids': [],
-                                'datasets': [], 'status': 'queued', 'stage': 'queued', 'total': 2})
-    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=0)
+    repository.create_analysis({
+        'id': run_id, 'project_id': project_id, 'dataset_ids': ['ds_case'], 'status': 'queued', 'stage': 'queued', 'total': 3,
+        'datasets': [{'id': 'ds_case', 'project_id': project_id, 'preview': {'rows': [
+            {'feedback_id': FEEDBACK_ID, 'text': SOURCES[FEEDBACK_ID]},
+            {'feedback_id': 'fb_b', 'text': SOURCES['fb_b']},
+            {'feedback_id': UNASSIGNED_FEEDBACK_ID, 'text': SOURCES[UNASSIGNED_FEEDBACK_ID]},
+        ]}}],
+    })
+    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=1)
 
     # 外项目干扰:同名 topic 带外项目证据,任何查询都不应泄漏
     repository.create_analysis({
-        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': OTHER_PROJECT_ID, 'dataset_ids': [], 'datasets': [],
+        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': other_project_id, 'dataset_ids': [], 'datasets': [],
         'status': 'done', 'stage': 'completed', 'total': 1,
         'result': {
             'revision': 1,
@@ -53,11 +65,12 @@ def topic_case():
     })
 
     return SimpleNamespace(
-        project_id=PROJECT_ID,
-        other_project_id=OTHER_PROJECT_ID,
+        project_id=project_id,
+        other_project_id=other_project_id,
         run_id=run_id,
         topic_id=TOPIC_ID,
         topic_version_id=REVISION,
         feedback_id=FEEDBACK_ID,
         foreign_feedback_id=FOREIGN_FEEDBACK_ID,
+        unassigned_feedback_id=UNASSIGNED_FEEDBACK_ID,
     )
