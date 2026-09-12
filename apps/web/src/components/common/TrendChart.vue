@@ -41,7 +41,7 @@
 // TrendChart — 风格规范 6.6/11.3:折线不平滑、缺数据保持断点(connectNulls=false);
 // 数值轴从 0 起;可见文字摘要、单位、时间范围与「查看数据表」入口;
 // tooltip 用 richText 且不包含用户正文;aria 与 reduced-motion 由 useChart 统一处理。
-import { ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import type { TrendPoint } from '../../types/domain'
 import { readChartTheme } from '../../lib/chart-theme'
 import { useChart, type ChartOption } from '../../composables/useChart'
@@ -66,8 +66,25 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value)
 }
 
+/** 均值与峰值只由现有数据点推导,不引入外部口径 */
+const values = computed(() => props.data.map(p => p.value).filter((v): v is number => v !== null))
+const average = computed(() => {
+  if (!values.value.length) return null
+  return Math.round(values.value.reduce((sum, v) => sum + v, 0) / values.value.length)
+})
+const peak = computed<{ date: string; value: number } | null>(() => {
+  let best: { date: string; value: number } | null = null
+  for (const point of props.data) {
+    if (point.value === null) continue
+    if (best === null || best.value < point.value) best = { date: point.date, value: point.value }
+  }
+  return best
+})
+
 function buildOption(): ChartOption {
   const theme = readChartTheme()
+  const avg = average.value
+  const top = peak.value
   return {
     aria: { enabled: true, description: props.summary },
     textStyle: { fontFamily: theme.fontFamily, color: theme.text },
@@ -106,6 +123,20 @@ function buildOption(): ChartOption {
         symbolSize: 6,
         lineStyle: { width: 2, color: theme.palette[0] },
         itemStyle: { color: theme.palette[0] },
+        // 参考线(均值)与峰值标注:帮助读数,不改变坐标口径
+        markLine: avg === null ? undefined : {
+          silent: true,
+          symbol: 'none',
+          label: { formatter: `均值 ${avg}`, color: theme.text, fontSize: 11 },
+          lineStyle: { type: 'dashed', color: theme.grid },
+          data: [{ yAxis: avg }],
+        },
+        markPoint: top === null ? undefined : {
+          symbolSize: 44,
+          label: { formatter: String(top.value), color: theme.palette[0], fontSize: 11, fontWeight: 'bold' },
+          itemStyle: { color: 'transparent', borderColor: 'transparent' },
+          data: [{ name: '峰值', coord: [top.date, top.value] }],
+        },
       },
     ],
   }

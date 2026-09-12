@@ -29,9 +29,14 @@
     >
       <template #empty>
         <div class="vl-async-empty-box">
-          <p>还没有导入客户反馈</p>
-          <p class="vl-async-empty-box__hint">{{ canAct ? '请先导入反馈并完成分析。' : '请联系管理员导入数据。' }}</p>
-          <VlButton v-if="canAct" variant="primary" @click="goImports">去导入</VlButton>
+          <EmptyState
+            text="还没有导入客户反馈"
+            :hint="canAct ? '导入并完成分析后,这里会显示行动指标与优先主题。' : '请联系管理员导入数据。'"
+          >
+            <template v-if="canAct" #action>
+              <VlButton variant="primary" @click="goImports">去导入</VlButton>
+            </template>
+          </EmptyState>
         </div>
       </template>
       <template #error>
@@ -49,6 +54,7 @@
           scope-label="所选分析与筛选"
           description="全严重度待复核候选,不是已确认事故"
           :href="metricHref('/risks', 'state=PENDING')"
+          :icon="Warning"
         />
         <MetricCard
           data-testid="metric-overdue-tasks"
@@ -57,6 +63,7 @@
           scope-label="本项目·所有分析"
           description="未关闭任务中已超过截止时间的数量"
           :href="`/p/${projectId}/tasks?overdue=true`"
+          :icon="AlarmClock"
         />
         <MetricCard
           data-testid="metric-active-tasks"
@@ -65,6 +72,7 @@
           scope-label="本项目·所有分析"
           description="待开始、进行中与待验收任务"
           :href="`/p/${projectId}/tasks?state=OPEN&state=IN_PROGRESS&state=PENDING_REVIEW`"
+          :icon="Finished"
         />
         <MetricCard
           data-testid="metric-valid-feedback"
@@ -74,6 +82,8 @@
           scope-label="所选分析与筛选"
           description="所选分析与筛选条件下的有效反馈数"
           :href="metricHref('/topics', '')"
+          :icon="DataLine"
+          :sparkline="trend"
         />
       </section>
 
@@ -90,14 +100,14 @@
               暂无已归类主题,仍可查看风险候选与待归类反馈
             </p>
             <div v-else class="vl-table-scroll">
-              <table class="vl-topic-table" data-testid="topic-table">
+              <table class="vl-table vl-topic-table" data-testid="topic-table">
                 <thead>
                   <tr>
                     <th scope="col">主题</th>
-                    <th scope="col" class="vl-topic-table__num">反馈 n/N</th>
-                    <th scope="col" class="vl-topic-table__num">占比</th>
+                    <th scope="col" class="vl-table__num">反馈 n/N</th>
+                    <th scope="col" class="vl-topic-table__ratio-col">占比</th>
                     <th scope="col">趋势</th>
-                    <th scope="col" class="vl-topic-table__num">CPI</th>
+                    <th scope="col" class="vl-table__num">CPI</th>
                     <th scope="col">复核状态</th>
                     <th scope="col"><span class="vl-sr-only">操作</span></th>
                   </tr>
@@ -105,10 +115,16 @@
                 <tbody>
                   <tr v-for="topic in topics" :key="topic.id" :data-resource-id="topic.id">
                     <th scope="row" class="vl-topic-table__title">{{ topic.title }}</th>
-                    <td class="vl-topic-table__num vl-number">{{ topic.feedbackCount }} / {{ formatCount(topic.denominator) }}</td>
-                    <td class="vl-topic-table__num vl-number">{{ topic.ratio.toFixed(1) }}%</td>
-                    <td><span class="vl-topic-table__trend vl-number">{{ trendLabel(topic.trend) }}</span></td>
-                    <td class="vl-topic-table__num vl-number">{{ topic.cpiDisplayValue ?? '—' }}</td>
+                    <td class="vl-table__num">{{ topic.feedbackCount }} / {{ formatCount(topic.denominator) }}</td>
+                    <td class="vl-topic-table__ratio">
+                      <span class="vl-topic-table__ratio-value vl-number">{{ topic.ratio.toFixed(1) }}%</span>
+                      <!-- 占比可视化条:同源数据,宽度按各主题占比归一(最高者占满) -->
+                      <span class="vl-topic-table__ratio-track" aria-hidden="true">
+                        <span class="vl-topic-table__ratio-fill" :style="{ width: `${ratioWidth(topic.ratio)}%` }" />
+                      </span>
+                    </td>
+                    <td><span class="vl-topic-table__trend">{{ trendLabel(topic.trend) }}</span></td>
+                    <td class="vl-table__num">{{ topic.cpiDisplayValue ?? '—' }}</td>
                     <td><StatusBadge kind="review" :state="topic.reviewState" /></td>
                     <td>
                       <VlButton variant="ghost" size="small" @click="openEvidence(topic, $event)">查看证据</VlButton>
@@ -180,7 +196,9 @@
 // 右侧辅助列(待办/最近批次),选中主题后切换为证据(≥1440 非模态侧栏,<1440 模态抽屉)。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { AlarmClock, DataLine, Finished, Warning } from '@element-plus/icons-vue'
 import PageHeader from '../components/common/PageHeader.vue'
+import EmptyState from '../components/common/EmptyState.vue'
 import VlButton from '../components/common/VlButton.vue'
 import VlPanel from '../components/common/VlPanel.vue'
 import MetricCard from '../components/common/MetricCard.vue'
@@ -300,6 +318,13 @@ const trendRange = computed(() => ({
 }))
 const taskAsOfLabel = computed(() => (summary.value?.action_metrics.task_as_of ?? '').slice(0, 10) || '最近')
 
+const maxRatio = computed(() => Math.max(1, ...topics.value.map(t => t.ratio)))
+
+/** 归一化到最高占比,保证最长的条也能读;具体数值始终以文本为准 */
+function ratioWidth(ratio: number): number {
+  return Math.max(2, Math.round((ratio / maxRatio.value) * 100))
+}
+
 function formatCount(value: number | null): string {
   return value === null ? '—' : new Intl.NumberFormat('zh-CN').format(value)
 }
@@ -332,30 +357,34 @@ function goTasks() { void router.push(`/p/${projectId.value}/tasks`) }
   margin: 0;
   color: var(--vl-color-text-muted);
 }
-.vl-topic-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-.vl-topic-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-topic-table tbody th,
-.vl-topic-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
-}
 .vl-topic-table__title {
   font-weight: 600;
   white-space: nowrap;
 }
-.vl-topic-table__num {
-  text-align: right;
-  white-space: nowrap;
+.vl-topic-table__ratio-col {
+  min-width: 9rem;
+}
+.vl-topic-table__ratio {
+  display: grid;
+  gap: var(--vl-space-1);
+  min-width: 8rem;
+}
+.vl-topic-table__ratio-value {
+  font-variant-numeric: tabular-nums;
+}
+.vl-topic-table__ratio-track {
+  display: block;
+  height: 0.375rem;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-subtle);
+  overflow: hidden;
+}
+.vl-topic-table__ratio-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-brand);
+  transition: width var(--vl-motion-normal) var(--vl-ease);
 }
 .vl-topic-table__trend {
   color: var(--vl-color-text-secondary);

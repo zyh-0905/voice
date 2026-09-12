@@ -57,6 +57,48 @@ button, input, select, textarea { font: inherit; }
   .vl-metrics { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* 数据表基线:全站列表统一表头、行悬停与数值列对齐(风格规范 6.3) */
+.vl-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: start;
+}
+.vl-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--vl-z-sticky);
+  background: var(--vl-color-subtle);
+  color: var(--vl-color-text-secondary);
+  font-size: var(--vl-text-xs);
+  font-weight: 600;
+  text-align: start;
+  white-space: nowrap;
+  padding: var(--vl-space-3);
+  border-bottom: 1px solid var(--vl-color-border);
+}
+.vl-table tbody th,
+.vl-table tbody td {
+  padding: var(--vl-space-3);
+  border-bottom: 1px solid var(--vl-color-border);
+  vertical-align: top;
+}
+.vl-table tbody tr {
+  transition: background-color var(--vl-motion-fast) var(--vl-ease);
+}
+.vl-table tbody tr:hover {
+  background: var(--vl-color-hover);
+}
+.vl-table tbody tr:last-child th,
+.vl-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.vl-table__num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* 遮罩层:证据抽屉与窄屏导航共用(背景不可交互语义) */
 .vl-overlay {
   position: fixed;
