@@ -28,6 +28,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'tasks', name: 'tasks', component: () => import('../features/tasks/TasksPage.vue'), meta: { title: '整改任务' } },
       { path: 'tasks/:t', name: 'task-detail', component: () => import('../features/tasks/TaskDetailPage.vue'), meta: { title: '任务详情' } },
       { path: 'reviews', name: 'reviews', component: () => import('../features/reviews/ReviewsPage.vue'), meta: { title: '效果复盘' } },
+      { path: 'reviews/:r', name: 'review-detail', component: () => import('../features/reviews/ReviewDetailPage.vue'), meta: { title: '复盘详情' } },
       { path: 'settings', name: 'settings', component: () => import('../features/settings/SettingsPage.vue'), meta: { title: '设置' } },
       { path: 'exports', name: 'exports', component: () => import('../features/exports/ExportsPage.vue'), meta: { title: '导出' } },
     ],

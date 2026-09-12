@@ -1,4 +1,4 @@
-import { ApiHttpError, type ApiClient, type TaskConfirmBody, type TaskTransitionBody } from './client'
+import { ApiHttpError, type ApiClient, type ReviewCreateBody, type TaskConfirmBody, type TaskTransitionBody } from './client'
 import type {
   AiProvenance,
   CpiResult,
@@ -6,6 +6,7 @@ import type {
   DatasetPreview,
   EvidenceContext,
   EvidenceQuoteItem,
+  ReviewRecord,
   RiskItem,
   SummaryResponse,
   TaskEvent,
@@ -276,6 +277,70 @@ class MockTaskStore {
 
 const MOCK_TASK_STORE = new MockTaskStore()
 
+/** 演示复盘:与后端 W17 同口径(百分点、不可比不输出改善结论)。 */
+class MockReviewStore {
+  private reviews = new Map<string, ReviewRecord>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    this.reviews.set('review-001', this.build('review-001', { n_before: 168, N_before: 1000, n_after: 102, N_after: 1000 }))
+    this.reviews.set('review-002', this.build('review-002', { n_before: 100, N_before: 1000, n_after: 80, N_after: 500 }))
+    this.reviews.set('review-003', this.build('review-003', { n_before: 0, N_before: 0, n_after: 12, N_after: 400 }))
+  }
+
+  private build(id: string, counts: { n_before: number; N_before: number; n_after: number; N_after: number }): ReviewRecord {
+    const comparable = counts.N_before > 0 && counts.N_after > 0
+    const shareBefore = comparable ? (counts.n_before / counts.N_before) * 100 : null
+    const shareAfter = comparable ? (counts.n_after / counts.N_after) * 100 : null
+    const deltaPp = shareBefore !== null && shareAfter !== null ? Math.round((shareAfter - shareBefore) * 100) / 100 : null
+    const relative = deltaPp !== null && shareBefore ? Math.round((deltaPp / shareBefore) * 10000) / 10000 : null
+    return {
+      id, project_id: 'demo-project', run_id: 'run_demo_001', revision: 1,
+      topic_version_ids: ['t1'], task_id: null,
+      before: { n: counts.n_before, N: counts.N_before },
+      after: { n: counts.n_after, N: counts.N_after },
+      metrics: {
+        count_change: counts.n_after - counts.n_before,
+        share_before_pp: shareBefore === null ? null : Math.round(shareBefore * 100) / 100,
+        share_after_pp: shareAfter === null ? null : Math.round(shareAfter * 100) / 100,
+        share_delta_pp: deltaPp,
+        relative_share_change: relative,
+        comparable,
+      },
+      effect_status: comparable ? 'OBSERVED_CHANGE' : 'INSUFFICIENT_DATA',
+      limitations: comparable ? [] : ['数据不足,暂不输出变化结论'],
+    }
+  }
+
+  list(): ReviewRecord[] {
+    this.seed()
+    return [...this.reviews.values()].map(r => ({ ...r }))
+  }
+
+  find(id: string): ReviewRecord | undefined {
+    this.seed()
+    const review = this.reviews.get(id)
+    return review ? { ...review } : undefined
+  }
+
+  create(body: ReviewCreateBody): ReviewRecord {
+    this.seed()
+    const id = `review-${Date.now()}`
+    const review = this.build(id, body)
+    this.reviews.set(id, review)
+    return { ...review }
+  }
+
+  reset() {
+    this.seeded = false
+    this.reviews.clear()
+  }
+}
+
+const MOCK_REVIEW_STORE = new MockReviewStore()
+
 const SYNTHETIC_BATCHES: DatasetBatch[] = [
   { id: 'ds_demo_001', name: '8 月第 4 周反馈批次', rows: 1248, status: 'ready', createdAt: '2026-08-25T10:00:00+08:00' },
   { id: 'ds_demo_002', name: '8 月第 3 周反馈批次', rows: 1105, status: 'ready', createdAt: '2026-08-18T10:00:00+08:00' },
@@ -338,6 +403,20 @@ export const mockApi: ApiClient = {
   async listRisks() {
     await delay(300)
     return SYNTHETIC_RISKS
+  },
+  async listReviews() {
+    await delay(300)
+    return MOCK_REVIEW_STORE.list()
+  },
+  async getReview(_projectId: string, reviewId: string) {
+    await delay(200)
+    const review = MOCK_REVIEW_STORE.find(reviewId)
+    if (!review) throw new ApiHttpError(404, 'review_not_found')
+    return review
+  },
+  async createReview(_projectId: string, body: ReviewCreateBody) {
+    await delay(250)
+    return MOCK_REVIEW_STORE.create(body)
   },
   async recentBatches() {
     await delay(300)

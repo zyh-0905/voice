@@ -3,6 +3,7 @@ import type {
   DatasetBatch,
   DatasetPreview,
   ImportHealth,
+  ReviewRecord,
   RiskItem,
   SummaryResponse,
   TaskDetail,
@@ -24,6 +25,17 @@ export interface TaskTransitionBody {
   expected_version: number
   comment: string
   material_refs?: string[]
+}
+
+export interface ReviewCreateBody {
+  task_id?: string | null
+  run_id: string
+  revision: number
+  topic_version_ids: string[]
+  n_before: number
+  N_before: number
+  n_after: number
+  N_after: number
 }
 
 export interface LoginUser {
@@ -59,6 +71,9 @@ export interface ApiClient {
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
+  listReviews(projectId: string, signal?: AbortSignal): Promise<ReviewRecord[]>
+  getReview(projectId: string, reviewId: string, signal?: AbortSignal): Promise<ReviewRecord>
+  createReview(projectId: string, body: ReviewCreateBody): Promise<ReviewRecord>
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
   /** GET /exports/redacted.csv,返回脱敏导出文件 */
   exportRedactedCsv(projectId: string, signal?: AbortSignal): Promise<Blob>
@@ -167,6 +182,17 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    listReviews(projectId: string, signal?: AbortSignal) {
+      return list<ReviewRecord>(`${project(projectId)}/reviews`, signal)
+    },
+    getReview(projectId: string, reviewId: string, signal?: AbortSignal) {
+      return request<ReviewRecord>(`${project(projectId)}/reviews/${encodeURIComponent(reviewId)}`, { signal })
+    },
+    createReview(projectId: string, body: ReviewCreateBody) {
+      return request<ReviewRecord>(`${project(projectId)}/reviews`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
     },
     async recentBatches(projectId: string, signal?: AbortSignal) {
       // 后端数据集实体为 snake_case 规范形状,此处映射为前端 DatasetBatch 契约

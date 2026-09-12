@@ -144,6 +144,31 @@ export interface TaskSummary {
   source?: string
 }
 
+/** 复盘度量(W17 契约):百分点差值而非百分比混用;分母为 0 不可比 */
+export interface ReviewMetrics {
+  count_change: number | null
+  share_before_pp: number | null
+  share_after_pp: number | null
+  share_delta_pp: number | null
+  relative_share_change: number | null
+  comparable: boolean
+}
+
+/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 限制 */
+export interface ReviewRecord {
+  id: string
+  project_id: string
+  run_id: string
+  revision: number
+  topic_version_ids: string[]
+  task_id: string | null
+  before: { n: number; N: number }
+  after: { n: number; N: number }
+  metrics: ReviewMetrics
+  effect_status: 'NOT_EVALUATED' | 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
+  limitations: string[]
+}
+
 /** 任务事件(状态机流转记录,W15 契约) */
 export interface TaskEvent {
   action: string
