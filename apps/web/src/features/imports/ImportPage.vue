@@ -81,8 +81,8 @@ import VlButton from '../../components/common/VlButton.vue'
 import ImportHealth from '../../components/common/ImportHealth.vue'
 import FieldMapping from './FieldMapping.vue'
 import DatasetList from './DatasetList.vue'
+import type { DatasetPreview, ImportHealthView } from '../../types/domain'
 import { useImportFlow, syntheticHealth, type ImportStep } from './service'
-import type { ImportHealthView } from '../../types/domain'
 
 const route = useRoute()
 const projectId = computed(() => String(route.params.p))
@@ -99,6 +99,7 @@ const file = ref<File | null>(null)
 const consent = ref(false)
 const busy = ref(false)
 const error = ref('')
+const dataset = ref<DatasetPreview | null>(null)
 const health = ref<ImportHealthView>(syntheticHealth())
 const warnings = ref<string[]>([])
 
@@ -116,7 +117,9 @@ async function upload() {
   busy.value = true
   error.value = ''
   try {
-    await client.upload(projectId.value, file.value)
+    // 必须留下返回的批次:后续的校验与治理报告都按 dataset_id 走。
+    // 此前返回值被丢弃,下游只能去找一个没人写的 sessionStorage 键。
+    dataset.value = await client.upload(projectId.value, file.value)
     persistStep('mapping')
   } catch (err) {
     error.value = err instanceof ApiHttpError ? (err.body?.message || err.message) : '上传失败,请稍后重试'
@@ -125,11 +128,22 @@ async function upload() {
   }
 }
 
-function onMapped() {
-  // 进入治理报告;合成健康视图为确定性演示数据(常显演示身份),真实实现替换为服务端返回
-  health.value = syntheticHealth()
-  warnings.value = health.value.undatedRows > 0 ? ['部分反馈缺少时间字段,趋势分析将受限'] : []
-  persistStep('report')
+async function onMapped() {
+  // 进入治理报告前先让服务端完成校验:这既是治理报告的数字来源,也是批次转入 READY
+  // 的必经步骤——未校验的批次会被 create_analysis 以 dataset_not_ready 拒绝。
+  // 此前这里填的是写死的 syntheticHealth(),报告与实际文件无关,批次也永远停在 uploaded。
+  if (!dataset.value) { error.value = '批次尚未上传,请返回上一步'; return }
+  busy.value = true
+  error.value = ''
+  try {
+    health.value = await client.health(projectId.value, dataset.value.id)
+    warnings.value = health.value.undatedRows > 0 ? ['部分反馈缺少时间字段,趋势分析将受限'] : []
+    persistStep('report')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '生成治理报告失败'
+  } finally {
+    busy.value = false
+  }
 }
 
 function goAnalyze() {

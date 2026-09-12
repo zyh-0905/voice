@@ -405,7 +405,12 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
                 'trend': None, 'cpiDisplayValue': None, 'reviewState': 'pending',
                 'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
                              'revision': snapshot['revision'], 'summary': t.get('summary', ''),
-                             'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
+                             'cpi': None,
+                             # 引文必须来自本 run 发布的证据。此前这里是硬编码的空数组,
+                             # 于是真实模式下证据面板的「原文与来源」永远空白,而 mock 有内容——
+                             # 前端契约与后端实现各说各话,只有真连一次才看得出来。
+                             'quotes': _evidence_quotes(published, t['topic_id'], snapshot.get('revision')),
+                             'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
             }
             for t in snapshot.get('topics') or []
         ]
@@ -416,6 +421,39 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
         {'id': 'product', 'title': '产品使用', 'feedbackCount': 121, 'denominator': 1000, 'ratio': 12.1, 'trend': 'flat', 'cpiDisplayValue': '54', 'reviewState': 'pending', 'evidence': {'topicId': 'product', 'topicTitle': '产品使用', 'runId': 'run_demo_001', 'revision': 1, 'summary': '使用引导与功能说明仍有改善空间。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}}},
     ]
     return {'items': rows, 'total': len(rows)}
+
+
+def _evidence_quotes(run: dict, topic_id: str, revision) -> list[dict]:
+    """把已发布主题的证据映射成前端引文契约(EvidenceQuoteItem)。
+
+    引文是脱敏正文里的精确子串,offset 为其 Unicode 字符位置——前端据此高亮,
+    不能自行猜 token 位置(计划 8.2)。
+    """
+    evidence = ((run.get('result') or {}).get('evidence_by_topic') or {}).get(topic_id) or []
+    sources = {feedback_id: text for feedback_id, text in _run_sources(run).items()}
+    quotes: list[dict] = []
+    for item in evidence:
+        feedback_id = str(item.get('feedback_id') or '')
+        text = sources.get(feedback_id, '')
+        start = int(item.get('quote_start') or 0)
+        end = int(item.get('quote_end') or 0)
+        quotes.append({
+            'feedbackId': feedback_id,
+            'text': text,
+            'start': start,
+            'end': end,
+            'channel': item.get('channel'),
+            'occurredAt': item.get('occurred_at'),
+            'rowIndex': item.get('source_row'),
+        })
+    return quotes
+
+
+def _run_sources(run: dict) -> dict[str, str]:
+    """run 输入集合的 feedback_id → 脱敏正文。"""
+    from .ingestion import iter_run_feedback, row_text
+    return {feedback_id: row_text(row) for feedback_id, row in iter_run_feedback(run)}
+
 
 def _latest_published_run(project_id: str) -> dict | None:
     """本项目最近已发布 revision 的 run;无发布返回 None。"""

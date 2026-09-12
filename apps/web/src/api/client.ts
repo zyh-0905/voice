@@ -2,7 +2,7 @@ import type {
   AnalysisRun,
   DatasetBatch,
   DatasetPreview,
-  ImportHealth,
+  ImportHealthView,
   ReviewRecord,
   RiskItem,
   SummaryResponse,
@@ -193,8 +193,9 @@ export interface AuthConfig {
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
   upload(projectId: string, file: File, signal?: AbortSignal): Promise<DatasetPreview>
-  health(id: string, signal?: AbortSignal): Promise<ImportHealth>
-  health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealth>
+  /** POST /datasets/{id}/validate:完成治理校验并把批次转为 READY,返回 6 项治理计数 */
+  health(id: string, signal?: AbortSignal): Promise<ImportHealthView>
+  health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealthView>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
   /** POST /auth/login,返回真实 access_token 与用户 */
@@ -344,11 +345,26 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       form.append('consent', 'true')
       return request<DatasetPreview>(`${project(projectId)}/datasets`, { method: 'POST', body: form, signal })
     },
-    health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
+    async health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
       const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
       const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
-      return request<ImportHealth>(`${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' }, signal })
+      // POST /datasets/{id}/validate 同时完成校验(批次转入 READY)并返回治理统计。
+      // 消费方(导入向导的治理报告)要的是 6 项计数,而服务端把它们放在 preview.stats
+      // 里,所以在这里映射一次——否则 mock 与真实各返回一种形状,报告只能靠写死的常量。
+      const body = await request<{ preview?: { stats?: Record<string, number> } }>(
+        `${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`,
+        { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' }, signal },
+      )
+      const stats = body.preview?.stats ?? {}
+      return {
+        inputRows: stats.total ?? 0,
+        validRows: stats.valid ?? 0,
+        invalidRows: stats.invalid ?? 0,
+        duplicateRows: stats.duplicate ?? 0,
+        redactedRows: stats.redacted ?? 0,
+        undatedRows: stats.missing_time ?? 0,
+      }
     },
     runAnalysis(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'

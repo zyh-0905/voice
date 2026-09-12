@@ -660,7 +660,11 @@ const SYNTHETIC_BATCHES: DatasetBatch[] = [
 
 export const mockApi: ApiClient = {
   upload: uploadMock,
-  async health() { return { completeness: 0.98, piiMasked: true, timeFieldMissing: 12 } },
+  // 与真实实现同形状:治理报告的 6 项计数(见 client.health 的映射)
+  async health() {
+    await delay(200)
+    return { inputRows: 1248, validRows: 1240, invalidRows: 3, duplicateRows: 5, redactedRows: 812, undatedRows: 12 }
+  },
   async runAnalysis() {
     await delay(500)
     return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
