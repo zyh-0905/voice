@@ -10,6 +10,7 @@ body {
   line-height: var(--vl-leading-body);
 }
 button, input, select, textarea { font: inherit; }
+h1, h2, h3 { letter-spacing: var(--vl-tracking-tight); }
 
 /* 工作台布局基础 */
 .vl-shell { min-height: 100dvh; }

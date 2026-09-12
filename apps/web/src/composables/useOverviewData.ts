@@ -2,7 +2,7 @@
 // 单一 status 状态机 + refreshing/stale 附加状态;项目切换 Abort 旧请求;
 // 校验响应 project_id 上下文;服务端数据由 composable 管理,不复制进 Pinia。
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import type { DatasetBatch, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
+import type { DatasetBatch, RiskItem, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
 import { ApiHttpError, apiClient, type ApiClient } from '../api/client'
 
 export type AsyncStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'forbidden'
@@ -13,6 +13,7 @@ export interface OverviewData {
   trend: Ref<TrendPoint[]>
   taskSummaries: Ref<TaskSummary[]>
   recentBatches: Ref<DatasetBatch[]>
+  risks: Ref<RiskItem[]>
   status: Ref<AsyncStatus>
   refreshing: Ref<boolean>
   stale: Ref<boolean>
@@ -27,6 +28,7 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
   const trend = ref<TrendPoint[]>([])
   const taskSummaries = ref<TaskSummary[]>([])
   const recentBatches = ref<DatasetBatch[]>([])
+  const risks = ref<RiskItem[]>([])
   const status = ref<AsyncStatus>('idle')
   const refreshing = ref(false)
   const stale = ref(false)
@@ -49,12 +51,13 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
     }
     error.value = null
     try {
-      const [nextSummary, nextTopics, nextTrend, nextTasks, nextBatches] = await Promise.all([
+      const [nextSummary, nextTopics, nextTrend, nextTasks, nextBatches, nextRisks] = await Promise.all([
         client.summary(projectId.value, signal),
         client.topics(projectId.value, signal),
         client.trend(projectId.value, signal),
         client.taskSummaries(projectId.value, signal),
         client.recentBatches(projectId.value, signal),
+        client.listRisks(projectId.value, signal),
       ])
       // 上下文校验:快速切项目后旧响应不得覆盖新界面
       if (nextSummary.project_id !== projectId.value) {
@@ -65,6 +68,7 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
       trend.value = nextTrend
       taskSummaries.value = nextTasks
       recentBatches.value = nextBatches
+      risks.value = nextRisks
       loadedProjectId = projectId.value
       // 无已发布 run = 尚未分析,与「没有匹配结果」区分(UI-13)
       status.value = nextSummary.run_id === null ? 'empty' : 'success'
@@ -91,6 +95,7 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
         trend.value = []
         taskSummaries.value = []
         recentBatches.value = []
+        risks.value = []
         loadedProjectId = null
         status.value = 'error'
         error.value = err instanceof Error ? err.message : String(err)
@@ -107,6 +112,7 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
     trend,
     taskSummaries,
     recentBatches,
+    risks,
     status,
     refreshing,
     stale,
