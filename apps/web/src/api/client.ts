@@ -49,6 +49,19 @@ export interface DeletionTarget {
   target_id: string
 }
 
+export interface ExportJob {
+  id: string
+  project_id: string
+  scope: string
+  state: string
+  row_count: number | null
+  created_at: string
+  expires_at: string
+  expired: boolean
+  invalidated: boolean
+  download_path: string
+}
+
 export interface DeletionBody extends DeletionTarget {
   /** 仅执行删除需要:用户逐字输入的目标名称 */
   confirm_name: string
@@ -148,8 +161,10 @@ export interface ApiClient {
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
   previewDeletion(projectId: string, body: DeletionTarget): Promise<DeletionPreview>
   executeDeletion(projectId: string, body: DeletionBody, idempotencyKey: string): Promise<DeletionReceipt>
-  /** GET /exports/redacted.csv,返回脱敏导出文件 */
-  exportRedactedCsv(projectId: string, signal?: AbortSignal): Promise<Blob>
+  /** POST /exports 创建导出任务(24h 失效) */
+  createExport(projectId: string, body: { scope: string }, idempotencyKey: string): Promise<ExportJob>
+  /** 下载导出文件:每次重新鉴权,过期/失效返回 410 */
+  downloadExport(projectId: string, exportId: string): Promise<Blob>
 }
 
 /** 按 VITE_USE_MOCK 选择真实/mock 客户端;所有页面与 composable 统一走此入口 */
@@ -271,14 +286,22 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         method: 'POST', body: JSON.stringify({ assertion }), headers: { 'Content-Type': 'application/json' },
       })
     },
-    async exportRedactedCsv(projectId: string, signal?: AbortSignal) {
-      const token = getAccessToken()
-      const response = await fetch(`${base}${project(projectId)}/exports/redacted.csv`, {
-        signal,
-        credentials: 'include',
-        headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    createExport(projectId: string, body: { scope: string }, idempotencyKey: string) {
+      return request<ExportJob>(`${project(projectId)}/exports`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
       })
-      if (!response.ok) throw new ApiHttpError(response.status, `Export failed (${response.status})`)
+    },
+    async downloadExport(projectId: string, exportId: string) {
+      const token = getAccessToken()
+      const response = await fetch(
+        `${base}${project(projectId)}/exports/${encodeURIComponent(exportId)}/download`,
+        { credentials: 'include', headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+      )
+      if (!response.ok) {
+        // 410 表示导出已过期或失效:提示重新导出,而不是重试旧链接
+        throw new ApiHttpError(response.status, response.status === 410 ? 'export_expired' : `Export failed (${response.status})`)
+      }
       return response.blob()
     },
     summary(projectId: string, signal?: AbortSignal) {

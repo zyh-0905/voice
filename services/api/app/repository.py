@@ -41,7 +41,7 @@ class InMemoryRepository:
         self.analyses = {}
         self.outbox = []
         self.idempotency = {}
-        self.risks, self.tasks, self.reviews, self.audits, self.deletions = {}, {}, {}, {}, {}
+        self.risks, self.tasks, self.reviews, self.audits, self.deletions, self.exports = {}, {}, {}, {}, {}, {}
 
     def _create(self, collection, value):
         key = value['id']

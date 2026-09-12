@@ -542,7 +542,19 @@ export const mockApi: ApiClient = {
       user: { id: 'demo-user', name: 'Demo Analyst', email: 'demo@voicelens.local', role: 'ANALYST' },
     }
   },
-  async exportRedactedCsv() {
+  async createExport(projectId: string, body: { scope: string }, _key: string) {
+    await delay(250)
+    const now = new Date()
+    const expires = new Date(now.getTime() + 24 * 3600 * 1000)
+    return {
+      id: 'exp_demo_1', project_id: projectId, scope: body.scope, state: 'DONE',
+      row_count: SYNTHETIC_BATCHES.reduce((sum, b) => sum + b.rows, 0),
+      created_at: now.toISOString(), expires_at: expires.toISOString(),
+      expired: false, invalidated: false,
+      download_path: `/api/v1/projects/${projectId}/exports/exp_demo_1/download`,
+    }
+  },
+  async downloadExport() {
     await delay(200)
     return new Blob(['dataset_id,row_index,data\n'], { type: 'text/csv;charset=utf-8' })
   },

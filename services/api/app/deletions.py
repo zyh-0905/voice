@@ -119,6 +119,11 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         _safe_delete(repository, repository.delete_analysis, run['id'])
     steps.append({'name': 'purge_runs', 'status': 'done', 'runs': len(runs)})
 
+    # 3.5) 未过期的导出一并失效:删除后不留可用下载链接(10.3)
+    from .exports import invalidate_project_exports
+    steps.append({'name': 'invalidate_exports', 'status': 'done',
+                  'invalidated': invalidate_project_exports(repository, project_id)})
+
     # 4) 清理数据集(原文件与导出)
     dataset_ids = [target_id] if target_type == 'dataset' else [d['id'] for d in _datasets_of(repository, project_id)]
     for dataset_id in dataset_ids:

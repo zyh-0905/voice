@@ -726,6 +726,80 @@ def export_redacted(project_id: str, user: dict = Depends(require_project_access
             writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
 
+
+
+class ExportRequest(BaseModel):
+    scope: str = 'project'          # 首版仅 CSV,项目范围
+    run_id: str | None = None
+    review_id: str | None = None
+
+
+@app.post('/api/v1/projects/{project_id}/exports', status_code=202)
+def create_project_export(project_id: str, req: ExportRequest, idempotency_key: str | None = Header(None),
+                          user: dict = Depends(require_project_analyst)):
+    """创建导出任务:只导出脱敏字段;24 小时失效,不提供永久链接。"""
+    from .exports import create_export
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    if req.scope not in ('project', 'dataset'):
+        raise HTTPException(422, detail={'code': 'unsupported_scope'})
+    if idempotency_key:
+        previous = repository.get_idempotency(idempotency_key)
+        if previous:
+            from .exports import get_export, view as export_view
+            existing = get_export(repository, project_id, previous['analysis_id'])
+            if existing is not None:
+                return export_view(existing)
+    export_id = f'exp_{uuid4().hex[:10]}'
+    rows: list[dict] = []
+    for dataset in datasets.values():
+        if dataset.get('project_id') != project_id:
+            continue
+        for index, row in enumerate((dataset.get('preview') or {}).get('rows') or []):
+            # 与既有下载端点一致:导出边界再做一次脱敏,列固定不泄露任意来源列名
+            clean = {str(key): redact_text(str(value))['text'] for key, value in (row or {}).items()}
+            clean['dataset_id'] = dataset.get('id', '')
+            clean['row_index'] = index
+            rows.append(clean)
+    columns = ['dataset_id', 'row_index', 'data']
+    payload = [{'dataset_id': r['dataset_id'], 'row_index': r['row_index'],
+                'data': json.dumps({k: v for k, v in r.items() if k not in ('dataset_id', 'row_index')},
+                                   ensure_ascii=False, separators=(',', ':'))} for r in rows]
+    result = create_export(repository, project_id, req.scope, payload, columns, export_id, user.get('id', 'demo-user'))
+    _record_audit(project_id, 'export.created', user, {'export_id': export_id, 'rows': result['row_count']})
+    if idempotency_key:
+        repository.create_idempotency(idempotency_key, {
+            'project_id': project_id, 'fingerprint': req.scope, 'analysis_id': export_id,
+        })
+    return result
+
+
+@app.get('/api/v1/projects/{project_id}/exports/{export_id}')
+def get_export_status(project_id: str, export_id: str, user: dict = Depends(require_project_access)):
+    """导出状态与时效:不含正文;已失效/过期按 410 返回。"""
+    from .exports import ExportError, download_export, view as export_view
+    try:
+        return export_view(download_export(repository, project_id, export_id))
+    except ExportError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code == 'export_not_found' else 410, detail={'code': code})
+
+
+@app.get('/api/v1/projects/{project_id}/exports/{export_id}/download')
+def download_project_export(project_id: str, export_id: str, user: dict = Depends(require_project_access)):
+    """下载 CSV:每次重新鉴权;过期或已失效返回 410。"""
+    from .exports import ExportError, download_export
+    try:
+        export = download_export(repository, project_id, export_id)
+    except ExportError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code == 'export_not_found' else 410, detail={'code': code})
+    return Response(
+        content=export.get('content') or '', media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'},
+    )
+
+
 @app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
 def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_analyst)):
     dataset = datasets.get(dataset_id)

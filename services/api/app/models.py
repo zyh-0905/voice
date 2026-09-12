@@ -1,5 +1,5 @@
 ﻿from datetime import datetime
-from sqlalchemy import DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -70,6 +70,25 @@ class SessionToken(Base):
     exp: Mapped[float] = mapped_column(nullable=False)
     # 空闲过期时间:每次访问滑动续期
     idle_exp: Mapped[float | None] = mapped_column(nullable=True)
+
+class ExportJob(Base):
+    """10.3 导出:24 小时失效、下载重新鉴权;删除项目后未过期导出一并失效。
+
+    演示实现把内容存在行内;生产应落对象存储并以短期签名路径下发。
+    """
+    __tablename__ = 'export_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default='DONE', nullable=False)
+    columns: Mapped[list | None] = mapped_column(JSON)
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    content: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[str | None] = mapped_column(String(64))
+    invalidated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
 
 class DeletionJob(Base):
     """10.4 删除登记:写 tombstone 后级联清理,回执不含正文。"""
