@@ -43,7 +43,11 @@ jobs:
       - working-directory: services/api
         run: alembic -c alembic.ini upgrade head
       - run: python -m compileall services/api/app
-      - run: PYTHONPATH=services/api pytest services/api/tests -q
+      # PYTHONPATH 同时需要仓库根:test_evaluation.py 以 services.api.* 绝对导入评测模块,
+      # 只给 services/api 会在收集阶段 ModuleNotFoundError,整个套件一条都不跑。
+      # 用 python -m pytest(与 README 的手册一致)——plain pytest 不会把 cwd 放进 sys.path。
+      - name: Backend tests
+        run: PYTHONPATH=services/api:. python -m pytest services/api/tests -q
       - name: Database readiness smoke
         run: >-
           python -c "from sqlalchemy import create_engine, text;
