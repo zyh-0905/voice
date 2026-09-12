@@ -114,8 +114,19 @@
       <template v-if="dialog.spec?.kind === 'confirm'" #form>
         <div class="vl-field vl-confirm-form__field">
           <label for="vl-task-owner">负责人</label>
-          <input id="vl-task-owner" v-model="owner" data-testid="task-owner-input" class="vl-confirm-form__input" placeholder="选择或输入负责人" />
+          <!-- W16:负责人只能从项目成员接口选择,不提供自由文本兜底 -->
+          <select
+            id="vl-task-owner"
+            v-model="owner"
+            data-testid="task-owner-input"
+            class="vl-confirm-form__input"
+            :disabled="membersStatus !== 'success'"
+          >
+            <option value="">{{ membersStatus === 'loading' ? '正在加载成员…' : '请选择负责人' }}</option>
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
           <span v-if="formError" class="vl-confirm-form__error" data-testid="owner-validation-error">{{ formError }}</span>
+          <span v-if="membersStatus === 'error'" class="vl-confirm-form__error" data-testid="task-owner-error" role="alert">{{ membersError }}</span>
         </div>
         <div class="vl-field vl-confirm-form__field">
           <label for="vl-task-due">截止时间</label>
@@ -142,7 +153,7 @@ import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
 import TaskTimeline from '../../components/common/TaskTimeline.vue'
 import HumanReviewDialog from '../../components/common/HumanReviewDialog.vue'
-import { ApiHttpError, apiClient, type TaskTransitionBody } from '../../api/client'
+import { ApiHttpError, apiClient, type ProjectMember, type TaskTransitionBody } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import { effectStatusLabel } from '../../lib/ui-status'
 import type { TaskDetail } from '../../types/domain'
@@ -224,6 +235,24 @@ const dueAt = ref('')
 const acceptance = ref('')
 const formError = ref('')
 
+// W16:负责人候选项只来自成员接口;成功后复用,加载失败在对话框内明示(不回退自由文本)
+const members = ref<ProjectMember[]>([])
+const membersStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
+const membersError = ref('')
+
+async function loadMembers() {
+  if (membersStatus.value === 'loading' || membersStatus.value === 'success') return
+  membersStatus.value = 'loading'
+  membersError.value = ''
+  try {
+    members.value = await client.listMembers(projectId.value)
+    membersStatus.value = 'success'
+  } catch (err) {
+    membersStatus.value = 'error'
+    membersError.value = err instanceof Error ? err.message : '无法获取项目成员,请重试'
+  }
+}
+
 function onPrimary() {
   const spec = primaryAction.value
   if (spec) openDialog(spec)
@@ -235,9 +264,11 @@ function onSecondary() {
 
 function openDialog(spec: ActionSpec) {
   formError.value = ''
-  owner.value = task.value?.owner ?? ''
+  owner.value = task.value?.owner_id ?? ''
   dueAt.value = task.value?.dueAt?.slice(0, 10) ?? ''
   acceptance.value = task.value?.acceptance ?? ''
+  // 派发对话框需要成员列表;其余动作不含负责人字段
+  if (spec.kind === 'confirm') void loadMembers()
   dialog.value = {
     open: true,
     title: spec.label,
@@ -271,9 +302,18 @@ async function onDialogConfirm(comment: string) {
   const spec = dialog.value.spec
   if (!spec) return
   if (spec.kind === 'confirm') {
+    // 成员列表不可用时不允许派发:不回退到自由文本,也不静默通过
+    if (membersStatus.value === 'error') {
+      formError.value = `成员列表加载失败:${membersError.value}`
+      return
+    }
+    if (membersStatus.value !== 'success') {
+      formError.value = '成员列表加载中,请稍候再试'
+      return
+    }
     // 可修复的「负责人未选」保留对话框可点击以触发校验,不清空其他字段
     if (!owner.value.trim() || !dueAt.value.trim() || !acceptance.value.trim()) {
-      formError.value = '请填写负责人、期限与验收标准'
+      formError.value = '请选择负责人并填写期限与验收标准'
       return
     }
   }

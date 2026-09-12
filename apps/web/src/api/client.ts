@@ -58,6 +58,42 @@ export interface TaskPatchBody {
   acceptance?: string
 }
 
+// —— W03 项目成员与项目设置 ——
+
+export type ProjectMemberRole = 'OWNER' | 'EDITOR' | 'VIEWER'
+
+export interface ProjectMember {
+  id: string
+  display_name: string
+  role: ProjectMemberRole
+}
+
+export interface ProjectSettingsLimits {
+  max_feedback_rows: number
+  max_upload_bytes: number
+}
+
+export interface ProjectSettingsRules {
+  min_severity: string
+  scan_on_import: boolean
+}
+
+export interface ProjectSettings {
+  timezone: string
+  limits: ProjectSettingsLimits
+  rules: ProjectSettingsRules
+  model_available: boolean
+  version: number
+}
+
+export interface ProjectSettingsPatchBody {
+  expected_version: number
+  timezone?: string
+  limits?: ProjectSettingsLimits
+  rules?: ProjectSettingsRules
+  model_available?: boolean
+}
+
 export interface FeedbackSource {
   feedback_id: string
   dataset_id: string
@@ -172,6 +208,12 @@ export interface ApiClient {
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
   patchTask(projectId: string, taskId: string, body: TaskPatchBody): Promise<TaskSummary>
+  /** W16:项目成员列表;任务负责人只能从此列表选择 */
+  listMembers(projectId: string, signal?: AbortSignal): Promise<ProjectMember[]>
+  /** W03/7.2:项目设置(时区、限额、规则、模型可用性) */
+  getSettings(projectId: string, signal?: AbortSignal): Promise<ProjectSettings>
+  /** W03/7.2:写入项目设置(仅 OWNER);expected_version 过期返回 409,不做幂等键 */
+  patchSettings(projectId: string, body: ProjectSettingsPatchBody): Promise<ProjectSettings>
   getFeedback(projectId: string, feedbackId: string, signal?: AbortSignal): Promise<FeedbackSource>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
   reviewRisk(projectId: string, riskId: string, body: RiskReviewBody): Promise<RiskItem>
@@ -374,6 +416,17 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     patchTask(projectId: string, taskId: string, body: TaskPatchBody) {
       return request<TaskSummary>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    listMembers(projectId: string, signal?: AbortSignal) {
+      return list<ProjectMember>(`${project(projectId)}/members`, signal)
+    },
+    getSettings(projectId: string, signal?: AbortSignal) {
+      return request<ProjectSettings>(`${project(projectId)}/settings`, { signal })
+    },
+    patchSettings(projectId: string, body: ProjectSettingsPatchBody) {
+      return request<ProjectSettings>(`${project(projectId)}/settings`, {
         method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
       })
     },

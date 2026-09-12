@@ -3,27 +3,54 @@
     <PageHeader :icon="Setting" title="设置" description="项目治理策略与运行模式;删除等危险操作置于页面底部并需二次确认。" />
 
     <VlPanel class="vl-settings__section" title="时间策略">
-      <div class="vl-field">
-        <label for="vl-settings-timezone" class="vl-settings__label">默认时区</label>
-        <select id="vl-settings-timezone" v-model="timezone" class="vl-settings__select">
-          <option value="Asia/Shanghai">Asia/Shanghai</option>
-          <option value="UTC">UTC</option>
-        </select>
-        <p class="vl-settings__hint">分析将按所选时区解释事件时间,修改后仅影响新建分析。</p>
-      </div>
-      <div class="vl-field">
-        <label for="vl-settings-window" class="vl-settings__label">默认时间窗口</label>
-        <select id="vl-settings-window" v-model="window" class="vl-settings__select">
-          <option value="30">最近 30 天</option>
-          <option value="90">最近 90 天</option>
-        </select>
-      </div>
-      <div class="vl-settings__actions">
-        <VlButton variant="primary" data-testid="save-settings" :disabled="!canAct" @click="save">
-          {{ canAct ? '保存设置' : '只读成员不可修改' }}
-        </VlButton>
-        <p v-if="saved" class="vl-settings__success" data-testid="settings-saved">设置已保存</p>
-      </div>
+      <AsyncState :status="status" :message="error ?? undefined" empty-message="暂无项目设置。">
+        <template #error>
+          <p class="vl-settings__error" data-testid="settings-load-error">暂时无法获取项目设置,请稍后重试。</p>
+          <VlButton variant="secondary" @click="load">重试</VlButton>
+        </template>
+
+        <template v-if="settings">
+          <div class="vl-field">
+            <label for="vl-settings-timezone" class="vl-settings__label">默认时区</label>
+            <select id="vl-settings-timezone" v-model="timezone" class="vl-settings__select">
+              <option value="Asia/Shanghai">Asia/Shanghai</option>
+              <option value="UTC">UTC</option>
+            </select>
+            <p class="vl-settings__hint">分析将按所选时区解释事件时间,修改后仅影响新建分析。</p>
+          </div>
+          <div class="vl-field">
+            <label for="vl-settings-window" class="vl-settings__label">默认时间窗口</label>
+            <select id="vl-settings-window" v-model="window" class="vl-settings__select">
+              <option value="30">最近 30 天</option>
+              <option value="90">最近 90 天</option>
+            </select>
+          </div>
+          <p class="vl-settings__hint" data-testid="settings-meta">
+            规则版本 v{{ settings.version }} · {{ settings.model_available ? '模型可用' : '模型暂不可用' }}
+          </p>
+          <div class="vl-settings__actions">
+            <VlButton
+              variant="primary"
+              data-testid="save-settings"
+              :disabled="!canAct || saving"
+              :loading="saving"
+              @click="save"
+            >
+              {{ canAct ? '保存设置' : '只读成员不可修改' }}
+            </VlButton>
+            <p v-if="saved" class="vl-settings__success" data-testid="settings-saved">设置已保存</p>
+          </div>
+          <p v-if="!canAct" class="vl-settings__readonly" data-testid="settings-readonly-hint">
+            当前角色为只读成员,无权保存项目设置。
+          </p>
+          <!-- W03:409 版本冲突保留用户选择,由用户决定何时重新加载 -->
+          <div v-if="conflict" class="vl-settings__conflict" data-testid="settings-conflict" role="alert">
+            <p class="vl-settings__conflict-text">{{ conflict }}</p>
+            <VlButton variant="secondary" data-testid="settings-reload" @click="load">重新加载</VlButton>
+          </div>
+          <p v-if="saveError" class="vl-settings__error" data-testid="settings-save-error" role="alert">{{ saveError }}</p>
+        </template>
+      </AsyncState>
     </VlPanel>
 
     <VlPanel title="演示模式">
@@ -77,15 +104,17 @@
 
 <script setup lang="ts">
 // SettingsPage — 工程计划 9.1/规范第 7 节:分组表单,危险区置底;
+// W03/7.2:设置从服务端加载,保存带 expected_version,409 冲突保留本地选择并可重新加载;
 // 删除影响说明与二次确认;只读成员不写入。不再使用浏览器 confirm 阻断流程。
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Setting } from '@element-plus/icons-vue'
-import { apiClient, type DeletionPreview } from '../../api/client'
+import { ApiHttpError, apiClient, type DeletionPreview, type ProjectSettings } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlPanel from '../../components/common/VlPanel.vue'
 import VlButton from '../../components/common/VlButton.vue'
+import AsyncState from '../../components/common/AsyncState.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -98,6 +127,57 @@ const saved = ref(false)
 const confirmOpen = ref(false)
 const projectId = String(route.params.p)
 const client = apiClient()
+
+// 设置读取/写入状态:冲突与其它错误分开提示,保存成功后短暂展示
+const status = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
+const error = ref('')
+const settings = ref<ProjectSettings | null>(null)
+const saving = ref(false)
+const conflict = ref('')
+const saveError = ref('')
+
+async function load() {
+  status.value = 'loading'
+  conflict.value = ''
+  saveError.value = ''
+  try {
+    const data = await client.getSettings(projectId)
+    settings.value = data
+    timezone.value = data.timezone
+    status.value = 'success'
+  } catch (err) {
+    status.value = 'error'
+    error.value = err instanceof Error ? err.message : String(err)
+  }
+}
+onMounted(load)
+
+async function save() {
+  if (!canAct.value || !settings.value) return
+  saving.value = true
+  saved.value = false
+  conflict.value = ''
+  saveError.value = ''
+  try {
+    // expected_version 来自已加载设置:过期表示他人已修改,不做幂等键
+    settings.value = await client.patchSettings(projectId, {
+      expected_version: settings.value.version,
+      timezone: timezone.value,
+    })
+    saved.value = true
+    globalThis.setTimeout(() => (saved.value = false), 2000)
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 409) {
+      conflict.value = '设置已被其他人修改,当前版本无法保存;可重新加载后再试(重新加载前你的选择会保留)。'
+    } else if (err instanceof ApiHttpError && err.status === 403) {
+      saveError.value = '当前角色无权修改项目设置。'
+    } else {
+      saveError.value = err instanceof Error ? err.message : '保存失败,请稍后重试'
+    }
+  } finally {
+    saving.value = false
+  }
+}
 
 const impact = ref<DeletionPreview | null>(null)
 const confirmName = ref('')
@@ -119,10 +199,6 @@ const impactRows = computed(() => {
   ]
 })
 
-function save() {
-  saved.value = true
-  globalThis.setTimeout(() => (saved.value = false), 2000)
-}
 async function startDelete() {
   if (!canAct.value) return
   deleteError.value = ''
@@ -193,6 +269,20 @@ async function doDelete() {
 .vl-settings__success {
   margin: 0;
   color: var(--vl-color-success);
+}
+.vl-settings__conflict {
+  display: flex;
+  align-items: center;
+  gap: var(--vl-space-3);
+  margin-top: var(--vl-space-3);
+  padding: var(--vl-space-2) var(--vl-space-3);
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-warning-bg);
+  color: var(--vl-color-warning);
+  font-size: var(--vl-text-sm);
+}
+.vl-settings__conflict-text {
+  margin: 0;
 }
 .vl-settings__danger {
   border-color: var(--vl-color-danger-bg);

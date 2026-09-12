@@ -10,6 +10,9 @@ import {
   type TaskPatchBody,
   type TaskTransitionBody,
   type TopicDetailResponse,
+  type ProjectMember,
+  type ProjectSettings,
+  type ProjectSettingsPatchBody,
 } from './client'
 import type {
   AiProvenance,
@@ -194,6 +197,49 @@ const SYNTHETIC_RISKS: RiskItem[] = [
   { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN' },
   { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
 ]
+
+/** W16 合成项目成员:派发任务的负责人只能来自成员接口;owner-1 沿用既有 E2E 流程。 */
+const SYNTHETIC_MEMBERS: ProjectMember[] = [
+  { id: 'owner-1', display_name: 'Demo Analyst', role: 'OWNER' },
+  { id: 'viewer-1', display_name: 'Demo Viewer', role: 'VIEWER' },
+]
+
+function defaultProjectSettings(): ProjectSettings {
+  return {
+    timezone: 'UTC',
+    limits: { max_feedback_rows: 5000, max_upload_bytes: 50 * 1024 * 1024 },
+    rules: { min_severity: 'LOW', scan_on_import: true },
+    model_available: true,
+    version: 1,
+  }
+}
+
+/** 演示项目设置:默认值与后端 W03 一致;expected_version 过期抛 409 VERSION_CONFLICT。 */
+class MockSettingsStore {
+  private settings = defaultProjectSettings()
+
+  get(): ProjectSettings {
+    return { ...this.settings, limits: { ...this.settings.limits }, rules: { ...this.settings.rules } }
+  }
+
+  patch(body: ProjectSettingsPatchBody): ProjectSettings {
+    if (Number(body.expected_version) !== this.settings.version) throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    const hasChanges = [body.timezone, body.limits, body.rules, body.model_available].some(value => value !== undefined)
+    if (!hasChanges) throw new ApiHttpError(422, 'no_fields')
+    if (body.timezone !== undefined) this.settings.timezone = body.timezone
+    if (body.limits !== undefined) this.settings.limits = { ...body.limits }
+    if (body.rules !== undefined) this.settings.rules = { ...body.rules }
+    if (body.model_available !== undefined) this.settings.model_available = body.model_available
+    this.settings.version += 1
+    return this.get()
+  }
+
+  reset() {
+    this.settings = defaultProjectSettings()
+  }
+}
+
+const MOCK_SETTINGS_STORE = new MockSettingsStore()
 
 /** 演示任务状态机:与后端 W15 语义一致(草稿不能直接验收、负责人不得自验收、幂等确认)。 */
 class MockTaskStore {
@@ -619,6 +665,18 @@ export const mockApi: ApiClient = {
   async patchTask(_projectId: string, taskId: string, body: TaskPatchBody) {
     await delay(200)
     return MOCK_TASK_STORE.patch(taskId, body)
+  },
+  async listMembers() {
+    await delay(200)
+    return SYNTHETIC_MEMBERS.map(member => ({ ...member }))
+  },
+  async getSettings() {
+    await delay(200)
+    return MOCK_SETTINGS_STORE.get()
+  },
+  async patchSettings(_projectId: string, body: ProjectSettingsPatchBody) {
+    await delay(250)
+    return MOCK_SETTINGS_STORE.patch(body)
   },
   async getFeedback(_projectId: string, feedbackId: string) {
     await delay(200)

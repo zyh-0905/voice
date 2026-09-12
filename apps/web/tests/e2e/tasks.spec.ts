@@ -11,8 +11,8 @@ test('未填写负责人不能派发草稿', async ({ page }) => {
 
   await expect(page.getByTestId('task-state')).toContainText('草稿')
   await page.getByTestId('task-confirm').click()
-  // 清空负责人后直接确认 → 内联校验错误,状态保持草稿
-  await page.getByTestId('task-owner-input').fill('')
+  // 不选负责人直接确认 → 内联校验错误,状态保持草稿
+  await page.getByTestId('task-owner-input').selectOption('')
   await page.getByTestId('review-dialog-confirm').click()
   await expect(page.getByTestId('owner-validation-error')).toBeVisible()
   await expect(page.getByTestId('task-state')).toContainText('草稿')
@@ -26,7 +26,7 @@ test('草稿派发→开始→提交→验收是全流程,且记录流转', asyn
 
   // 派发
   await page.getByTestId('task-confirm').click()
-  await page.getByTestId('task-owner-input').fill('owner-1')
+  await page.getByTestId('task-owner-input').selectOption('owner-1')
   await page.getByTestId('task-due-input').fill('2026-09-20')
   await page.getByTestId('task-acceptance-input').fill('退款率下降并复核')
   await page.getByTestId('review-dialog-confirm').click()
@@ -63,6 +63,28 @@ test('验收后效果状态不自动宣称改善', async ({ page }) => {
   await page.getByTestId('review-dialog-confirm').click()
   await expect(page.getByTestId('task-state')).toContainText('执行已验收')
   await expect(page.getByTestId('task-effect')).toContainText('尚未复盘')
+})
+
+// W16:负责人选项只来自项目成员接口,不再是自由文本输入
+test('派发对话框的负责人选项来自项目成员接口', async ({ page }) => {
+  await page.goto('/p/demo-project/tasks')
+  await page.getByTestId('create-task-draft').click()
+  await page.locator('[data-resource-id^="task-draft-"]').first().getByTestId('task-open').click()
+  await page.getByTestId('task-confirm').click()
+
+  const ownerSelect = page.getByTestId('task-owner-input')
+  await expect(ownerSelect).toBeVisible()
+  // 必须是 select(来自成员接口),而不是自由文本输入
+  await expect(page.locator('input[data-testid="task-owner-input"]')).toHaveCount(0)
+  await expect(ownerSelect.locator('option[value="owner-1"]')).toHaveText('Demo Analyst')
+  await expect(ownerSelect.locator('option[value="viewer-1"]')).toHaveText('Demo Viewer')
+
+  await ownerSelect.selectOption('owner-1')
+  await page.getByTestId('task-due-input').fill('2026-09-25')
+  await page.getByTestId('task-acceptance-input').fill('按成员列表选择负责人')
+  await page.getByTestId('review-dialog-confirm').click()
+  await expect(page.getByTestId('task-state')).toContainText('待开始')
+  await expect(page.getByTestId('task-owner')).toContainText('owner-1')
 })
 
 test('VIEWER 只读:详情页不出现主动作', async ({ page }) => {
