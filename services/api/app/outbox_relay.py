@@ -10,7 +10,7 @@ class OutboxRelay:
         # relay 是独立进程,InMemory 单例不会共享 API 进程的 outbox 数据。
         self.repository = repo or get_repository()
         if publisher is None:
-            from .tasks import run_analysis_task
+            from .celery_tasks import run_analysis_task
             publisher = run_analysis_task
         self.publisher = publisher
 
