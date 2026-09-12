@@ -27,6 +27,23 @@ export interface TaskTransitionBody {
   material_refs?: string[]
 }
 
+export type CorrectionOperation = 'RENAME' | 'MERGE' | 'SPLIT' | 'CREATE'
+
+export interface CorrectionBody {
+  operation: CorrectionOperation
+  expected_revision: number
+  name?: string | null
+  source_topic_ids?: string[]
+  feedback_ids?: string[]
+  reason: string
+}
+
+export interface TopicDetailResponse {
+  topic: { topic_id: string; name: string; summary: string; severity: string; feedback_count: number; summary_revalidated?: boolean }
+  evidence: Array<{ feedback_id: string; source_row: number; quote: string; quote_start: number; quote_end: number }>
+  revision: number
+}
+
 export interface ReviewCreateBody {
   task_id?: string | null
   run_id: string
@@ -71,6 +88,8 @@ export interface ApiClient {
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
+  getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal): Promise<TopicDetailResponse>
+  correctTopic(projectId: string, topicId: string, body: CorrectionBody): Promise<{ revision: number; affected_topic_ids: string[] }>
   listReviews(projectId: string, signal?: AbortSignal): Promise<ReviewRecord[]>
   getReview(projectId: string, reviewId: string, signal?: AbortSignal): Promise<ReviewRecord>
   createReview(projectId: string, body: ReviewCreateBody): Promise<ReviewRecord>
@@ -182,6 +201,16 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal) {
+      const query = topicVersionId === undefined ? '' : `?topic_version_id=${topicVersionId}`
+      return request<TopicDetailResponse>(`${project(projectId)}/topics/${encodeURIComponent(topicId)}${query}`, { signal })
+    },
+    correctTopic(projectId: string, topicId: string, body: CorrectionBody) {
+      return request<{ revision: number; affected_topic_ids: string[] }>(
+        `${project(projectId)}/topics/${encodeURIComponent(topicId)}/corrections`,
+        { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } },
+      )
     },
     listReviews(projectId: string, signal?: AbortSignal) {
       return list<ReviewRecord>(`${project(projectId)}/reviews`, signal)

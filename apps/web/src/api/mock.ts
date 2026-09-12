@@ -1,4 +1,12 @@
-import { ApiHttpError, type ApiClient, type ReviewCreateBody, type TaskConfirmBody, type TaskTransitionBody } from './client'
+import {
+  ApiHttpError,
+  type ApiClient,
+  type CorrectionBody,
+  type ReviewCreateBody,
+  type TaskConfirmBody,
+  type TaskTransitionBody,
+  type TopicDetailResponse,
+} from './client'
 import type {
   AiProvenance,
   CpiResult,
@@ -341,6 +349,116 @@ class MockReviewStore {
 
 const MOCK_REVIEW_STORE = new MockReviewStore()
 
+/** 演示主题校正:与后端 W13 一致——乐观锁 409、旧版本保留可按版本查询、新版本标待确认。 */
+class MockCorrectionStore {
+  private revision = 1
+  private history = new Map<number, { topics: Array<Record<string, unknown>>; evidence: Record<string, Array<Record<string, unknown>>> }>()
+  private topics: Array<Record<string, unknown>> = []
+  private evidence: Record<string, Array<Record<string, unknown>>> = {}
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const topic of SYNTHETIC_TOPICS.slice(0, 3)) {
+      this.topics.push({
+        topic_id: topic.id, name: topic.title, summary: topic.summary,
+        severity: 'medium', feedback_count: topic.feedbackCount, summary_revalidated: true,
+      })
+      this.evidence[topic.id] = [
+        { feedback_id: topic.quote.feedbackId, source_row: topic.quote.rowIndex ?? 0, quote: topic.quote.text.slice(0, 24), quote_start: 0, quote_end: 24 },
+      ]
+    }
+    // 待归类反馈可供 CREATE
+    this.evidence['__unassigned__'] = [
+      { feedback_id: 'fb_demo_008', source_row: 160, quote: '合成样本 DEMO-008', quote_start: 0, quote_end: 12 },
+    ]
+  }
+
+  private snapshot() {
+    return {
+      topics: this.topics.map(t => ({ ...t })),
+      evidence: Object.fromEntries(Object.entries(this.evidence).map(([k, v]) => [k, v.map(e => ({ ...e }))])),
+    }
+  }
+
+  detail(topicId: string, topicVersionId?: number) {
+    this.seed()
+    const revision = topicVersionId ?? this.revision
+    const state = revision === this.revision ? this.snapshot() : this.history.get(revision)
+    if (!state) throw new ApiHttpError(404, 'topic_not_found')
+    const topic = state.topics.find(t => t.topic_id === topicId)
+    if (!topic) throw new ApiHttpError(404, 'topic_not_found')
+    return { topic, evidence: state.evidence[topicId] ?? [], revision }
+  }
+
+  correct(topicId: string, body: CorrectionBody) {
+    this.seed()
+    if (!body.reason?.trim()) throw new ApiHttpError(422, 'reason_required')
+    if (body.expected_revision !== this.revision) throw new ApiHttpError(409, 'correction_conflict')
+    const affected: string[] = []
+    const target = this.topics.find(t => t.topic_id === topicId)
+    if (!target) throw new ApiHttpError(404, 'topic_not_found')
+
+    if (body.operation === 'RENAME') {
+      if (!body.name?.trim()) throw new ApiHttpError(422, 'name_required')
+      target.name = body.name
+      target.summary_revalidated = false
+      affected.push(topicId)
+    } else if (body.operation === 'MERGE') {
+      const sources = body.source_topic_ids ?? []
+      if (new Set(sources).size < 2) throw new ApiHttpError(422, 'merge_requires_two')
+      const merged: Array<Record<string, unknown>> = []
+      const seen = new Set<string>()
+      for (const sourceId of sources) {
+        for (const item of this.evidence[sourceId] ?? []) {
+          const key = String(item.feedback_id)
+          if (seen.has(key)) continue // MERGE 去重
+          seen.add(key)
+          merged.push(item)
+        }
+      }
+      const newId = `topic-merged-${this.revision + 1}`
+      this.topics = this.topics.filter(t => !sources.includes(String(t.topic_id)))
+      for (const sourceId of sources) delete this.evidence[sourceId]
+      this.topics.push({ topic_id: newId, name: body.name?.trim() || sources.join('/'), summary: '', severity: 'medium', feedback_count: merged.length, summary_revalidated: false })
+      this.evidence[newId] = merged
+      affected.push(...sources, newId)
+    } else if (body.operation === 'SPLIT') {
+      const ids = body.feedback_ids ?? []
+      if (!ids.length || !body.name?.trim()) throw new ApiHttpError(422, 'split_requires_targets')
+      const all = this.evidence[topicId] ?? []
+      const moved = all.filter(e => ids.includes(String(e.feedback_id)))
+      if (!moved.length) throw new ApiHttpError(422, 'no_matching_feedback')
+      this.evidence[topicId] = all.filter(e => !ids.includes(String(e.feedback_id)))
+      target.feedback_count = this.evidence[topicId].length
+      const newId = `topic-split-${this.revision + 1}`
+      this.topics.push({ topic_id: newId, name: body.name, summary: '', severity: 'medium', feedback_count: moved.length, summary_revalidated: false })
+      this.evidence[newId] = moved
+      affected.push(topicId, newId)
+    } else if (body.operation === 'CREATE') {
+      const ids = body.feedback_ids ?? []
+      if (!ids.length || !body.name?.trim()) throw new ApiHttpError(422, 'create_requires_targets')
+      const pool = this.evidence['__unassigned__'] ?? []
+      const picked = pool.filter(e => ids.includes(String(e.feedback_id)))
+      if (!picked.length) throw new ApiHttpError(422, 'foreign_feedback')
+      this.evidence['__unassigned__'] = pool.filter(e => !ids.includes(String(e.feedback_id)))
+      const newId = `topic-created-${this.revision + 1}`
+      this.topics.push({ topic_id: newId, name: body.name, summary: '', severity: 'medium', feedback_count: picked.length, summary_revalidated: false })
+      this.evidence[newId] = picked
+      affected.push(newId)
+    } else {
+      throw new ApiHttpError(422, 'unsupported_operation')
+    }
+
+    this.history.set(this.revision, this.snapshot())
+    this.revision += 1
+    return { revision: this.revision, affected_topic_ids: affected }
+  }
+}
+
+const MOCK_CORRECTION_STORE = new MockCorrectionStore()
+
 const SYNTHETIC_BATCHES: DatasetBatch[] = [
   { id: 'ds_demo_001', name: '8 月第 4 周反馈批次', rows: 1248, status: 'ready', createdAt: '2026-08-25T10:00:00+08:00' },
   { id: 'ds_demo_002', name: '8 月第 3 周反馈批次', rows: 1105, status: 'ready', createdAt: '2026-08-18T10:00:00+08:00' },
@@ -403,6 +521,14 @@ export const mockApi: ApiClient = {
   async listRisks() {
     await delay(300)
     return SYNTHETIC_RISKS
+  },
+  async getTopicDetail(_projectId: string, topicId: string, topicVersionId?: number): Promise<TopicDetailResponse> {
+    await delay(200)
+    return MOCK_CORRECTION_STORE.detail(topicId, topicVersionId) as TopicDetailResponse
+  },
+  async correctTopic(_projectId: string, topicId: string, body: CorrectionBody) {
+    await delay(250)
+    return MOCK_CORRECTION_STORE.correct(topicId, body)
   },
   async listReviews() {
     await delay(300)

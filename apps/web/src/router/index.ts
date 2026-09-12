@@ -24,6 +24,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'imports', name: 'imports', component: () => import('../features/imports/ImportPage.vue'), meta: { title: '数据导入' } },
       { path: 'analysis', name: 'analysis', component: () => import('../features/analysis/AnalysisProgress.vue'), meta: { title: '分析进度' } },
       { path: 'topics', name: 'topics', component: () => import('../views/TopicsPlaceholderView.vue'), meta: { title: '主题洞察' } },
+      { path: 'topics/:t', name: 'topic-detail', component: () => import('../features/topics/TopicDetailPage.vue'), meta: { title: '主题详情' } },
       { path: 'risks', name: 'risks', component: () => import('../features/risks/RisksPage.vue'), meta: { title: '风险复核' } },
       { path: 'tasks', name: 'tasks', component: () => import('../features/tasks/TasksPage.vue'), meta: { title: '整改任务' } },
       { path: 'tasks/:t', name: 'task-detail', component: () => import('../features/tasks/TaskDetailPage.vue'), meta: { title: '任务详情' } },

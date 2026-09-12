@@ -46,7 +46,10 @@
               <td><span class="vl-topic-table__trend vl-number">{{ trendLabel(topic.trend) }}</span></td>
               <td class="vl-topic-table__num vl-number">{{ topic.cpiDisplayValue ?? '—' }}</td>
               <td><StatusBadge kind="review" :state="topic.reviewState" /></td>
-              <td>
+              <td class="vl-topic-table__actions">
+                <RouterLink class="vl-topic-table__link" :to="`/p/${projectId}/topics/${topic.id}`" data-testid="topic-open">
+                  查看详情
+                </RouterLink>
                 <VlButton variant="ghost" size="small" @click="openEvidence(topic)">查看证据</VlButton>
               </td>
             </tr>
@@ -132,6 +135,16 @@ function trendLabel(trend: TopicTrend): string {
 }
 .vl-topic-table__trend {
   color: var(--vl-color-text-secondary);
+}
+.vl-topic-table__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--vl-space-3);
+  white-space: nowrap;
+}
+.vl-topic-table__link {
+  color: var(--vl-color-brand);
+  font-size: var(--vl-text-sm);
 }
 .vl-sr-only {
   position: absolute;
