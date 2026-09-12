@@ -5,11 +5,26 @@ import type {
   ImportHealth,
   RiskItem,
   SummaryResponse,
+  TaskDetail,
   TaskSummary,
   TopicRow,
   TrendPoint,
 } from '../types/domain'
 import { mockApi } from './mock'
+
+export interface TaskConfirmBody {
+  expected_version: number
+  owner_id: string
+  due_at: string
+  acceptance: string
+}
+
+export interface TaskTransitionBody {
+  action: 'start' | 'submit' | 'approve' | 'reject' | 'cancel'
+  expected_version: number
+  comment: string
+  material_refs?: string[]
+}
 
 export interface LoginUser {
   id: string
@@ -39,6 +54,10 @@ export interface ApiClient {
   topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
   trend(projectId: string, signal?: AbortSignal): Promise<TrendPoint[]>
   taskSummaries(projectId: string, signal?: AbortSignal): Promise<TaskSummary[]>
+  getTask(projectId: string, taskId: string, signal?: AbortSignal): Promise<TaskDetail>
+  createTaskDraft(projectId: string, body: { title: string; source_topic_version_id?: string | null }): Promise<TaskSummary>
+  confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
+  transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
   /** GET /exports/redacted.csv,返回脱敏导出文件 */
@@ -125,6 +144,26 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     taskSummaries(projectId: string, signal?: AbortSignal) {
       return list<TaskSummary>(`${project(projectId)}/tasks`, signal)
+    },
+    getTask(projectId: string, taskId: string, signal?: AbortSignal) {
+      return request<TaskDetail>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}`, { signal })
+    },
+    createTaskDraft(projectId: string, body: { title: string; source_topic_version_id?: string | null }) {
+      return request<TaskSummary>(`${project(projectId)}/tasks/drafts`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string) {
+      return request<TaskSummary>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}/confirm`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      })
+    },
+    transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
+      return request<TaskSummary>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}/transition`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      })
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)

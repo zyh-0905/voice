@@ -144,6 +144,27 @@ export interface TaskSummary {
   source?: string
 }
 
+/** 任务事件(状态机流转记录,W15 契约) */
+export interface TaskEvent {
+  action: string
+  actor: string
+  comment: string
+  state: TaskStatus
+}
+
+/** 任务详情(GET /tasks/{t}):task + 来源快照 + 事件 + 版本 */
+export interface TaskDetail {
+  task: TaskSummary & {
+    owner_id?: string | null
+    acceptance?: string | null
+    effect_status?: string
+    events?: TaskEvent[]
+  }
+  source_snapshot: string | null
+  events: TaskEvent[]
+  version: number
+}
+
 /** 风险队列:规则命中候选,severity 与复核状态分开;候选不是已确认事故 */
 export interface RiskItem {
   id: string

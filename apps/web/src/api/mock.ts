@@ -1,4 +1,4 @@
-import type { ApiClient } from './client'
+import { ApiHttpError, type ApiClient, type TaskConfirmBody, type TaskTransitionBody } from './client'
 import type {
   AiProvenance,
   CpiResult,
@@ -8,6 +8,8 @@ import type {
   EvidenceQuoteItem,
   RiskItem,
   SummaryResponse,
+  TaskEvent,
+  TaskStatus,
   TaskSummary,
   TopicRow,
   TrendPoint,
@@ -180,6 +182,100 @@ const SYNTHETIC_RISKS: RiskItem[] = [
   { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
 ]
 
+/** 演示任务状态机:与后端 W15 语义一致(草稿不能直接验收、负责人不得自验收、幂等确认)。 */
+class MockTaskStore {
+  private tasks = new Map<string, TaskSummary & { owner_id?: string | null; acceptance?: string | null; effect_status?: string; events?: TaskEvent[] }>()
+  private keys = new Set<string>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const task of SYNTHETIC_TASKS) {
+      this.tasks.set(task.id, { ...task, version: 1, events: [] } as never)
+    }
+  }
+
+  list(): TaskSummary[] {
+    this.seed()
+    return [...this.tasks.values()].map(t => ({ ...t }))
+  }
+
+  detail(taskId: string) {
+    this.seed()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new ApiHttpError(404, 'task_not_found')
+    return { task: { ...task }, source_snapshot: task.source ?? null, events: [...(task.events ?? [])], version: Number((task as never as { version: number }).version ?? 1) }
+  }
+
+  create(title: string, sourceTopicVersionId: string | null): TaskSummary {
+    this.seed()
+    const id = `task-draft-${Date.now()}`
+    const task = { id, title, status: 'DRAFT' as TaskStatus, dueAt: null, overdue: false, owner: '待分配', priority: 'MEDIUM', source: sourceTopicVersionId ?? '人工创建', version: 1, events: [] }
+    this.tasks.set(id, task as never)
+    return { ...task }
+  }
+
+  private require(taskId: string) {
+    this.seed()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new ApiHttpError(404, 'task_not_found')
+    return task
+  }
+
+  confirm(taskId: string, body: TaskConfirmBody, idempotencyKey: string) {
+    const task = this.require(taskId)
+    if (idempotencyKey && this.keys.has(`${taskId}:${idempotencyKey}`)) return { ...task }
+    if (task.status !== 'DRAFT') throw new ApiHttpError(409, 'INVALID_TRANSITION')
+    if (Number((task as never as { version: number }).version) !== body.expected_version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    if (!body.owner_id.trim()) throw new ApiHttpError(422, 'field_required')
+    if (!body.due_at.trim()) throw new ApiHttpError(422, 'field_required')
+    if (!body.acceptance.trim()) throw new ApiHttpError(422, 'field_required')
+    Object.assign(task, { status: 'OPEN', owner: body.owner_id, dueAt: body.due_at, acceptance: body.acceptance })
+    this.bump(task, 'confirm', '已派发,等待执行')
+    if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
+    return { ...task }
+  }
+
+  transition(taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
+    const task = this.require(taskId)
+    if (idempotencyKey && this.keys.has(`${taskId}:${idempotencyKey}`)) return { ...task }
+    if (Number((task as never as { version: number }).version) !== body.expected_version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    const allowed: Record<string, Partial<Record<TaskTransitionBody['action'], TaskStatus>>> = {
+      OPEN: { start: 'IN_PROGRESS', cancel: 'CANCELLED' },
+      IN_PROGRESS: { submit: 'PENDING_REVIEW', cancel: 'CANCELLED' },
+      PENDING_REVIEW: { approve: 'CLOSED', reject: 'IN_PROGRESS', cancel: 'CANCELLED' },
+      DRAFT: { cancel: 'CANCELLED' },
+    }
+    const next = allowed[task.status]?.[body.action]
+    if (!next) throw new ApiHttpError(409, 'INVALID_TRANSITION')
+    task.status = next
+    this.bump(task, body.action, body.comment)
+    if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
+    return { ...task }
+  }
+
+  private bump(task: TaskSummary, action: string, comment: string) {
+    const record = task as never as { version: number; events: TaskEvent[]; effect_status?: string }
+    record.version = Number(record.version) + 1
+    record.events = [...(record.events ?? []), { action, actor: 'demo-user', comment, state: task.status }]
+    // 关闭任务不自动宣称经营效果改善
+    if (task.status === 'CLOSED') record.effect_status = 'NOT_EVALUATED'
+  }
+
+  reset() {
+    this.seeded = false
+    this.tasks.clear()
+    this.keys.clear()
+  }
+}
+
+const MOCK_TASK_STORE = new MockTaskStore()
+
 const SYNTHETIC_BATCHES: DatasetBatch[] = [
   { id: 'ds_demo_001', name: '8 月第 4 周反馈批次', rows: 1248, status: 'ready', createdAt: '2026-08-25T10:00:00+08:00' },
   { id: 'ds_demo_002', name: '8 月第 3 周反馈批次', rows: 1105, status: 'ready', createdAt: '2026-08-18T10:00:00+08:00' },
@@ -221,7 +317,23 @@ export const mockApi: ApiClient = {
   },
   async taskSummaries() {
     await delay(300)
-    return SYNTHETIC_TASKS
+    return MOCK_TASK_STORE.list()
+  },
+  async getTask(_projectId: string, taskId: string) {
+    await delay(200)
+    return MOCK_TASK_STORE.detail(taskId)
+  },
+  async createTaskDraft(_projectId: string, body: { title: string; source_topic_version_id?: string | null }) {
+    await delay(200)
+    return MOCK_TASK_STORE.create(body.title, body.source_topic_version_id ?? null)
+  },
+  async confirmTask(_projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string) {
+    await delay(250)
+    return MOCK_TASK_STORE.confirm(taskId, body, idempotencyKey)
+  },
+  async transitionTask(_projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
+    await delay(250)
+    return MOCK_TASK_STORE.transition(taskId, body, idempotencyKey)
   },
   async listRisks() {
     await delay(300)
