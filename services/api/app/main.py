@@ -246,23 +246,32 @@ def get_project(project_id: str, user: dict = Depends(require_project_access)):
 
 # —— 工程计划 7.7:行动首页只读聚合契约 ——
 @app.get('/api/v1/projects/{project_id}/summary')
-def project_summary(project_id: str, user: dict = Depends(require_project_access)):
-    """行动首页聚合。insight 绑定所选分析;action 为项目全部运行。
-    演示环境返回合成契约样例,并显式标注合成身份;真实实现以数据库查询为准。"""
+def project_summary(
+    project_id: str,
+    run_id: str | None = Query(None),
+    revision: int | None = Query(None),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    channel: str | None = Query(None),
+    product: str | None = Query(None),
+    user: dict = Depends(require_project_access),
+):
+    """行动首页聚合(7.7):insight 绑定所选分析+筛选;action 绑定项目全部任务。
+
+    无已发布 run 时洞察指标为 null 而非 0;只给 revision 不给 run_id 返回 422;
+    指定不存在或外项目 run 返回 404,不悄悄换成默认 run。
+    """
+    from .summary import SummaryRequestError, build_summary
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
-    # 合成样例(与前端 mock 同源,规范 7.7):不冒充业务结果
-    return {
-        'project_id': project_id,
-        'run_id': 'run_demo_001',
-        'revision': 1,
-        'denominator': 1000,
-        'definition_version': 'summary-ui-v1',
-        'computed_at': '2026-09-09T00:00:00+08:00',
-        'filters': {'start': '2026-08-25T00:00:00+08:00', 'end': '2026-09-01T00:00:00+08:00', 'channel': None, 'product': None},
-        'insight_metrics': {'scope': 'selected_analysis', 'valid_feedback_count': 1000, 'topic_count': 8, 'pending_risk_feedback_count': 12},
-        'action_metrics': {'scope': 'project_all_runs', 'active_task_count': 18, 'overdue_task_count': 4, 'task_as_of': '2026-09-09T00:00:00+08:00'},
-    }
+    try:
+        return build_summary(
+            list(analyses.values()), repository.list_entities('tasks', project_id), project_id,
+            run_id=run_id, revision=revision,
+            filters={'start': start, 'end': end, 'channel': channel, 'product': product},
+        )
+    except SummaryRequestError as exc:
+        raise HTTPException(exc.status_code, detail={'code': exc.code})
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
