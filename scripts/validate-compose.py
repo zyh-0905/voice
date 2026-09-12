@@ -9,9 +9,13 @@ def main() -> int:
     path = Path(__file__).resolve().parents[1] / "compose.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     services = data.get("services") if isinstance(data, dict) else None
-    required = {"api", "web", "postgres", "redis", "worker"}
+    required = {"api", "web", "postgres", "redis", "worker", "migrate"}
     if not isinstance(services, dict) or not required <= services.keys():
-        raise SystemExit("compose.yaml must define api, web, postgres, redis and worker services")
+        raise SystemExit("compose.yaml must define api, web, postgres, redis, worker and migrate services")
+    # 迁移必须先行:模型新增列不会被 create_all 补上
+    for name in ("api", "worker"):
+        if services[name].get("depends_on", {}).get("migrate", {}).get("condition") != "service_completed_successfully":
+            raise SystemExit(f"{name} must wait for the migrate service to complete")
     web = services["web"]
     if web.get("build", {}).get("dockerfile") != "apps/web/Dockerfile":
         raise SystemExit("web Dockerfile is invalid")

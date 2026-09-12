@@ -1,4 +1,19 @@
 ﻿services:
+  # 一次性迁移:模型新增列不会被 create_all 补上,必须先 upgrade head
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: sh -c "cd services/api && alembic -c alembic.ini upgrade head"
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
+      USE_DATABASE: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -11,6 +26,8 @@
       AUTH_REQUIRED: "true"
       USE_DATABASE: "1"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -64,6 +81,8 @@
       AUTH_REQUIRED: "true"
       USE_DATABASE: "1"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -81,6 +100,8 @@
       USE_DATABASE: "1"
       OUTBOX_RELAY_INTERVAL_SECONDS: "5"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 

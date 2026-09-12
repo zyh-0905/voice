@@ -77,6 +77,9 @@ class Risk(Base):
     severity: Mapped[str] = mapped_column(String(32), default='medium', nullable=False)
     status: Mapped[str] = mapped_column(String(32), default='open', nullable=False)
     evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # W14:候选来源规则与复核状态与 severity 分开
+    rule: Mapped[str | None] = mapped_column(String(128))
+    review_state: Mapped[str] = mapped_column(String(32), default='pending', nullable=False)
 
 class Task(Base):
     __tablename__ = 'tasks'
@@ -86,6 +89,16 @@ class Task(Base):
     owner: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), default='todo', nullable=False)
     priority: Mapped[str] = mapped_column(String(32), default='medium', nullable=False)
+    # W15 状态机:state 为规范枚举,version 用于乐观锁,events 记录真实流转
+    state: Mapped[str] = mapped_column(String(32), default='DRAFT', nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(String(64))
+    due_at: Mapped[str | None] = mapped_column(String(64))
+    acceptance: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(String(255))
+    effect_status: Mapped[str] = mapped_column(String(32), default='NOT_EVALUATED', nullable=False)
+    events: Mapped[list | None] = mapped_column(JSON, default=list)
+    idempotency_keys: Mapped[list | None] = mapped_column(JSON, default=list)
 
 class Review(Base):
     __tablename__ = 'reviews'
@@ -96,6 +109,15 @@ class Review(Base):
     finding: Mapped[str] = mapped_column(Text, nullable=False)
     confirmed_by: Mapped[str | None] = mapped_column(String(128))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # W17 复盘:固定口径结果不可变保存
+    revision: Mapped[int | None] = mapped_column(Integer)
+    topic_version_ids: Mapped[list | None] = mapped_column(JSON, default=list)
+    task_id: Mapped[str | None] = mapped_column(String(64))
+    before: Mapped[dict | None] = mapped_column(JSON)
+    after: Mapped[dict | None] = mapped_column(JSON)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    effect_status: Mapped[str | None] = mapped_column(String(32))
+    limitations: Mapped[list | None] = mapped_column(JSON, default=list)
 
 
 

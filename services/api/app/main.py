@@ -206,11 +206,30 @@ if not repository.list_entities('risks', 'demo-project'):
     repository.create_entity('risks', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
     repository.create_entity('risks', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
 if not repository.list_entities('tasks', 'demo-project'):
-    repository.create_entity('tasks', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
-    repository.create_entity('tasks', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
-    repository.create_entity('tasks', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
+    for seed in (
+        {'id':'task-001','title':'退款率异常整改','owner':'数据团队','owner_id':'owner-1','state':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00','acceptance':'退款率回落并复核一周','effect_status':'NOT_EVALUATED'},
+        {'id':'task-002','title':'支付失败率复盘','owner':'运营团队','owner_id':'owner-2','state':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00','acceptance':'失败率恢复正常区间','effect_status':'NOT_EVALUATED'},
+        {'id':'task-003','title':'字段治理复核','owner':'运营团队','owner_id':'owner-3','state':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00','acceptance':'时间字段缺失率低于 1%','effect_status':'NOT_EVALUATED'},
+    ):
+        repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'events':[], 'idempotency_keys':[]})
 if not repository.list_entities('reviews', 'demo-project'):
-    repository.create_entity('reviews', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
+    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条
+    repository.create_entity('reviews', {
+        'id':'review-001','project_id':'demo-project','run_id':'run_demo_001','revision':1,
+        'topic_version_ids':['delivery'], 'task_id':None,
+        'before':{'n':168,'N':1000}, 'after':{'n':102,'N':1000},
+        'metrics':{'count_change':-66,'share_before_pp':16.8,'share_after_pp':10.2,'share_delta_pp':-6.6,'relative_share_change':-0.3929,'comparable':True},
+        'effect_status':'OBSERVED_CHANGE', 'limitations':[],
+        'status':'pending','finding':'复盘:物流体验占比变化','confirmed_by':None,
+    })
+    repository.create_entity('reviews', {
+        'id':'review-002','project_id':'demo-project','run_id':'run_demo_001','revision':1,
+        'topic_version_ids':['refund'], 'task_id':None,
+        'before':{'n':0,'N':0}, 'after':{'n':12,'N':400},
+        'metrics':{'count_change':12,'share_before_pp':None,'share_after_pp':None,'share_delta_pp':None,'relative_share_change':None,'comparable':False},
+        'effect_status':'INSUFFICIENT_DATA', 'limitations':['数据不足,暂不输出变化结论'],
+        'status':'pending','finding':'复盘:退款进度(数据不足)','confirmed_by':None,
+    })
 def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
 def list_projects(user: dict = Depends(require_user)):
