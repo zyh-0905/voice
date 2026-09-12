@@ -93,7 +93,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         # Legacy rows predate HMAC keys; compare their fields only for migration compatibility.
         is_same_source = existing_key == event_key if existing_key else (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == (project_id, namespace, kind, source_name)
         if is_same_source:
-            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=existing)
+            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=_redacted_out(existing))
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
     try:
@@ -108,12 +108,32 @@ def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
         raise HTTPException(422, detail={'code': 'invalid_pagination'})
     return page, page_size
+
+
+# —— 脱敏出站兜底 ——
+# 新数据在导入时已脱敏(ingestion.parse_csv_text 只吐出脱敏行),这里兜的是**存量
+# 数据**与纵深防御:旧解析器写入的 preview、按原始正文发布的证据引文与规则扫描
+# 片段,都还躺在仓储里。与导出边界同因——数据访问层不能假设上游都合规。
+#
+# 递归而不是逐个字段点名:run 快照由数据集行、规则扫描证据、主题引用等多个模块
+# 写入,点名容易漏(漏一个就是一次 PII 泄露)。只影响响应,不改写仓储。
+#
+# 已知代价:旧 run 的 offset/quote 按**原始正文**计算,脱敏后不再自洽——那正是要
+# 移除的数据本身。新 run 的正文导入即脱敏,offset 自洽。
+def _redacted_out(value):
+    if isinstance(value, str):
+        return redact_text(value)['text']
+    if isinstance(value, dict):
+        return {key: _redacted_out(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted_out(item) for item in value]
+    return value
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
     page, page_size = _page(page, page_size)
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
-    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
+    return {'items': [_redacted_out(d) for d in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
 
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_project_analyst)):
@@ -124,7 +144,7 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=d['rows'], version=d['version']+1)
     total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
-    return repository.update_dataset(dataset_id, d)
+    return _redacted_out(repository.update_dataset(dataset_id, d))
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
@@ -167,12 +187,12 @@ def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dic
     page, page_size = _page(page, page_size)
     all_items = [a for a in analyses.values() if a['project_id']==project_id]
     start = (page - 1) * page_size
-    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
+    return {'items': [_redacted_out(a) for a in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
 def get_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_access)):
     a=analyses.get(analysis_id)
     if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
-    return a
+    return _redacted_out(a)
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/retry')
 def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     a=get_analysis(project_id, analysis_id)
@@ -182,7 +202,7 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
         from .tasks import run_analysis_task
         if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
     elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
-    return analyses[analysis_id]
+    return _redacted_out(analyses[analysis_id])
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
 def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     get_analysis(project_id, analysis_id)

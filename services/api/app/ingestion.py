@@ -14,6 +14,15 @@ def redact_text(text: str) -> dict:
         out = pattern.sub(sub, out)
     return {"text": out, "hits": dict(hits), "version": REDACTION_VERSION}
 
+def redact_row(row: dict) -> dict:
+    """逐值脱敏一行。
+
+    逐值而不是先拼成整串,避免相邻字段接出本不存在的模式(例如一列以数字结尾、
+    下一列以数字开头,拼起来会被电话号码规则命中)。
+    """
+    return {str(key): redact_text(str(value))['text'] for key, value in row.items()}
+
+
 def classify_rows(rows: list[dict], time_field: str | None = None) -> dict:
     seen = set(); valid = invalid = duplicate = redacted = missing_time = 0; preview = []
     for row in rows:
@@ -43,7 +52,11 @@ def parse_csv_text(text: str) -> dict:
         if missing:
             raise ValueError(f'CSV row {line_no} has fewer fields than the header: {", ".join(missing)}')
         rows.append(row)
-    return {"headers": headers, "rows": rows, "stats": classify_rows(rows)}
+    # 持久业务正文只保留脱敏结果(工程计划 7.2/6.2):rows 是下游(流水线、看板、
+    # 导出、证据源)唯一的取数来源,原始行不出这个函数。stats 必须基于**原始行**
+    # 统计,否则「脱敏命中数」会恒为 0。
+    stats = classify_rows(rows)
+    return {"headers": headers, "rows": [redact_row(row) for row in rows], "stats": stats}
 
 def parse_xlsx_bytes(data: bytes) -> dict:
     """Parse the first worksheet of an XLSX workbook with bounded dimensions."""
@@ -62,7 +75,9 @@ def parse_xlsx_bytes(data: bytes) -> dict:
             if idx > MAX_XLSX_ROWS: raise ValueError(f"row limit exceeded ({MAX_XLSX_ROWS})")
             row = {h: ("" if v is None else str(v)) for h, v in zip(headers, vals)}
             rows.append(row)
-        return {"headers": headers, "rows": rows, "stats": classify_rows(rows)}
+        # 同 CSV:落库即脱敏,stats 仍按原始行统计
+        stats = classify_rows(rows)
+        return {"headers": headers, "rows": [redact_row(row) for row in rows], "stats": stats}
     except ValueError: raise
     except Exception as exc:
         raise ValueError(f"invalid or corrupted xlsx file: {exc}") from exc
