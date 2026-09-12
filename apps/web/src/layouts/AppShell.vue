@@ -3,8 +3,12 @@
     <a class="vl-skip-link" href="#vl-main-content">跳到正文</a>
 
     <aside class="vl-sidebar">
-      <div class="vl-sidebar__brand" aria-hidden="true">
-        <span class="vl-sidebar__mark" />VoiceLens
+      <div class="vl-sidebar__brand">
+        <span class="vl-sidebar__mark" aria-hidden="true" />
+        <span class="vl-sidebar__wordmark">
+          <span class="vl-sidebar__name">诉源镜</span>
+          <span class="vl-sidebar__latin">VoiceLens</span>
+        </span>
       </div>
       <nav class="vl-nav" aria-label="主导航">
         <RouterLink
@@ -14,7 +18,8 @@
           active-class="vl-nav__link--active"
           :to="`/p/${projectId}${item.path}`"
         >
-          {{ item.label }}
+          <el-icon :size="18" aria-hidden="true"><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
       <RouterLink
@@ -22,7 +27,8 @@
         active-class="vl-nav__link--active"
         :to="`/p/${projectId}/settings`"
       >
-        设置
+        <el-icon :size="18" aria-hidden="true"><Setting /></el-icon>
+        <span>设置</span>
       </RouterLink>
     </aside>
 
@@ -41,7 +47,13 @@
         <span class="vl-header__location" aria-hidden="true">{{ currentTitle }}</span>
         <DemoNotice v-if="session.isDemo" source-kind="synthetic" :read-only="!canAct" />
         <div class="vl-header__user">
-          <span class="vl-header__username">{{ session.user?.name }}</span>
+          <span class="vl-header__avatar" :class="{ 'vl-header__avatar--readonly': !canAct }" aria-hidden="true">
+            {{ userInitial }}
+          </span>
+          <span class="vl-header__identity">
+            <span class="vl-header__username">{{ session.user?.name }}</span>
+            <span class="vl-header__role">{{ canAct ? '可分析' : '只读' }}</span>
+          </span>
           <VlButton variant="ghost" size="small" @click="logout">退出</VlButton>
         </div>
       </header>
@@ -84,7 +96,7 @@
 // 断点:≥1024 常驻侧栏;768-1023 菜单按钮打开模态导航;<768 菜单按钮。
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Menu } from '@element-plus/icons-vue'
+import { DataLine, Finished, Menu, Odometer, Setting, TrendCharts, Upload, Warning } from '@element-plus/icons-vue'
 import ProjectSwitcher from '../components/common/ProjectSwitcher.vue'
 import DemoNotice from '../components/common/DemoNotice.vue'
 import VlButton from '../components/common/VlButton.vue'
@@ -100,15 +112,17 @@ const project = useProjectStore()
 const projectId = computed(() => String(route.params.p || project.selectedProjectId))
 const currentTitle = computed(() => String(route.meta.title ?? ''))
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
+const userInitial = computed(() => (session.user?.name ?? '?').trim().charAt(0).toUpperCase())
 
-// 导航名称固定(风格规范 5.1);分析进度作为导入/分析详情路径,不新增导航项
+// 导航名称固定(风格规范 5.1);分析进度作为导入/分析详情路径,不新增导航项。
+// 图标统一取自 @element-plus/icons-vue,同一层级不混用其他图标库(风格规范 4.3)。
 const navItems = [
-  { label: '工作台', path: '/overview' },
-  { label: '数据导入', path: '/imports' },
-  { label: '主题洞察', path: '/topics' },
-  { label: '风险复核', path: '/risks' },
-  { label: '整改任务', path: '/tasks' },
-  { label: '效果复盘', path: '/reviews' },
+  { label: '工作台', path: '/overview', icon: Odometer },
+  { label: '数据导入', path: '/imports', icon: Upload },
+  { label: '主题洞察', path: '/topics', icon: DataLine },
+  { label: '风险复核', path: '/risks', icon: Warning },
+  { label: '整改任务', path: '/tasks', icon: Finished },
+  { label: '效果复盘', path: '/reviews', icon: TrendCharts },
 ]
 
 const navOpen = ref(false)
@@ -149,22 +163,43 @@ async function logout() {
   display: flex;
   flex-direction: column;
   border-inline-end: 1px solid var(--vl-color-border);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-chrome);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-4) var(--vl-space-3);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-sidebar { background: var(--vl-color-surface); }
 }
 .vl-sidebar__brand {
   display: flex;
   align-items: center;
-  gap: var(--vl-space-2);
-  padding: var(--vl-space-2) var(--vl-space-3);
+  gap: var(--vl-space-3);
+  padding: var(--vl-space-2) var(--vl-space-3) var(--vl-space-4);
+  border-bottom: 1px solid var(--vl-color-border);
+}
+.vl-sidebar__mark {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-gradient-brand);
+  box-shadow: var(--vl-highlight-inset);
+  flex: none;
+}
+.vl-sidebar__wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.vl-sidebar__name {
   font-size: var(--vl-text-md);
   font-weight: 600;
 }
-.vl-sidebar__mark {
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-brand);
+.vl-sidebar__latin {
+  font-size: var(--vl-text-xs);
+  color: var(--vl-color-text-muted);
+  letter-spacing: 0.02em;
 }
 .vl-nav {
   display: flex;
@@ -174,22 +209,37 @@ async function logout() {
   flex: 1;
 }
 .vl-nav__link {
-  display: block;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--vl-space-3);
   min-height: var(--vl-control-height);
   padding: 10px var(--vl-space-3);
   border-radius: var(--vl-radius-control);
   color: var(--vl-color-text-secondary);
   text-decoration: none;
   font-weight: 500;
-  transition: background-color var(--vl-motion-fast) var(--vl-ease);
+  transition: background-color var(--vl-motion-fast) var(--vl-ease),
+              color var(--vl-motion-fast) var(--vl-ease);
 }
 .vl-nav__link:hover {
   background: var(--vl-color-hover);
+  color: var(--vl-color-text);
 }
+/* 当前项:浅青绿底 + 左侧品牌指示条(风格规范 5.1) */
 .vl-nav__link--active {
   background: var(--vl-color-brand-soft);
-  color: var(--vl-color-brand);
+  color: var(--vl-color-brand-ink);
   font-weight: 600;
+}
+.vl-nav__link--active::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: 0.625rem;
+  width: 3px;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-brand);
 }
 .vl-nav__link--settings {
   margin-top: var(--vl-space-3);
@@ -207,8 +257,13 @@ async function logout() {
   flex-wrap: wrap;
   gap: var(--vl-space-3) var(--vl-space-4);
   padding: var(--vl-space-2) var(--vl-space-6);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-chrome);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   border-bottom: 1px solid var(--vl-color-border);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-header { background: var(--vl-color-surface); }
 }
 .vl-header__menu {
   display: none;
@@ -230,11 +285,37 @@ async function logout() {
   margin-inline-start: auto;
   display: flex;
   align-items: center;
-  gap: var(--vl-space-3);
+  gap: var(--vl-space-2);
+}
+.vl-header__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--vl-color-brand-soft);
+  color: var(--vl-color-brand-ink);
+  font-weight: 600;
+  flex: none;
+}
+.vl-header__avatar--readonly {
+  background: var(--vl-color-subtle);
+  color: var(--vl-color-text-secondary);
+}
+.vl-header__identity {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
 }
 .vl-header__username {
   font-size: var(--vl-text-sm);
-  color: var(--vl-color-text-secondary);
+  color: var(--vl-color-text);
+}
+.vl-header__role {
+  font-size: var(--vl-text-xs);
+  color: var(--vl-color-text-muted);
 }
 .vl-nav-overlay {
   position: fixed;

@@ -29,9 +29,14 @@
     >
       <template #empty>
         <div class="vl-async-empty-box">
-          <p>还没有导入客户反馈</p>
-          <p class="vl-async-empty-box__hint">{{ canAct ? '请先导入反馈并完成分析。' : '请联系管理员导入数据。' }}</p>
-          <VlButton v-if="canAct" variant="primary" @click="goImports">去导入</VlButton>
+          <EmptyState
+            text="还没有导入客户反馈"
+            :hint="canAct ? '导入并完成分析后,这里会显示行动指标与优先主题。' : '请联系管理员导入数据。'"
+          >
+            <template v-if="canAct" #action>
+              <VlButton variant="primary" @click="goImports">去导入</VlButton>
+            </template>
+          </EmptyState>
         </div>
       </template>
       <template #error>
@@ -49,6 +54,7 @@
           scope-label="所选分析与筛选"
           description="全严重度待复核候选,不是已确认事故"
           :href="metricHref('/risks', 'state=PENDING')"
+          :icon="Warning"
         />
         <MetricCard
           data-testid="metric-overdue-tasks"
@@ -57,6 +63,7 @@
           scope-label="本项目·所有分析"
           description="未关闭任务中已超过截止时间的数量"
           :href="`/p/${projectId}/tasks?overdue=true`"
+          :icon="AlarmClock"
         />
         <MetricCard
           data-testid="metric-active-tasks"
@@ -65,6 +72,7 @@
           scope-label="本项目·所有分析"
           description="待开始、进行中与待验收任务"
           :href="`/p/${projectId}/tasks?state=OPEN&state=IN_PROGRESS&state=PENDING_REVIEW`"
+          :icon="Finished"
         />
         <MetricCard
           data-testid="metric-valid-feedback"
@@ -74,7 +82,40 @@
           scope-label="所选分析与筛选"
           description="所选分析与筛选条件下的有效反馈数"
           :href="metricHref('/topics', '')"
+          :icon="DataLine"
+          :sparkline="trend"
         />
+      </section>
+
+      <!-- 构成概览:三组分布图,全部取自本页已加载的真实记录,不新增口径 -->
+      <section class="vl-overview-distributions" aria-label="构成概览">
+        <VlPanel title="风险严重度" :description="`共 ${risks.length} 条候选`">
+          <DistributionBar
+            v-if="risks.length"
+            :segments="severitySegments"
+            label="风险严重度分布"
+          />
+          <p v-else class="vl-overview__muted">暂无风险候选</p>
+        </VlPanel>
+
+        <VlPanel title="任务状态" :description="`共 ${taskSummaries.length} 条任务`">
+          <DistributionBar
+            v-if="taskSummaries.length"
+            :segments="taskSegments"
+            label="任务状态分布"
+          />
+          <p v-else class="vl-overview__muted">暂无任务</p>
+        </VlPanel>
+
+        <VlPanel title="主题复核" :description="`共 ${topics.length} 个主题`">
+          <DonutChart
+            v-if="topics.length"
+            :segments="reviewSegments"
+            label="主题复核构成"
+            total-label="主题"
+          />
+          <p v-else class="vl-overview__muted">暂无主题</p>
+        </VlPanel>
       </section>
 
       <div class="vl-overview-grid">
@@ -90,14 +131,14 @@
               暂无已归类主题,仍可查看风险候选与待归类反馈
             </p>
             <div v-else class="vl-table-scroll">
-              <table class="vl-topic-table" data-testid="topic-table">
+              <table class="vl-table vl-topic-table" data-testid="topic-table">
                 <thead>
                   <tr>
                     <th scope="col">主题</th>
-                    <th scope="col" class="vl-topic-table__num">反馈 n/N</th>
-                    <th scope="col" class="vl-topic-table__num">占比</th>
+                    <th scope="col" class="vl-table__num">反馈 n/N</th>
+                    <th scope="col" class="vl-topic-table__ratio-col">占比</th>
                     <th scope="col">趋势</th>
-                    <th scope="col" class="vl-topic-table__num">CPI</th>
+                    <th scope="col" class="vl-table__num">CPI</th>
                     <th scope="col">复核状态</th>
                     <th scope="col"><span class="vl-sr-only">操作</span></th>
                   </tr>
@@ -105,10 +146,16 @@
                 <tbody>
                   <tr v-for="topic in topics" :key="topic.id" :data-resource-id="topic.id">
                     <th scope="row" class="vl-topic-table__title">{{ topic.title }}</th>
-                    <td class="vl-topic-table__num vl-number">{{ topic.feedbackCount }} / {{ formatCount(topic.denominator) }}</td>
-                    <td class="vl-topic-table__num vl-number">{{ topic.ratio.toFixed(1) }}%</td>
-                    <td><span class="vl-topic-table__trend vl-number">{{ trendLabel(topic.trend) }}</span></td>
-                    <td class="vl-topic-table__num vl-number">{{ topic.cpiDisplayValue ?? '—' }}</td>
+                    <td class="vl-table__num">{{ topic.feedbackCount }} / {{ formatCount(topic.denominator) }}</td>
+                    <td class="vl-topic-table__ratio">
+                      <span class="vl-topic-table__ratio-value vl-number">{{ topic.ratio.toFixed(1) }}%</span>
+                      <!-- 占比可视化条:同源数据,宽度按各主题占比归一(最高者占满) -->
+                      <span class="vl-topic-table__ratio-track" aria-hidden="true">
+                        <span class="vl-topic-table__ratio-fill" :style="{ width: `${ratioWidth(topic.ratio)}%` }" />
+                      </span>
+                    </td>
+                    <td><span class="vl-topic-table__trend">{{ trendLabel(topic.trend) }}</span></td>
+                    <td class="vl-table__num">{{ topic.cpiDisplayValue ?? '—' }}</td>
                     <td><StatusBadge kind="review" :state="topic.reviewState" /></td>
                     <td>
                       <VlButton variant="ghost" size="small" @click="openEvidence(topic, $event)">查看证据</VlButton>
@@ -180,7 +227,11 @@
 // 右侧辅助列(待办/最近批次),选中主题后切换为证据(≥1440 非模态侧栏,<1440 模态抽屉)。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { AlarmClock, DataLine, Finished, Warning } from '@element-plus/icons-vue'
 import PageHeader from '../components/common/PageHeader.vue'
+import EmptyState from '../components/common/EmptyState.vue'
+import DistributionBar, { type DistributionSegment } from '../components/common/DistributionBar.vue'
+import DonutChart from '../components/common/DonutChart.vue'
 import VlButton from '../components/common/VlButton.vue'
 import VlPanel from '../components/common/VlPanel.vue'
 import MetricCard from '../components/common/MetricCard.vue'
@@ -194,7 +245,8 @@ import TrendChart from '../components/common/TrendChart.vue'
 import { useOverviewData } from '../composables/useOverviewData'
 import { useSessionStore } from '../stores/session'
 import { useProjectStore } from '../stores/project'
-import type { EvidenceContext, TopicRow, TopicTrend } from '../types/domain'
+import { taskStatusLabel } from '../lib/ui-status'
+import type { EvidenceContext, TaskStatus, TopicRow, TopicTrend } from '../types/domain'
 
 const route = useRoute()
 const router = useRouter()
@@ -202,7 +254,7 @@ const session = useSessionStore()
 const project = useProjectStore()
 
 const projectId = computed(() => String(route.params.p || project.selectedProjectId))
-const { summary, topics, trend, taskSummaries, recentBatches, status, refreshing, stale, staleAt, error, reload } = useOverviewData(projectId)
+const { summary, topics, trend, taskSummaries, recentBatches, risks, status, refreshing, stale, staleAt, error, reload } = useOverviewData(projectId)
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
 
 // —— 筛选:URL 只保存 ID、时间和枚举(风格规范 9.3) ——
@@ -300,6 +352,79 @@ const trendRange = computed(() => ({
 }))
 const taskAsOfLabel = computed(() => (summary.value?.action_metrics.task_as_of ?? '').slice(0, 10) || '最近')
 
+// —— 构成概览:分布数据由页面已加载的记录聚合,口径与来源列表一致 ——
+const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'NONE'] as const
+const SEVERITY_LABEL: Record<string, string> = { CRITICAL: '严重', HIGH: '高', MEDIUM: '中', LOW: '低', NONE: '无' }
+// 严重度用语义色表达升级关系(规范 3.1:红色仅用于高严重度与危险提示)
+const SEVERITY_COLOR: Record<string, string> = {
+  CRITICAL: 'var(--vl-color-danger)',
+  HIGH: 'var(--vl-color-brand-vivid)',
+  MEDIUM: 'var(--vl-chart-6)',
+  LOW: 'var(--vl-chart-2)',
+  NONE: 'var(--vl-color-border-control)',
+}
+
+const severitySegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const risk of risks.value) counts.set(risk.severity, (counts.get(risk.severity) ?? 0) + 1)
+  return SEVERITY_ORDER
+    .filter(severity => counts.has(severity))
+    .map(severity => ({
+      label: SEVERITY_LABEL[severity] ?? severity,
+      value: counts.get(severity) ?? 0,
+      color: SEVERITY_COLOR[severity] ?? 'var(--vl-color-border-control)',
+    }))
+})
+
+const TASK_STATE_ORDER: TaskStatus[] = ['OPEN', 'IN_PROGRESS', 'PENDING_REVIEW', 'DRAFT', 'CLOSED', 'CANCELLED']
+const TASK_STATE_COLOR: Record<string, string> = {
+  OPEN: 'var(--vl-chart-2)',
+  IN_PROGRESS: 'var(--vl-color-brand-vivid)',
+  PENDING_REVIEW: 'var(--vl-color-warning)',
+  DRAFT: 'var(--vl-color-border-control)',
+  CLOSED: 'var(--vl-color-success)',
+  CANCELLED: 'var(--vl-color-text-muted)',
+}
+
+const taskSegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const task of taskSummaries.value) counts.set(task.status, (counts.get(task.status) ?? 0) + 1)
+  return TASK_STATE_ORDER
+    .filter(state => counts.has(state))
+    .map(state => ({
+      label: taskStatusLabel(state),
+      value: counts.get(state) ?? 0,
+      color: TASK_STATE_COLOR[state] ?? 'var(--vl-color-border-control)',
+    }))
+})
+
+const REVIEW_ORDER = ['confirmed', 'pending', 'excluded'] as const
+const REVIEW_LABEL: Record<string, string> = { confirmed: '已确认', pending: '待复核', excluded: '已排除' }
+const REVIEW_COLOR: Record<string, string> = {
+  confirmed: 'var(--vl-color-success)',
+  pending: 'var(--vl-color-brand-vivid)',
+  excluded: 'var(--vl-color-text-muted)',
+}
+
+const reviewSegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const topic of topics.value) counts.set(topic.reviewState, (counts.get(topic.reviewState) ?? 0) + 1)
+  return REVIEW_ORDER
+    .filter(state => counts.has(state))
+    .map(state => ({
+      label: REVIEW_LABEL[state] ?? state,
+      value: counts.get(state) ?? 0,
+      color: REVIEW_COLOR[state] ?? 'var(--vl-color-border-control)',
+    }))
+})
+
+const maxRatio = computed(() => Math.max(1, ...topics.value.map(t => t.ratio)))
+
+/** 归一化到最高占比,保证最长的条也能读;具体数值始终以文本为准 */
+function ratioWidth(ratio: number): number {
+  return Math.max(2, Math.round((ratio / maxRatio.value) * 100))
+}
+
 function formatCount(value: number | null): string {
   return value === null ? '—' : new Intl.NumberFormat('zh-CN').format(value)
 }
@@ -325,6 +450,17 @@ function goTasks() { void router.push(`/p/${projectId.value}/tasks`) }
 .vl-overview__filters {
   margin-top: var(--vl-space-4);
 }
+.vl-overview-distributions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--vl-space-4);
+  margin-bottom: var(--vl-space-4);
+}
+@media (max-width: 1023px) {
+  .vl-overview-distributions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .vl-metrics {
   margin-bottom: var(--vl-space-4);
 }
@@ -332,30 +468,34 @@ function goTasks() { void router.push(`/p/${projectId.value}/tasks`) }
   margin: 0;
   color: var(--vl-color-text-muted);
 }
-.vl-topic-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-.vl-topic-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-topic-table tbody th,
-.vl-topic-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
-}
 .vl-topic-table__title {
   font-weight: 600;
   white-space: nowrap;
 }
-.vl-topic-table__num {
-  text-align: right;
-  white-space: nowrap;
+.vl-topic-table__ratio-col {
+  min-width: 9rem;
+}
+.vl-topic-table__ratio {
+  display: grid;
+  gap: var(--vl-space-1);
+  min-width: 8rem;
+}
+.vl-topic-table__ratio-value {
+  font-variant-numeric: tabular-nums;
+}
+.vl-topic-table__ratio-track {
+  display: block;
+  height: 0.375rem;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-subtle);
+  overflow: hidden;
+}
+.vl-topic-table__ratio-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-gradient-accent);
+  transition: width var(--vl-motion-normal) var(--vl-ease);
 }
 .vl-topic-table__trend {
   color: var(--vl-color-text-secondary);

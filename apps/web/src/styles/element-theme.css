@@ -6,9 +6,9 @@
   --el-font-size-base: var(--vl-text-sm);
   --el-color-primary: var(--vl-color-brand);
   --el-color-primary-dark-2: var(--vl-color-brand-active);
-  --el-color-primary-light-3: var(--vl-color-brand);
+  --el-color-primary-light-3: var(--vl-color-brand-active);
   --el-color-primary-light-5: var(--vl-color-brand-line);
-  --el-color-primary-light-7: var(--vl-color-brand-soft);
+  --el-color-primary-light-7: var(--vl-color-brand-line);
   --el-color-primary-light-8: var(--vl-color-brand-soft);
   --el-color-primary-light-9: var(--vl-color-brand-soft);
   --el-color-success: var(--vl-color-success);
@@ -60,4 +60,29 @@
 .vl-field .el-select__wrapper:focus-within {
   outline: 2px solid var(--vl-color-brand);
   outline-offset: 2px;
+}
+
+/* 服务所有公共弹层(Dialog/Drawer/Popper 均被 Teleport 到 body):
+ * 统一玻璃材质;不透明度按混合后对比度校验设定(design-tokens 单测覆盖)。 */
+.el-dialog,
+.el-drawer {
+  background: var(--vl-glass-float);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  box-shadow: var(--vl-shadow-float), var(--vl-highlight-inset);
+  border-radius: var(--vl-radius-dialog);
+}
+.el-overlay {
+  background-color: var(--vl-color-overlay);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .el-dialog,
+  .el-drawer { background: var(--vl-color-surface); }
+}
+
+/* 服务 VlButton:主按钮品牌渐变(最浅一级仍满足白字 4.5:1) */
+.vl-button.el-button--primary:not(.is-plain) {
+  background: var(--vl-gradient-brand);
+  border-color: var(--vl-color-brand);
+  box-shadow: var(--vl-highlight-inset);
 }

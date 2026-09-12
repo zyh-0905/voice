@@ -4,12 +4,14 @@ html { color-scheme: light; }
 body {
   margin: 0;
   color: var(--vl-color-text);
-  background: var(--vl-color-bg);
+  /* 柔光渐变底固定不随滚动,给玻璃背板提供可折射的底色 */
+  background: var(--vl-gradient-page) fixed;
   font-family: var(--vl-font-sans);
   font-size: var(--vl-text-sm);
   line-height: var(--vl-leading-body);
 }
 button, input, select, textarea { font: inherit; }
+h1, h2, h3 { letter-spacing: var(--vl-tracking-tight); }
 
 /* 工作台布局基础 */
 .vl-shell { min-height: 100dvh; }
@@ -20,13 +22,20 @@ button, input, select, textarea { font: inherit; }
   margin-inline: auto;
   padding: var(--vl-space-6);
 }
+/* 玻璃面板:半透明白 + 背景模糊 + 内高光;不透明度按混合后对比度校验设定 */
 .vl-panel {
   min-width: 0;
   border: 1px solid var(--vl-color-border);
   border-radius: var(--vl-radius-panel);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-panel);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-5);
-  box-shadow: var(--vl-shadow-panel);
+  box-shadow: var(--vl-shadow-glass), var(--vl-highlight-inset);
+}
+/* 不支持 backdrop-filter 时回退到不透明表面,保证可读性 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-panel { background: var(--vl-color-surface); }
 }
 .vl-metrics {
   display: grid;
@@ -55,6 +64,48 @@ button, input, select, textarea { font: inherit; }
   .vl-page { padding: var(--vl-space-4); }
   .vl-panel { padding: var(--vl-space-4); }
   .vl-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 数据表基线:全站列表统一表头、行悬停与数值列对齐(风格规范 6.3) */
+.vl-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: start;
+}
+.vl-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--vl-z-sticky);
+  background: var(--vl-color-subtle);
+  color: var(--vl-color-text-secondary);
+  font-size: var(--vl-text-xs);
+  font-weight: 600;
+  text-align: start;
+  white-space: nowrap;
+  padding: var(--vl-space-3);
+  border-bottom: 1px solid var(--vl-color-border);
+}
+.vl-table tbody th,
+.vl-table tbody td {
+  padding: var(--vl-space-3);
+  border-bottom: 1px solid var(--vl-color-border);
+  vertical-align: top;
+}
+.vl-table tbody tr {
+  transition: background-color var(--vl-motion-fast) var(--vl-ease);
+}
+.vl-table tbody tr:hover {
+  background: var(--vl-color-hover);
+}
+.vl-table tbody tr:last-child th,
+.vl-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.vl-table__num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 遮罩层:证据抽屉与窄屏导航共用(背景不可交互语义) */

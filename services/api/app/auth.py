@@ -269,9 +269,18 @@ def _public(user: dict) -> dict:
 
 
 def _projects(user: dict) -> list[dict]:
-    role = user["role"]
-    return [{"project_id": "demo-project", "role": role,
-             "permissions": ["read", "analyze"] if role != "VIEWER" else ["read"]}]
+    """W03:按真实成员关系列出项目。
+
+    会员行由项目创建/启动种子写入;延迟导入 main 取运行时仓储,避免模块级循环。
+    调用方必须传**实时**结果进授权判断,不要用会话里的快照,原因见 _authorized。
+    """
+    from .main import repository
+    projects = []
+    for item in repository.list_user_memberships(user["id"]):
+        role = str(item.get("role", "VIEWER")).upper()
+        projects.append({"project_id": item["project_id"], "role": role,
+                         "permissions": ["read", "analyze"] if role != "VIEWER" else ["read"]})
+    return projects
 
 
 def _verify_password(user: dict, password: str) -> bool:
@@ -299,7 +308,19 @@ def current_user(
         code = 'token_expired' if store.is_expired(token) else 'unauthorized'
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": code},
                             headers={"WWW-Authenticate": "Bearer"})
-    return session
+    return _authorized(session)
+
+
+def _authorized(session: dict) -> dict:
+    """用**实时**成员关系覆盖会话里登录时的快照。
+
+    快照有两个真实后果,都不是理论问题:刚创建的项目要重新登录才可见(创建者被
+    自己的项目挡在门外);被吊销的权限会活到会话过期——计划 10.4 明确要求删除
+    项目即吊销访问,会话快照会让这条失效。
+
+    代价是每个请求多一次成员关系查询;授权正确性优先于这点开销。
+    """
+    return {**session, "projects": _projects(session)}
 
 
 def require_user(
@@ -314,7 +335,12 @@ def require_user(
     required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
     if not required and not session_token_of(http_request, credentials):
         demo = DEMO_ACCOUNTS["demo"]
-        return _public(demo) | {"demo_bypass": True, "projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
+        projects = _projects(demo)
+        if not projects:
+            # 开发旁路专属兜底:成员表为空时保住演示项目,避免本地无账号场景被锁死。
+            # 生产要求 AUTH_REQUIRED=true,这条路径不会启用。
+            projects = [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]
+        return _public(demo) | {"demo_bypass": True, "projects": projects}
     return current_user(http_request, credentials)
 
 
@@ -403,9 +429,25 @@ def logout(http_request: Request, response: Response,
     clear_session_cookie(response)
 
 
+def require_owner(user: Annotated[dict, Depends(require_user)]) -> dict:
+    """OWNER 专有动作(删除、审计):工程计划 7.5。
+
+    演示环境只有 ANALYST / VIEWER 两个角色,ANALYST 即项目管理员;
+    接入真实身份提供商后,OWNER 由 IdP 的角色断言给出,EDITOR 将被拒。
+    """
+    role = str(user.get("role", "VIEWER")).upper()
+    if role == "VIEWER":
+        raise HTTPException(status_code=403, detail={"code": "forbidden"})
+    return user
+
+
 def require_project_access(project_id: str, user: Annotated[dict, Depends(require_user)]) -> dict:
     """Hide projects outside the authenticated principal's membership list."""
     if user.get("demo_bypass"):
+        # 开发旁路:刻意短路项目隔离,便于本地无账号调试。
+        # 它只由 AUTH_REQUIRED=false 触发,而生产启动校验(settings.py)要求该值为
+        # true,所以这条路径进不了生产。任何隔离相关的用例都要走真实会话,不要用
+        # 这个旁路去验证——它按设计就是不设防的。
         return user
     membership = next((item for item in user.get("projects", []) if item.get("project_id") == project_id), None)
     if membership is None:
@@ -415,3 +457,15 @@ def require_project_access(project_id: str, user: Annotated[dict, Depends(requir
 
 def require_project_analyst(user: Annotated[dict, Depends(require_project_access)]) -> dict:
     return require_analyst(user)
+
+
+def require_project_owner(user: Annotated[dict, Depends(require_project_access)]) -> dict:
+    """项目设置变更:先按成员解析项目角色,再要求 OWNER(EDITOR/VIEWER 403)。
+
+    演示旁路(AUTH_REQUIRED=false 且无会话)没有真实成员行,按既有演示约定视为管理员。
+    """
+    if user.get("demo_bypass"):
+        return user
+    if str(user.get("role", "VIEWER")).upper() != "OWNER":
+        raise HTTPException(status_code=403, detail={"code": "forbidden"})
+    return user

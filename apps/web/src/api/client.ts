@@ -44,6 +44,113 @@ export interface TopicDetailResponse {
   revision: number
 }
 
+export interface DeletionTarget {
+  target_type: 'project' | 'dataset'
+  target_id: string
+}
+
+export interface TaskPatchBody {
+  expected_version: number
+  title?: string
+  source?: string
+  priority?: string
+  due_at?: string
+  acceptance?: string
+}
+
+// —— W03 项目成员与项目设置 ——
+
+export type ProjectMemberRole = 'OWNER' | 'EDITOR' | 'VIEWER'
+
+export interface ProjectMember {
+  id: string
+  display_name: string
+  role: ProjectMemberRole
+}
+
+export interface ProjectSettingsLimits {
+  max_feedback_rows: number
+  max_upload_bytes: number
+}
+
+export interface ProjectSettingsRules {
+  min_severity: string
+  scan_on_import: boolean
+}
+
+export interface ProjectSettings {
+  timezone: string
+  limits: ProjectSettingsLimits
+  rules: ProjectSettingsRules
+  model_available: boolean
+  version: number
+}
+
+export interface ProjectSettingsPatchBody {
+  expected_version: number
+  timezone?: string
+  limits?: ProjectSettingsLimits
+  rules?: ProjectSettingsRules
+  model_available?: boolean
+}
+
+export interface FeedbackSource {
+  feedback_id: string
+  dataset_id: string
+  dataset_name: string
+  source_row: number
+  channel: string | null
+  occurred_at: string | null
+  text: string
+  segments: Array<{ start: number; end: number; text: string }>
+}
+
+export interface ExportJob {
+  id: string
+  project_id: string
+  scope: string
+  state: string
+  row_count: number | null
+  created_at: string
+  expires_at: string
+  expired: boolean
+  invalidated: boolean
+  download_path: string
+}
+
+export interface DeletionBody extends DeletionTarget {
+  /** 仅执行删除需要:用户逐字输入的目标名称 */
+  confirm_name: string
+}
+
+export interface DeletionPreview {
+  target_type: 'project' | 'dataset'
+  target_id: string
+  target_name: string
+  datasets: number
+  runs: number
+  topics: number
+  tasks: number
+  reviews: number
+  risks: number
+  invalidates_reports?: boolean
+}
+
+export interface DeletionReceipt {
+  job_id: string
+  state: string
+  target_type: string
+  target_id: string
+  steps: Array<{ name: string; status: string }>
+  removed: Record<string, number>
+}
+
+export interface RiskReviewBody {
+  decision: 'confirmed' | 'excluded' | 'reopened'
+  reason: string
+  expected_version?: number
+}
+
 export interface ReviewCreateBody {
   task_id?: string | null
   run_id: string
@@ -100,15 +207,28 @@ export interface ApiClient {
   createTaskDraft(projectId: string, body: { title: string; source_topic_version_id?: string | null }): Promise<TaskSummary>
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
+  patchTask(projectId: string, taskId: string, body: TaskPatchBody): Promise<TaskSummary>
+  /** W16:项目成员列表;任务负责人只能从此列表选择 */
+  listMembers(projectId: string, signal?: AbortSignal): Promise<ProjectMember[]>
+  /** W03/7.2:项目设置(时区、限额、规则、模型可用性) */
+  getSettings(projectId: string, signal?: AbortSignal): Promise<ProjectSettings>
+  /** W03/7.2:写入项目设置(仅 OWNER);expected_version 过期返回 409,不做幂等键 */
+  patchSettings(projectId: string, body: ProjectSettingsPatchBody): Promise<ProjectSettings>
+  getFeedback(projectId: string, feedbackId: string, signal?: AbortSignal): Promise<FeedbackSource>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
+  reviewRisk(projectId: string, riskId: string, body: RiskReviewBody): Promise<RiskItem>
   getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal): Promise<TopicDetailResponse>
   correctTopic(projectId: string, topicId: string, body: CorrectionBody): Promise<{ revision: number; affected_topic_ids: string[] }>
   listReviews(projectId: string, signal?: AbortSignal): Promise<ReviewRecord[]>
   getReview(projectId: string, reviewId: string, signal?: AbortSignal): Promise<ReviewRecord>
   createReview(projectId: string, body: ReviewCreateBody): Promise<ReviewRecord>
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
-  /** GET /exports/redacted.csv,返回脱敏导出文件 */
-  exportRedactedCsv(projectId: string, signal?: AbortSignal): Promise<Blob>
+  previewDeletion(projectId: string, body: DeletionTarget): Promise<DeletionPreview>
+  executeDeletion(projectId: string, body: DeletionBody, idempotencyKey: string): Promise<DeletionReceipt>
+  /** POST /exports 创建导出任务(24h 失效) */
+  createExport(projectId: string, body: { scope: string }, idempotencyKey: string): Promise<ExportJob>
+  /** 下载导出文件:每次重新鉴权,过期/失效返回 410 */
+  downloadExport(projectId: string, exportId: string): Promise<Blob>
 }
 
 /** 按 VITE_USE_MOCK 选择真实/mock 客户端;所有页面与 composable 统一走此入口 */
@@ -230,14 +350,22 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         method: 'POST', body: JSON.stringify({ assertion }), headers: { 'Content-Type': 'application/json' },
       })
     },
-    async exportRedactedCsv(projectId: string, signal?: AbortSignal) {
-      const token = getAccessToken()
-      const response = await fetch(`${base}${project(projectId)}/exports/redacted.csv`, {
-        signal,
-        credentials: 'include',
-        headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    createExport(projectId: string, body: { scope: string }, idempotencyKey: string) {
+      return request<ExportJob>(`${project(projectId)}/exports`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
       })
-      if (!response.ok) throw new ApiHttpError(response.status, `Export failed (${response.status})`)
+    },
+    async downloadExport(projectId: string, exportId: string) {
+      const token = getAccessToken()
+      const response = await fetch(
+        `${base}${project(projectId)}/exports/${encodeURIComponent(exportId)}/download`,
+        { credentials: 'include', headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+      )
+      if (!response.ok) {
+        // 410 表示导出已过期或失效:提示重新导出,而不是重试旧链接
+        throw new ApiHttpError(response.status, response.status === 410 ? 'export_expired' : `Export failed (${response.status})`)
+      }
       return response.blob()
     },
     summary(projectId: string, signal?: AbortSignal) {
@@ -274,6 +402,41 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    previewDeletion(projectId: string, body: DeletionTarget) {
+      return request<DeletionPreview>(`${project(projectId)}/deletions/preview`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    executeDeletion(projectId: string, body: DeletionBody, idempotencyKey: string) {
+      return request<DeletionReceipt>(`${project(projectId)}/deletions`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      })
+    },
+    patchTask(projectId: string, taskId: string, body: TaskPatchBody) {
+      return request<TaskSummary>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    listMembers(projectId: string, signal?: AbortSignal) {
+      return list<ProjectMember>(`${project(projectId)}/members`, signal)
+    },
+    getSettings(projectId: string, signal?: AbortSignal) {
+      return request<ProjectSettings>(`${project(projectId)}/settings`, { signal })
+    },
+    patchSettings(projectId: string, body: ProjectSettingsPatchBody) {
+      return request<ProjectSettings>(`${project(projectId)}/settings`, {
+        method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    getFeedback(projectId: string, feedbackId: string, signal?: AbortSignal) {
+      return request<FeedbackSource>(`${project(projectId)}/feedback/${encodeURIComponent(feedbackId)}`, { signal })
+    },
+    reviewRisk(projectId: string, riskId: string, body: RiskReviewBody) {
+      return request<RiskItem>(`${project(projectId)}/risks/${encodeURIComponent(riskId)}/reviews`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
     },
     getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal) {
       const query = topicVersionId === undefined ? '' : `?topic_version_id=${topicVersionId}`

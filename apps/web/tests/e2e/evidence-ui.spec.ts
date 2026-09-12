@@ -26,3 +26,22 @@ test('桌面为 360px 非模态侧栏,窄屏切换为模态抽屉且不丢选中
   await expect(drawer).toBeHidden()
   await expect(trigger).toBeFocused()
 })
+
+
+// W22 证据源查询:引文可回溯到脱敏全文与源行,不返回原始文件
+test('证据引文可查看源反馈,给出脱敏全文与源行号', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.locator('[data-resource-id="refund"]').getByRole('button', { name: '查看证据' }).click()
+  const panel = page.getByTestId('evidence-panel')
+  await expect(panel).toBeVisible()
+
+  // 默认不展开源反馈,由人工按需回溯
+  await expect(page.getByTestId('evidence-source')).toHaveCount(0)
+
+  await panel.getByTestId('evidence-open-source').first().click()
+  const source = page.getByTestId('evidence-source')
+  await expect(source).toBeVisible()
+  await expect(source).toContainText('合成样本 DEMO-002')
+  await expect(source).toContainText('源行 37')
+  await expect(source).toContainText('电话')
+})

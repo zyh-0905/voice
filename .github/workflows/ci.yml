@@ -43,12 +43,26 @@ jobs:
       - working-directory: services/api
         run: alembic -c alembic.ini upgrade head
       - run: python -m compileall services/api/app
-      - run: PYTHONPATH=services/api pytest services/api/tests -q
+      # PYTHONPATH 同时需要仓库根:test_evaluation.py 以 services.api.* 绝对导入评测模块,
+      # 只给 services/api 会在收集阶段 ModuleNotFoundError,整个套件一条都不跑。
+      # 用 python -m pytest(与 README 的手册一致)——plain pytest 不会把 cwd 放进 sys.path。
+      - name: Backend tests
+        run: PYTHONPATH=services/api:. python -m pytest services/api/tests -q
+      # 用 heredoc 而不是 python -c:分号后面不能接 with 这类复合语句,
+      # 原来的写法是 SyntaxError。它一直藏在「上一步失败就 skip」后面没被发现。
       - name: Database readiness smoke
-        run: >-
-          python -c "from sqlalchemy import create_engine, text;
-          e=create_engine('${{ env.DATABASE_URL }}');
-          with e.connect() as c: assert c.execute(text('SELECT 1')).scalar() == 1"
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          url = os.environ["DATABASE_URL"]
+          # 方言写错(postgresql:// 而非 postgresql+psycopg://)会静默降级到本地 sqlite,
+          # 所以这里顺带断言连的是 PostgreSQL。
+          assert url.startswith("postgresql+psycopg://"), f"unexpected dialect: {url}"
+          with create_engine(url).connect() as connection:
+              assert connection.execute(text("SELECT 1")).scalar() == 1
+          print("database reachable:", url.split("@")[-1])
+          PY
 
   frontend:
     runs-on: ubuntu-latest

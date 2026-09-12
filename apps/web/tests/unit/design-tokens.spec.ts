@@ -50,3 +50,90 @@ test('核心语义 token 与图表色全部存在', () => {
     expect(css).toContain(`--vl-chart-${i}:`)
   }
 })
+
+// —— v1.2 玻璃材质:半透明表面叠加在最差底色上后,文字仍需达标 ——
+// 规范 3.1 备注「透明度…变化后须重新测试」;纯色对测试无法覆盖,故单列。
+function rgba(token: string): { r: number; g: number; b: number; a: number } {
+  const m = css.match(new RegExp(`${token}:\\s*rgba\\(([^)]+)\\)`))?.[1]
+  if (!m) throw new Error(`Missing rgba token: ${token}`)
+  const [r, g, b, a] = m.split(',').map(part => Number(part.trim()))
+  return { r: r!, g: g!, b: b!, a: a! }
+}
+function hexToRgb(hex: string) {
+  return { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16), a: 1 }
+}
+/** 把半透明表面叠加在不透明底色上,得到实际呈现的等效色 */
+function composite(overlay: { r: number; g: number; b: number; a: number }, base: { r: number; g: number; b: number }) {
+  const mix = (o: number, b: number) => Math.round(overlay.a * o + (1 - overlay.a) * b)
+  return {
+    r: mix(overlay.r, base.r), g: mix(overlay.g, base.g), b: mix(overlay.b, base.b),
+  }
+}
+function luminanceRgb(c: { r: number; g: number; b: number }): number {
+  const linear = [c.r, c.g, c.b].map((v) => {
+    const s = v / 255
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722
+}
+function contrastRgb(fgHex: string, bgRgb: { r: number; g: number; b: number }): number {
+  const a = luminance(color(fgHex)), b = luminanceRgb(bgRgb)
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+const glassSurfaces = ['--vl-glass-chrome', '--vl-glass-panel', '--vl-glass-float']
+const backgroundTints = ['--vl-tint-warm', '--vl-tint-cool', '--vl-tint-blush', '--vl-tint-sand', '--vl-tint-mint', '--vl-color-bg']
+const textTokens = ['--vl-color-text', '--vl-color-text-secondary', '--vl-color-text-muted']
+const glassCases: [string, string, string][] = glassSurfaces.flatMap(surface =>
+  backgroundTints.flatMap(tint => textTokens.map(text => [surface, tint, text])),
+)
+
+test.each(glassCases)('%s over %s:文字 %s 混合后仍 >= 4.5', (surfaceToken, tintToken, textToken) => {
+  const surface = rgba(surfaceToken)
+  const base = hexToRgb(color(tintToken))
+  expect(contrastRgb(textToken, composite(surface, base))).toBeGreaterThanOrEqual(4.5)
+})
+
+test.each(backgroundTints.filter(t => t !== '--vl-color-bg'))(
+  '%s:文字直接压在原始染色上(不经玻璃)仍 >= 4.5',
+  (tintToken) => {
+    const tint = hexToRgb(color(tintToken))
+    for (const textToken of textTokens) {
+      expect(contrastRgb(textToken, tint)).toBeGreaterThanOrEqual(4.5)
+    }
+  },
+)
+
+test('品牌渐变最浅一级仍满足白字 4.5:1', () => {
+  // 取渐变中最浅的色标(白字承载在其上,是最差情形)
+  const stops = [...css.matchAll(/--vl-gradient-brand:[^;]*?(#[0-9a-fA-F]{6})/g)].map(m => m[1]!)
+  const first = css.match(/--vl-gradient-brand:\s*linear-gradient\(\s*[^,]+,\s*(#[0-9a-fA-F]{6})/)?.[1]
+  if (!first) throw new Error('Missing --vl-gradient-brand light stop')
+  const light = hexToRgb(first)
+  const lightLum = luminanceRgb(light)
+  const whiteLum = luminanceRgb({ r: 255, g: 255, b: 255 })
+  const contrast = (Math.max(lightLum, whiteLum) + 0.05) / (Math.min(lightLum, whiteLum) + 0.05)
+  expect(contrast).toBeGreaterThanOrEqual(4.5)
+  expect(stops.length).toBeGreaterThan(0)
+})
+
+test('品牌文字压在品牌浅底/浅渐变上 >= 4.5(导航当前项与字标的真实组合)', () => {
+  const ink = hexToRgb(color('--vl-color-brand-ink'))
+  const soft = hexToRgb(color('--vl-color-brand-soft'))
+  const softLum = luminanceRgb(soft), inkLum = luminanceRgb(ink)
+  expect((Math.max(softLum, inkLum) + 0.05) / (Math.min(softLum, inkLum) + 0.05)).toBeGreaterThanOrEqual(4.5)
+
+  // 品牌浅色渐变的最浅一级
+  const lightStop = css.match(/--vl-gradient-brand-soft:\s*linear-gradient\(\s*[^,]+,\s*(#[0-9a-fA-F]{6})/)?.[1]
+  if (!lightStop) throw new Error('Missing --vl-gradient-brand-soft light stop')
+  const stopLum = luminanceRgb(hexToRgb(lightStop))
+  expect((Math.max(stopLum, inkLum) + 0.05) / (Math.min(stopLum, inkLum) + 0.05)).toBeGreaterThanOrEqual(4.5)
+})
+
+test('实底橙不用于浅底文字(brand 与 brand-ink 分工)', () => {
+  const brand = hexToRgb(color('--vl-color-brand'))
+  const soft = hexToRgb(color('--vl-color-brand-soft'))
+  const a = luminanceRgb(brand), b = luminanceRgb(soft)
+  // 记录事实:实底橙压在品牌浅底上不足 4.5,因此文字必须用 brand-ink
+  expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeLessThan(4.5)
+})

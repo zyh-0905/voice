@@ -1,12 +1,47 @@
 # 诉源镜 VoiceLens Web 前端风格规范
 
-> 版本：Frontend Style v1.0（与 Web Engineering Plan v1.1 配套）  
-> 日期：2026-09-09  
+> 版本：Frontend Style v1.1（与 Web Engineering Plan v1.1 配套）  
+> 日期：2026-09-12（v1.0 为 2026-09-09）  
 > 状态：用户已确认主方向；本文件冻结工程实现规则，不代表前端页面已经实现或通过测试。  
 > 适用范围：Vue 3 Web；不包含小程序、原生 App、官网营销页或新一轮品牌重命名。  
 > 配套工程计划：[VoiceLens_Web_工程开发计划_v1.1.md](VoiceLens_Web_工程开发计划_v1.1.md)
 
 **设计方向：现代极简工作台为底，概览与复盘采用克制的 Bento 模块布局，加入温和的品牌表达。**
+
+> **v1.2 变更记录（按第 14.3 节变更流程）**
+>
+> 变更项：**启用玻璃材质与渐变**，品牌橙降浓度（`#C2410C` → `#CC4A0D`），新增 `--vl-color-brand-ink`
+> （浅底上的品牌色文字）、`--vl-color-brand-vivid`（图形强调）、`--vl-glass-*`、`--vl-gradient-*` 与染色 token。
+>
+> 理由：用户评审要求整体转为 Apple 玻璃质感并加入渐变元素，同时反馈橙色浓度偏深。
+>
+> **影响与偏离说明**：本节**明确覆盖**第 1.3 节「不采用全站玻璃卡片…玻璃效果首版不实施」
+> 与「首版不做主题切换器」之外的玻璃禁令。工程上的约束条件（保留）：
+> 1. 玻璃仅用于**外壳与面板背板**；承载正文的表格、证据原文仍落在高不透明度表面上。
+> 2. 不支持 `backdrop-filter` 的环境回退为不透明表面（`@supports not` 分支）。
+> 3. 半透明使对比度依赖底色：新增**混合后对比度测试**，把三档玻璃分别叠加在暖光/冷光/近白
+>    三种底色上，逐项校验主/次/辅助文字 ≥4.5∶1；另校验品牌浅渐变上的文字与导航当前项组合。
+> 4. 实底橙 `#CC4A0D` 与浅底文字色 `#B03C0A` 分工固定：前者承载白字，后者用于浅底上的品牌色文字
+>    （`#CC4A0D` 压在 `#FFF4EC` 上仅 4.26∶1，实测由 axe 在导航当前项上捕获）。
+> 5. 渐变只用于品牌实底、浅色底与装饰性图形（占比条等），不得用于承载文字的正文区域。
+>
+> **不变项**：浅色主题、224/64 外壳、正文 14px / 证据 16px、行动优先首页、桌面证据侧栏 / 窄屏抽屉、
+> 明确的数据范围与人工操作边界；「不采用霓虹渐变、发光边框」仍然有效。
+>
+> **v1.1 变更记录（按第 14.3 节变更流程）**
+>
+> 变更项：主色由青绿改为**浅橙**，中性色改为 Apple 式近白/分层灰，图表扩为 6 个可辨识色相；
+> 圆角（面板 12→16px、控件 8→10px、弹窗 16→20px）、阴影改为更柔的分层阴影、页面标题字距收紧。
+>
+> 理由：用户评审后判定 v1.0 的暖绿灰基调"发闷"，要求参考 Apple 设计风格并以浅橙为主色。
+>
+> 影响：本文件第 3.1/3.2 节色表、第 14.2 节对比度校核表已同步更新；`tokens.css` 与
+> `tests/unit/design-tokens.spec.ts` 同步；UI-21（对比度）在 11 组纯色对上重新通过。
+> **不变项**：浅色主题、外壳尺寸（224/64）、正文 14px / 证据 16px、行动优先首页、
+> 桌面证据侧栏 / 窄屏抽屉、明确的数据范围与人工操作边界。
+>
+> 实现约束：亮橙（如 `#FF9500`）与白字仅约 2.2∶1，**不得**用作承载白字的实底；
+> 实底使用 `--vl-color-brand: #C2410C`（白字 5.18∶1），浅橙用于表面、选中态与图形。
 
 读者：前端开发者、产品设计者、测试人员，以及执行前端任务的开发代理。本文不仅说明“长什么样”，还规定结构、组件、状态、数据表达、交互和验收。
 
@@ -36,7 +71,7 @@
 |---|---|
 | 原项目计划书第 4、5、11 节 | 授权导入、问题主题、风险与证据、人工整改、效果复盘；不是自动客服机器人。[R1] |
 | 当前 Web 工程计划 v1.0 | Vue 3、TypeScript、Element Plus、ECharts；原有路由、权限、证据快照和任务状态机。[E1] |
-| 用户本轮确认的 A＋B 方向 | 极简工作台、Bento 概览、暖中性色与青绿强调；深色后置，玻璃不进入业务内容层。[U1] |
+| 用户本轮确认的 A＋B 方向 | 极简工作台、Bento 概览、暖中性色与品牌强调；深色后置，玻璃不进入业务内容层。[U1]（v1.1：主色改为浅橙） |
 | 本次工程设计补充 | 色值、尺寸、组件接口、响应式规则、首页指标顺序、测试定位符和视觉门禁。它们是本项目的决定，不是某家公司官方参数。[D1] |
 | 官方参考 | Element Plus 主题能力、ECharts 可访问性、W3C 与 Playwright 的相关方法；见第 14 节。[S1—S12] |
 
@@ -54,7 +89,7 @@
 
 不因参考 Linear/shadcn 的视觉结构而迁移到 React、替换 Element Plus、额外安装第二套 UI 组件库或引入大型后台模板。首版不开发主题切换器、可拖拽卡片编排、拖拽任务状态、聊天悬浮球和全局命令面板。
 
-**首版只有一种浅色主题。** tokens 使用语义命名，为未来主题保留结构，但不交付半完成的深色模式。玻璃效果首版不实施；以后仅在非核心导航/品牌区域另行评估。
+**首版只有一种浅色主题。** tokens 使用语义命名，为未来主题保留结构，但不交付半完成的深色模式。玻璃效果自 **v1.2** 起启用（外壳与面板背板，见文首 v1.2 记录中的约束条件）；仍**禁止霓虹渐变与发光边框**，渐变只用于品牌实底、浅色底与装饰性图形。
 
 <a id="f2"></a>
 ## 2. 设计语言与页面气质
@@ -66,7 +101,7 @@
 | 关键词 | 具体做法 | 不要做成 |
 |---|---|---|
 | 理性 | 对齐、稳定导航、清晰的列、固定的操作位置 | 仿金融交易大屏 |
-| 温和 | 暖灰白背景、少量青绿、自然的文字节奏 | 米黄色纸纹、文艺手写字体 |
+| 温和 | 近白背景、少量浅橙、自然的文字节奏 | 高饱和撞色、文艺手写字体 |
 | 证据优先 | 引文能定位、来源清楚、缺失显式提示 | 只有 AI 总结没有源反馈 |
 | 行动优先 | 待复核、逾期与下一步动作靠前 | 总量指标占据整个首屏 |
 | 低噪声 | 少量边框、层级明确、一处强调服务一个目的 | 一页多种渐变、多种阴影、多种强调色 |
@@ -79,7 +114,7 @@
 
 ### 2.3 装饰预算
 
-一个页面只保留一个明显的主操作；数据卡片不用四种饱和背景区分。青绿用于选中/主要动作，不代表所有指标都在改善。红色仅用于危险操作、高严重度提示和错误；大段正文不使用彩色。
+一个页面只保留一个明显的主操作；数据卡片不用四种饱和背景区分。品牌橙用于选中/主要动作，不代表所有指标都在改善。红色仅用于危险操作、高严重度提示和错误；大段正文不使用彩色。
 
 <a id="f3"></a>
 ## 3. 颜色与设计变量
@@ -88,73 +123,76 @@
 
 | 用途 | 变量 | 色值 | 使用限制 |
 |---|---|---|---|
-| 页面背景 | `--vl-color-bg` | `#F6F7F4` | 暖灰白；不叠背景图片 |
+| 页面背景 | `--vl-color-bg` | `#FBFBFD` | 近白；不叠背景图片 |
 | 内容表面 | `--vl-color-surface` | `#FFFFFF` | 表格、证据、表单、指标卡 |
-| 次级表面 | `--vl-color-subtle` | `#EFF2EE` | 表头、只读元信息、禁用底色 |
-| 悬停表面 | `--vl-color-hover` | `#F1F4F1` | 列表悬停；不暗示选中 |
-| 主文字 | `--vl-color-text` | `#182B28` | 标题、正文、核心数字 |
-| 次文字 | `--vl-color-text-secondary` | `#4B5E57` | 标签、说明、坐标 |
-| 辅助文字 | `--vl-color-text-muted` | `#607168` | 时间/来源；不是浅到看不清的灰 |
-| 主品牌色 | `--vl-color-brand` | `#0B6E63` | 主按钮、当前导航、关键链接 |
-| 品牌悬停 | `--vl-color-brand-hover` | `#095D53` | 可交互主操作悬停 |
-| 品牌按下 | `--vl-color-brand-active` | `#074B43` | 主操作按下 |
-| 品牌浅底 | `--vl-color-brand-soft` | `#E6F2EE` | 选中项、证据聚焦底色 |
-| 品牌装饰线 | `--vl-color-brand-line` | `#A4CFC2` | 仅装饰，不独立承担控件识别 |
-| 分隔边线 | `--vl-color-border` | `#DEE5DF` | 卡片/表格细线，不作唯一输入框边界 |
-| 控件边界 | `--vl-color-border-control` | `#7A8E82` | 必须靠边界识别的输入框/复选框 |
-| 成功文字/底色 | `--vl-color-success` / `--vl-color-success-bg` | `#2C6E49` / `#EEF7F0` | 已保存、执行验收通过；不表示因果改善 |
-| 警告文字/底色 | `--vl-color-warning` / `--vl-color-warning-bg` | `#8A4B08` / `#FFF4E0` | 待复核、数据不完整 |
-| 危险文字/底色 | `--vl-color-danger` / `--vl-color-danger-bg` | `#B23B3B` / `#FFF0EF` | 错误、破坏性操作、严重候选提示 |
-| 信息文字/底色 | `--vl-color-info` / `--vl-color-info-bg` | `#285F86` / `#EDF4FA` | 分析中、信息说明 |
+| 次级表面 | `--vl-color-subtle` | `#F5F5F7` | 表头、只读元信息、禁用底色 |
+| 悬停表面 | `--vl-color-hover` | `#F1F1F4` | 列表悬停；不暗示选中 |
+| 主文字 | `--vl-color-text` | `#1D1D1F` | 标题、正文、核心数字 |
+| 次文字 | `--vl-color-text-secondary` | `#515154` | 标签、说明、坐标 |
+| 辅助文字 | `--vl-color-text-muted` | `#6E6E73` | 时间/来源；不是浅到看不清的灰 |
+| 主品牌色 | `--vl-color-brand` | `#C2410C` | 主按钮、当前导航、关键链接（白字可读） |
+| 品牌悬停 | `--vl-color-brand-hover` | `#9A3412` | 可交互主操作悬停 |
+| 品牌按下 | `--vl-color-brand-active` | `#7C2D12` | 主操作按下 |
+| 品牌浅底 | `--vl-color-brand-soft` | `#FFF4EC` | 选中项、证据聚焦底色 |
+| 品牌装饰线 | `--vl-color-brand-line` | `#FDBA74` | 仅装饰，不独立承担控件识别 |
+| 品牌图形色 | `--vl-color-brand-vivid` | `#F97316` | 图标、条形、描边等图形强调；**不承载文字** |
+| 分隔边线 | `--vl-color-border` | `#E5E5EA` | 卡片/表格细线，不作唯一输入框边界 |
+| 控件边界 | `--vl-color-border-control` | `#8E8E93` | 必须靠边界识别的输入框/复选框 |
+| 成功文字/底色 | `--vl-color-success` / `--vl-color-success-bg` | `#2E7D32` / `#EDF7ED` | 已保存、执行验收通过；不表示因果改善 |
+| 警告文字/底色 | `--vl-color-warning` / `--vl-color-warning-bg` | `#B45309` / `#FEF3E2` | 待复核、数据不完整 |
+| 危险文字/底色 | `--vl-color-danger` / `--vl-color-danger-bg` | `#B3261E` / `#FDECEA` | 错误、破坏性操作、严重候选提示 |
+| 信息文字/底色 | `--vl-color-info` / `--vl-color-info-bg` | `#0B5EA8` / `#EAF3FD` | 分析中、信息说明 |
 
 色值是本项目设计选择。具体文字/背景组合的静态对比度结果见第 14.2 节；透明度、图片、第三方组件状态变化后须重新测试。
 
 ### 3.2 可复制的 `tokens.css`
 
 ```css
-/* apps/web/src/styles/tokens.css — Frontend Style v1.0 */
+/* apps/web/src/styles/tokens.css — Frontend Style v1.1 */
 :root {
   color-scheme: light;
-  --vl-color-bg: #F6F7F4;
+  --vl-color-bg: #FBFBFD;
   --vl-color-surface: #FFFFFF;
-  --vl-color-subtle: #EFF2EE;
-  --vl-color-hover: #F1F4F1;
-  --vl-color-text: #182B28;
-  --vl-color-text-secondary: #4B5E57;
-  --vl-color-text-muted: #607168;
-  --vl-color-brand: #0B6E63;
-  --vl-color-brand-hover: #095D53;
-  --vl-color-brand-active: #074B43;
-  --vl-color-brand-soft: #E6F2EE;
-  --vl-color-brand-line: #A4CFC2;
-  --vl-color-border: #DEE5DF;
-  --vl-color-border-control: #7A8E82;
-  --vl-color-success: #2C6E49;
-  --vl-color-success-bg: #EEF7F0;
-  --vl-color-warning: #8A4B08;
-  --vl-color-warning-bg: #FFF4E0;
-  --vl-color-danger: #B23B3B;
-  --vl-color-danger-bg: #FFF0EF;
-  --vl-color-info: #285F86;
-  --vl-color-info-bg: #EDF4FA;
-  --vl-color-overlay: rgba(24, 43, 40, 0.38);
+  --vl-color-subtle: #F5F5F7;
+  --vl-color-hover: #F1F1F4;
+  --vl-color-text: #1D1D1F;
+  --vl-color-text-secondary: #515154;
+  --vl-color-text-muted: #6E6E73;
+  --vl-color-brand: #C2410C;
+  --vl-color-brand-hover: #9A3412;
+  --vl-color-brand-active: #7C2D12;
+  --vl-color-brand-soft: #FFF4EC;
+  --vl-color-brand-line: #FDBA74;
+  --vl-color-brand-vivid: #F97316;
+  --vl-color-border: #E5E5EA;
+  --vl-color-border-control: #8E8E93;
+  --vl-color-success: #2E7D32;
+  --vl-color-success-bg: #EDF7ED;
+  --vl-color-warning: #B45309;
+  --vl-color-warning-bg: #FEF3E2;
+  --vl-color-danger: #B3261E;
+  --vl-color-danger-bg: #FDECEA;
+  --vl-color-info: #0B5EA8;
+  --vl-color-info-bg: #EAF3FD;
+  --vl-color-overlay: rgba(29, 29, 31, 0.4);
 
-  --vl-chart-1: #0B6E63;
-  --vl-chart-2: #386A98;
-  --vl-chart-3: #8A5A2B;
-  --vl-chart-4: #716093;
-  --vl-chart-5: #48705C;
-  --vl-chart-6: #526372;
+  --vl-chart-1: #EA580C;
+  --vl-chart-2: #0071E3;
+  --vl-chart-3: #2E7D32;
+  --vl-chart-4: #5856D6;
+  --vl-chart-5: #AF52DE;
+  --vl-chart-6: #0E7490;
 
-  --vl-font-sans: system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --vl-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    system-ui, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --vl-tracking-tight: -0.015em; /* 标题字距收紧 */
   --vl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --vl-text-xs: 0.75rem;    /* 12px：仅辅助信息 */
   --vl-text-sm: 0.875rem;   /* 14px：正文、表格 */
   --vl-text-md: 1rem;      /* 16px：证据原文、区块标题 */
   --vl-text-lg: 1.25rem;   /* 20px：二级页标题 */
   --vl-text-xl: 1.625rem;  /* 26px：页面标题 */
-  --vl-text-metric: 1.875rem; /* 30px：指标值 */
+  --vl-text-metric: 2rem;  /* 32px：指标值 */
   --vl-leading-body: 1.5714286;
   --vl-leading-evidence: 1.625;
 
@@ -168,10 +206,10 @@
   --vl-space-10: 2.5rem;
   --vl-space-12: 3rem;
 
-  --vl-radius-sm: 0.375rem;
-  --vl-radius-control: 0.5rem;
-  --vl-radius-panel: 0.75rem;
-  --vl-radius-dialog: 1rem;
+  --vl-radius-sm: 0.5rem;
+  --vl-radius-control: 0.625rem;
+  --vl-radius-panel: 1rem;
+  --vl-radius-dialog: 1.25rem;
   --vl-control-height: 2.5rem;
   --vl-control-height-touch: 2.75rem;
   --vl-control-height-compact: 2rem;
@@ -180,8 +218,8 @@
   --vl-evidence-width: 22.5rem;
   --vl-content-max: 100rem;
 
-  --vl-shadow-panel: 0 1px 2px rgba(24, 43, 40, 0.035);
-  --vl-shadow-float: 0 12px 32px rgba(24, 43, 40, 0.12);
+  --vl-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
+  --vl-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
   --vl-motion-fast: 120ms;
   --vl-motion-normal: 180ms;
   --vl-ease: cubic-bezier(0.2, 0, 0, 1);
@@ -259,7 +297,7 @@
 
 主内容最大宽度 1600px；宽屏居中，不无限拉长证据正文。普通页面以文档为主滚动区域，不制造三个并列的纵向滚动容器。复杂表格仅在自己容器内横滚，不能靠给整个 `body` 加 `overflow-x:hidden` 掩盖布局缺陷。
 
-导航名称固定为：工作台、数据导入、主题洞察、风险复核、整改任务、效果复盘；设置置底。分析进度作为导入/分析详情路径，不新增“AI 中心”导航。当前项有浅青绿背景＋明显文字状态；非当前项不铺满彩色底。
+导航名称固定为：工作台、数据导入、主题洞察、风险复核、整改任务、效果复盘；设置置底。分析进度作为导入/分析详情路径，不新增“AI 中心”导航。当前项有品牌浅底＋明显文字状态（v1.1 起可加左侧品牌指示条）；非当前项不铺满彩色底。
 
 ### 5.2 断点矩阵
 
@@ -373,7 +411,7 @@ button, input, select, textarea { font: inherit; }
 
 ### 6.2 按钮与表单
 
-主要动作使用深青绿实底白字；次要动作用白底控件边框；文本操作使用青绿并有可辨认的链接/按钮语义；删除为深红实底或危险描边，仅放在真正危险操作上。
+主要动作使用品牌深橙实底白字；次要动作用白底控件边框；文本操作使用品牌橙并有可辨认的链接/按钮语义；删除为深红实底或危险描边，仅放在真正危险操作上。
 
 `VlButton` 必须支持 `type='button'|'submit'`、`variant`、`loading`、`disabled`、`aria-label` 和透传事件。readonly 原因通过邻近说明显示，不能藏在无法悬停/聚焦的 disabled 按钮上。
 
@@ -405,7 +443,7 @@ button, input, select, textarea { font: inherit; }
 
 ### 6.6 图表
 
-`TrendChart.vue` 默认折线或柱状图，白底、细坐标、单位清楚；图表区参考 280—320px 高。单一指标使用青绿，比较窗口使用不同线型/形状和图例；多分类色最多使用 tokens 的 6 色，类别过多优先改为排序表或条形图。
+`TrendChart.vue` 默认折线或柱状图，白底、细坐标、单位清楚；图表区参考 280—320px 高。单一指标使用品牌橙（`--vl-chart-1`），比较窗口使用不同线型/形状和图例；多分类色最多使用 tokens 的 6 色，类别过多优先改为排序表或条形图。
 
 折线不平滑，不用面积渐变制造增长感；缺数据保持断点，`connectNulls=false`；柱状图数值轴从 0 起，比例视图注明轴范围。主题占比可能多标签合计超过 100%，因此不用饼图假装互斥构成。
 
@@ -781,7 +819,7 @@ npm --prefix apps/web run build
 
 | ID | 检查点 | 失败判据 |
 |---|---|---|
-| UI-01 | 语义 tokens 与暖灰/青绿主题 | 业务页硬编码新颜色；旧蓝色主题泄漏 |
+| UI-01 | 语义 tokens 与浅橙主题 | 业务页硬编码新颜色；旧青绿/蓝色主题泄漏 |
 | UI-02 | 外壳与断点 | 320/375/768/1024/1280/1440/1920 任一关键操作不可达 |
 | UI-03 | 首页行动顺序与范围 | 四卡顺序错误；项目待办假称受反馈筛选影响 |
 | UI-04 | 表格密度与导航 | 全部卡片化、只可鼠标整行点、正文被裁断 |
@@ -865,25 +903,27 @@ npm --prefix apps/web run build
 
 | 组合 | 前景/背景 | 对比度 | 检查阈值 | 数值结果 |
 |---|---|---:|---:|---|
-| 主正文/白底 | `#182B28` / `#FFFFFF` | 14.841∶1 | 4.5∶1 | 达标 |
-| 次正文/白底 | `#4B5E57` / `#FFFFFF` | 6.913∶1 | 4.5∶1 | 达标 |
-| 辅助文字/页面底 | `#607168` / `#F6F7F4` | 4.811∶1 | 4.5∶1 | 达标 |
-| 辅助文字/次级底 | `#607168` / `#EFF2EE` | 4.583∶1 | 4.5∶1 | 达标 |
-| 白字/主按钮 | `#FFFFFF` / `#0B6E63` | 6.132∶1 | 4.5∶1 | 达标 |
-| 白字/主按钮hover | `#FFFFFF` / `#095D53` | 7.771∶1 | 4.5∶1 | 达标 |
-| 白字/主按钮active | `#FFFFFF` / `#074B43` | 10.017∶1 | 4.5∶1 | 达标 |
-| 成功标签 | `#2C6E49` / `#EEF7F0` | 5.591∶1 | 4.5∶1 | 达标 |
-| 警告标签 | `#8A4B08` / `#FFF4E0` | 6.235∶1 | 4.5∶1 | 达标 |
-| 危险标签 | `#B23B3B` / `#FFF0EF` | 5.294∶1 | 4.5∶1 | 达标 |
-| 信息标签 | `#285F86` / `#EDF4FA` | 6.161∶1 | 4.5∶1 | 达标 |
-| 控件边界/白底 | `#7A8E82` / `#FFFFFF` | 3.489∶1 | 3∶1 | 达标 |
-| 控件边界/页面底 | `#7A8E82` / `#F6F7F4` | 3.245∶1 | 3∶1 | 达标 |
-| 图表系列1/白底 | `#0B6E63` / `#FFFFFF` | 6.132∶1 | 3∶1 | 达标 |
-| 图表系列2/白底 | `#386A98` / `#FFFFFF` | 5.702∶1 | 3∶1 | 达标 |
-| 图表系列3/白底 | `#8A5A2B` / `#FFFFFF` | 5.869∶1 | 3∶1 | 达标 |
-| 图表系列4/白底 | `#716093` / `#FFFFFF` | 5.531∶1 | 3∶1 | 达标 |
-| 图表系列5/白底 | `#48705C` / `#FFFFFF` | 5.603∶1 | 3∶1 | 达标 |
-| 图表系列6/白底 | `#526372` / `#FFFFFF` | 6.201∶1 | 3∶1 | 达标 |
+| 主正文/白底 | `#1D1D1F` / `#FFFFFF` | 16.830∶1 | 4.5∶1 | 达标 |
+| 次正文/白底 | `#515154` / `#FFFFFF` | 7.910∶1 | 4.5∶1 | 达标 |
+| 辅助文字/页面底 | `#6E6E73` / `#FBFBFD` | 4.907∶1 | 4.5∶1 | 达标 |
+| 辅助文字/次级底 | `#6E6E73` / `#F5F5F7` | 4.658∶1 | 4.5∶1 | 达标 |
+| 白字/主按钮 | `#FFFFFF` / `#C2410C` | 5.178∶1 | 4.5∶1 | 达标 |
+| 白字/主按钮hover | `#FFFFFF` / `#9A3412` | 7.307∶1 | 4.5∶1 | 达标 |
+| 白字/主按钮active | `#FFFFFF` / `#7C2D12` | 9.370∶1 | 4.5∶1 | 达标 |
+| 成功标签 | `#2E7D32` / `#EDF7ED` | 4.670∶1 | 4.5∶1 | 达标 |
+| 警告标签 | `#B45309` / `#FEF3E2` | 4.575∶1 | 4.5∶1 | 达标 |
+| 危险标签 | `#B3261E` / `#FDECEA` | 5.716∶1 | 4.5∶1 | 达标 |
+| 信息标签 | `#0B5EA8` / `#EAF3FD` | 5.891∶1 | 4.5∶1 | 达标 |
+| 控件边界/白底 | `#8E8E93` / `#FFFFFF` | 3.261∶1 | 3∶1 | 达标 |
+| 控件边界/页面底 | `#8E8E93` / `#FBFBFD` | 3.155∶1 | 3∶1 | 达标 |
+| 图表系列1/白底 | `#EA580C` / `#FFFFFF` | 3.560∶1 | 3∶1 | 达标 |
+| 图表系列2/白底 | `#0071E3` / `#FFFFFF` | 4.697∶1 | 3∶1 | 达标 |
+| 图表系列3/白底 | `#2E7D32` / `#FFFFFF` | 5.127∶1 | 3∶1 | 达标 |
+| 图表系列4/白底 | `#5856D6` / `#FFFFFF` | 5.650∶1 | 3∶1 | 达标 |
+| 图表系列5/白底 | `#AF52DE` / `#FFFFFF` | 4.130∶1 | 3∶1 | 达标 |
+| 图表系列6/白底 | `#0E7490` / `#FFFFFF` | 5.358∶1 | 3∶1 | 达标 |
+
+> v1.1:上表为浅橙主题下重新计算的结果(2026-09-12),19 组全部达标;与 `tests/unit/design-tokens.spec.ts` 的 11 组断言一致。
 
 正文与控件必须在真实页面重新检查 normal/hover/active/focus/disabled、popover、teleport、缩放与强制颜色模式；本次没有产品源码，因此没有声称这些浏览器测试已经通过。
 

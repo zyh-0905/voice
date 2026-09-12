@@ -12,6 +12,33 @@
         <VlButton variant="secondary" @click="load">重试</VlButton>
       </template>
 
+      <section v-if="editing" class="vl-panel vl-task-detail__edit" data-testid="task-edit-form">
+        <h2 class="vl-task-detail__edit-title">编辑草稿</h2>
+        <p class="vl-task-detail__hint">草稿阶段可改标题、来源与优先级;派发后改为可调期限与验收标准。</p>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-title">标题</label>
+          <input id="vl-task-edit-title" v-model="editForm.title" class="vl-confirm-form__input" data-testid="task-edit-title" />
+        </div>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-source">来源</label>
+          <input id="vl-task-edit-source" v-model="editForm.source" class="vl-confirm-form__input" data-testid="task-edit-source" />
+        </div>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-priority">优先级</label>
+          <select id="vl-task-edit-priority" v-model="editForm.priority" class="vl-confirm-form__input" data-testid="task-edit-priority">
+            <option value="LOW">低</option>
+            <option value="MEDIUM">中</option>
+            <option value="HIGH">高</option>
+            <option value="CRITICAL">严重</option>
+          </select>
+        </div>
+        <p v-if="editError" class="vl-task-detail__error" data-testid="task-edit-error" role="alert">{{ editError }}</p>
+        <div class="vl-confirm-form__actions">
+          <VlButton variant="secondary" @click="editing = false">取消</VlButton>
+          <VlButton variant="primary" :loading="saving" data-testid="task-edit-save" @click="saveEdit">保存修改</VlButton>
+        </div>
+      </section>
+
       <div v-if="task" class="vl-task-detail">
         <VlPanel title="任务信息">
           <dl class="vl-task-detail__meta">
@@ -35,6 +62,14 @@
           </dl>
 
           <template #actions>
+            <VlButton
+              v-if="task?.status === 'DRAFT' && canAct"
+              variant="secondary"
+              data-testid="task-edit"
+              @click="startEdit"
+            >
+              编辑草稿
+            </VlButton>
             <VlButton
               v-if="primaryAction"
               :variant="primaryAction.variant"
@@ -79,8 +114,19 @@
       <template v-if="dialog.spec?.kind === 'confirm'" #form>
         <div class="vl-field vl-confirm-form__field">
           <label for="vl-task-owner">负责人</label>
-          <input id="vl-task-owner" v-model="owner" data-testid="task-owner-input" class="vl-confirm-form__input" placeholder="选择或输入负责人" />
+          <!-- W16:负责人只能从项目成员接口选择,不提供自由文本兜底 -->
+          <select
+            id="vl-task-owner"
+            v-model="owner"
+            data-testid="task-owner-input"
+            class="vl-confirm-form__input"
+            :disabled="membersStatus !== 'success'"
+          >
+            <option value="">{{ membersStatus === 'loading' ? '正在加载成员…' : '请选择负责人' }}</option>
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
           <span v-if="formError" class="vl-confirm-form__error" data-testid="owner-validation-error">{{ formError }}</span>
+          <span v-if="membersStatus === 'error'" class="vl-confirm-form__error" data-testid="task-owner-error" role="alert">{{ membersError }}</span>
         </div>
         <div class="vl-field vl-confirm-form__field">
           <label for="vl-task-due">截止时间</label>
@@ -107,7 +153,7 @@ import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
 import TaskTimeline from '../../components/common/TaskTimeline.vue'
 import HumanReviewDialog from '../../components/common/HumanReviewDialog.vue'
-import { ApiHttpError, apiClient, type TaskTransitionBody } from '../../api/client'
+import { ApiHttpError, apiClient, type ProjectMember, type TaskTransitionBody } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import { effectStatusLabel } from '../../lib/ui-status'
 import type { TaskDetail } from '../../types/domain'
@@ -189,6 +235,24 @@ const dueAt = ref('')
 const acceptance = ref('')
 const formError = ref('')
 
+// W16:负责人候选项只来自成员接口;成功后复用,加载失败在对话框内明示(不回退自由文本)
+const members = ref<ProjectMember[]>([])
+const membersStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
+const membersError = ref('')
+
+async function loadMembers() {
+  if (membersStatus.value === 'loading' || membersStatus.value === 'success') return
+  membersStatus.value = 'loading'
+  membersError.value = ''
+  try {
+    members.value = await client.listMembers(projectId.value)
+    membersStatus.value = 'success'
+  } catch (err) {
+    membersStatus.value = 'error'
+    membersError.value = err instanceof Error ? err.message : '无法获取项目成员,请重试'
+  }
+}
+
 function onPrimary() {
   const spec = primaryAction.value
   if (spec) openDialog(spec)
@@ -200,9 +264,11 @@ function onSecondary() {
 
 function openDialog(spec: ActionSpec) {
   formError.value = ''
-  owner.value = task.value?.owner ?? ''
+  owner.value = task.value?.owner_id ?? ''
   dueAt.value = task.value?.dueAt?.slice(0, 10) ?? ''
   acceptance.value = task.value?.acceptance ?? ''
+  // 派发对话框需要成员列表;其余动作不含负责人字段
+  if (spec.kind === 'confirm') void loadMembers()
   dialog.value = {
     open: true,
     title: spec.label,
@@ -236,9 +302,18 @@ async function onDialogConfirm(comment: string) {
   const spec = dialog.value.spec
   if (!spec) return
   if (spec.kind === 'confirm') {
+    // 成员列表不可用时不允许派发:不回退到自由文本,也不静默通过
+    if (membersStatus.value === 'error') {
+      formError.value = `成员列表加载失败:${membersError.value}`
+      return
+    }
+    if (membersStatus.value !== 'success') {
+      formError.value = '成员列表加载中,请稍候再试'
+      return
+    }
     // 可修复的「负责人未选」保留对话框可点击以触发校验,不清空其他字段
     if (!owner.value.trim() || !dueAt.value.trim() || !acceptance.value.trim()) {
-      formError.value = '请填写负责人、期限与验收标准'
+      formError.value = '请选择负责人并填写期限与验收标准'
       return
     }
   }
@@ -270,6 +345,49 @@ async function onDialogConfirm(comment: string) {
     }
   } finally {
     pending.value = false
+  }
+}
+
+// 草稿编辑:409 保留本地输入,由用户决定是否重新加载
+const editing = ref(false)
+const saving = ref(false)
+const editError = ref('')
+const editForm = ref({ title: '', source: '', priority: 'MEDIUM' })
+
+function startEdit() {
+  if (!task.value) return
+  editForm.value = {
+    title: task.value.title,
+    source: String(task.value.source ?? ''),
+    priority: task.value.priority ?? 'MEDIUM',
+  }
+  editError.value = ''
+  editing.value = true
+}
+
+async function saveEdit() {
+  if (!detail.value) return
+  saving.value = true
+  editError.value = ''
+  try {
+    await client.patchTask(projectId.value, taskId.value, {
+      expected_version: detail.value.version,
+      title: editForm.value.title.trim(),
+      source: editForm.value.source.trim(),
+      priority: editForm.value.priority,
+    })
+    editing.value = false
+    await load()
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 409) {
+      editError.value = '任务已被他人更新,请重新加载后再保存(你填写的内容不会被清空)'
+    } else if (err instanceof ApiHttpError && err.status === 422) {
+      editError.value = '当前状态不允许修改这些字段'
+    } else {
+      editError.value = err instanceof Error ? err.message : '保存失败'
+    }
+  } finally {
+    saving.value = false
   }
 }
 
@@ -320,6 +438,18 @@ function goBack() {
   border-radius: var(--vl-radius-control);
   padding: 0 var(--vl-space-3);
   font: inherit;
+}
+.vl-task-detail__edit-title {
+  margin: 0 0 var(--vl-space-2);
+  font-size: var(--vl-text-md);
+}
+.vl-task-detail__edit {
+  margin-bottom: var(--vl-space-4);
+}
+.vl-confirm-form__actions {
+  display: flex;
+  gap: var(--vl-space-3);
+  margin-top: var(--vl-space-4);
 }
 .vl-confirm-form__error {
   display: block;

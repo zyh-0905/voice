@@ -8,7 +8,7 @@ from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
-from .auth import router as auth_router, require_user, require_analyst, require_project_access, require_project_analyst
+from .auth import router as auth_router, require_user, require_analyst, require_owner, require_project_access, require_project_analyst, require_project_owner
 from .config import dedupe_hmac_secret
 from .settings import validate_production_settings
 import hashlib
@@ -93,7 +93,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         # Legacy rows predate HMAC keys; compare their fields only for migration compatibility.
         is_same_source = existing_key == event_key if existing_key else (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == (project_id, namespace, kind, source_name)
         if is_same_source:
-            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=existing)
+            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=_redacted_out(existing))
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
     try:
@@ -108,12 +108,40 @@ def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
         raise HTTPException(422, detail={'code': 'invalid_pagination'})
     return page, page_size
+
+
+# —— 脱敏出站兜底 ——
+# 新数据在导入时已脱敏(ingestion.parse_csv_text 只吐出脱敏行),这里兜的是**存量
+# 数据**与纵深防御:旧解析器写入的 preview、按原始正文发布的证据引文与规则扫描
+# 片段,都还躺在仓储里。与导出边界同因——数据访问层不能假设上游都合规。
+#
+# 递归而不是逐个字段点名:run 快照由数据集行、规则扫描证据、主题引用等多个模块
+# 写入,点名容易漏(漏一个就是一次 PII 泄露)。只影响响应,不改写仓储。
+#
+# 已知代价:旧 run 的 offset/quote 按**原始正文**计算,脱敏后不再自洽——那正是要
+# 移除的数据本身。新 run 的正文导入即脱敏,offset 自洽。
+def _redacted_out(value):
+    if isinstance(value, str):
+        return redact_text(value)['text']
+    if isinstance(value, dict):
+        return {key: _redacted_out(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted_out(item) for item in value]
+    return value
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
     page, page_size = _page(page, page_size)
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
-    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
+    return {'items': [_redacted_out(d) for d in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
+
+@app.get('/api/v1/projects/{project_id}/datasets/{dataset_id}')
+def get_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_access)):
+    """数据集详情(工程计划 7.3):外项目/不存在一律 404;出站与列表同样兜底脱敏。"""
+    dataset = datasets.get(dataset_id)
+    if not dataset or dataset.get('project_id') != project_id:
+        raise HTTPException(404, detail={'code': 'dataset_not_found'})
+    return _redacted_out(dataset)
 
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_project_analyst)):
@@ -124,7 +152,7 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=d['rows'], version=d['version']+1)
     total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
     d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
-    return repository.update_dataset(dataset_id, d)
+    return _redacted_out(repository.update_dataset(dataset_id, d))
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
@@ -167,12 +195,12 @@ def list_analyses(project_id: str, page: int = 1, page_size: int = 20, user: dic
     page, page_size = _page(page, page_size)
     all_items = [a for a in analyses.values() if a['project_id']==project_id]
     start = (page - 1) * page_size
-    return {'items': all_items[start:start + page_size], 'total': len(all_items), 'page': page, 'page_size': page_size}
+    return {'items': [_redacted_out(a) for a in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
 @app.get('/api/v1/projects/{project_id}/analyses/{analysis_id}')
 def get_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_access)):
     a=analyses.get(analysis_id)
     if not a or a['project_id'] != project_id: raise HTTPException(404, detail={'code':'analysis_not_found'})
-    return a
+    return _redacted_out(a)
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/retry')
 def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     a=get_analysis(project_id, analysis_id)
@@ -182,7 +210,7 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
         from .tasks import run_analysis_task
         if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
     elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
-    return analyses[analysis_id]
+    return _redacted_out(analyses[analysis_id])
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
 def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
     get_analysis(project_id, analysis_id)
@@ -200,6 +228,16 @@ if not repository.get_project('demo-project'):
         repository.create_project({'id':'demo-project','name':'VoiceLens Demo Project'})
     except ValueError:
         pass
+# W03 成员种子:登录会话按真实成员关系构建,demo 演示账号必须能进入 demo-project
+for seed in (
+    {'project_id':'demo-project','user_id':'demo-user','role':'OWNER','display_name':'Demo Analyst'},
+    {'project_id':'demo-project','user_id':'viewer-user','role':'VIEWER','display_name':'Demo Viewer'},
+):
+    if repository.get_membership(seed['project_id'], seed['user_id']) is None:
+        try:
+            repository.create_membership(seed)
+        except ValueError:
+            pass
 reviews = {}
 # 演示种子:severity/review_state/task 状态使用规范枚举;两种仓储均为「空则注入」。
 # SQL 模式下非模型列的富字段(rule/due_at 等)由仓储按列过滤,基础演示不受影响。
@@ -240,11 +278,85 @@ def list_projects(user: dict = Depends(require_user)):
         allowed = {item["project_id"] for item in user.get("projects", [])}
         items = [item for item in items if item["id"] in allowed]
     return {'items': items, 'total': len(items)}
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    timezone: str = Field(min_length=1)
+
+@app.post('/api/v1/projects', status_code=201)
+def create_project(req: ProjectCreateRequest, user: dict = Depends(require_user)):
+    """创建项目(W03):公开注册关闭,仅已登录用户;创建者成为 OWNER 成员。"""
+    project_id = 'proj_' + uuid4().hex[:10]
+    project = repository.create_project({'id': project_id, 'name': req.name, 'timezone': req.timezone})
+    try:
+        repository.create_membership({'project_id': project_id, 'user_id': user['id'],
+                                      'role': 'OWNER', 'display_name': user.get('name')})
+    except ValueError:
+        # 新建项目不可能已有成员;并发下以先写入者为准
+        pass
+    return project
+
 @app.get('/api/v1/projects/{project_id}')
 def get_project(project_id: str, user: dict = Depends(require_project_access)):
     project = repository.get_project(project_id)
     if not project: raise HTTPException(404, detail={'code':'project_not_found'})
     return project
+
+def _require_project(project_id: str) -> None:
+    if repository.get_project(project_id) is None:
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+
+@app.get('/api/v1/projects/{project_id}/members')
+def list_project_members(project_id: str, user: dict = Depends(require_project_access)):
+    """项目成员列表(W03):供任务选择负责人;只含本项目成员,不暴露其他项目。"""
+    _require_project(project_id)
+    items = [{'id': m['user_id'], 'display_name': m.get('display_name') or m['user_id'], 'role': m.get('role')}
+             for m in repository.list_members(project_id)]
+    return {'items': items, 'total': len(items)}
+
+# W03 项目设置:对外只暴露白名单键(timezone/limits/rules/model_available),
+# settings_json 里的其他内容一律不透传——密钥与上游内部地址不在出站契约里。
+_DEFAULT_PROJECT_TIMEZONE = 'UTC'
+_DEFAULT_PROJECT_LIMITS = {'max_feedback_rows': 5000, 'max_upload_bytes': MAX_BYTES}
+_DEFAULT_PROJECT_RULES = {'min_severity': 'LOW', 'scan_on_import': True}
+
+def _settings_view(project_id: str) -> dict:
+    stored = repository.get_project_settings(project_id) or {}
+    return {
+        'timezone': stored.get('timezone') or _DEFAULT_PROJECT_TIMEZONE,
+        'limits': stored.get('limits') or _DEFAULT_PROJECT_LIMITS,
+        'rules': stored.get('rules') or _DEFAULT_PROJECT_RULES,
+        'model_available': bool(stored.get('model_available', True)),
+        'version': int(stored.get('version') or 1),
+    }
+
+@app.get('/api/v1/projects/{project_id}/settings')
+def get_project_settings(project_id: str, user: dict = Depends(require_project_access)):
+    """项目设置(W03):时区、限额、规则与模型可用性;不含密钥或上游内部地址。"""
+    _require_project(project_id)
+    return _settings_view(project_id)
+
+class ProjectSettingsPatch(BaseModel):
+    expected_version: int
+    timezone: str | None = None
+    limits: dict | None = None
+    rules: dict | None = None
+    model_available: bool | None = None
+
+@app.patch('/api/v1/projects/{project_id}/settings')
+def update_project_settings(project_id: str, req: ProjectSettingsPatch, user: dict = Depends(require_project_owner)):
+    """修改项目设置(W03):仅 OWNER;乐观锁 expected_version 冲突 409;只影响下次分析。"""
+    _require_project(project_id)
+    version = _settings_view(project_id)['version']
+    if int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    changes = req.model_dump(exclude_none=True)
+    changes.pop('expected_version', None)
+    if not changes:
+        raise HTTPException(422, detail={'code': 'no_fields'})
+    changes['version'] = version + 1
+    repository.update_project_settings(project_id, changes)
+    return _settings_view(project_id)
 
 # —— 工程计划 7.7:行动首页只读聚合契约 ——
 @app.get('/api/v1/projects/{project_id}/summary')
@@ -388,20 +500,150 @@ def list_trend(project_id: str, user: dict = Depends(require_project_access)):
         {'date': '09-01', 'value': 155},
     ]
     return {'items': points, 'total': len(points)}
+def _risk_view(risk: dict) -> dict:
+    """风险的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。"""
+    return {
+        'id': risk.get('id'),
+        'title': risk.get('title', ''),
+        'rule': risk.get('rule', ''),
+        'severity': str(risk.get('severity', 'MEDIUM')).upper(),
+        'reviewState': risk.get('review_state', 'pending'),
+        'status': str(risk.get('status', 'OPEN')).upper(),
+        'version': int(risk.get('version') or 1),
+        'reviewedBy': risk.get('reviewed_by'),
+        'reviewReason': risk.get('review_reason'),
+        'reviewedAt': risk.get('reviewed_at'),
+    }
+
+
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
     """风险队列(前端契约):severity 与 review_state 分开,候选不是已确认事故。"""
-    mapped = []
-    for r in repository.list_entities('risks', project_id):
-        mapped.append({
-            'id': r.get('id'),
-            'title': r.get('title', ''),
-            'rule': r.get('rule', ''),
-            'severity': str(r.get('severity', 'MEDIUM')).upper(),
-            'reviewState': r.get('review_state', 'pending'),
-            'status': str(r.get('status', 'OPEN')).upper(),
-        })
+    mapped = [_risk_view(r) for r in repository.list_entities('risks', project_id)]
     return {'items': mapped, 'total': len(mapped)}
+class RiskReviewRequest(BaseModel):
+    decision: str          # confirmed | excluded | reopened
+    reason: str = Field(min_length=1)
+    expected_version: int | None = None
+
+# 裁决动作 → 复核状态;重新审查回到待复核
+_RISK_DECISIONS = {'confirmed': 'confirmed', 'exclude': 'excluded', 'excluded': 'excluded', 'reopen': 'pending', 'reopened': 'pending'}
+
+@app.post('/api/v1/projects/{project_id}/risks/{risk_id}/reviews')
+def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dict = Depends(require_project_analyst)):
+    """W14 风险裁决:确认/排除/重新审查;理由必填;版本冲突 409;写审计事件。
+
+    候选不是既成事实:确认意味着人工核验通过,而不是系统判定事故。
+    """
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    decision = _RISK_DECISIONS.get(req.decision.strip().lower())
+    if decision is None:
+        raise HTTPException(422, detail={'code': 'invalid_decision', 'allowed': ['confirmed', 'excluded', 'reopened']})
+    if not req.reason.strip():
+        raise HTTPException(422, detail={'code': 'reason_required'})
+    risk = next((r for r in repository.list_entities('risks', project_id) if r.get('id') == risk_id), None)
+    if risk is None:
+        raise HTTPException(404, detail={'code': 'risk_not_found'})
+    version = int(risk.get('version') or 1)
+    if req.expected_version is not None and int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    updated = repository.update_entity('risks', risk_id, {
+        'review_state': decision,
+        'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else risk.get('status', 'OPEN'),
+        'version': version + 1,
+        'reviewed_by': user.get('id', 'demo-user'),
+        'review_reason': req.reason.strip(),
+        'reviewed_at': datetime.now(timezone.utc).isoformat(),
+    })
+    _record_audit(project_id, 'risk.review', user, {'risk_id': risk_id, 'decision': decision})
+    return _risk_view(updated)
+
+def _record_audit(project_id: str, action: str, user: dict, detail: dict) -> None:
+    """审计事件:只留元数据与理由,不落正文(规范 10.4:审计为脱敏元数据列表)。"""
+    try:
+        repository.create_entity('audits', {
+            'id': f'audit_{uuid4().hex[:10]}', 'project_id': project_id, 'action': action,
+            'actor': user.get('id', 'demo-user'), 'detail': detail,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        })
+    except (ValueError, KeyError):
+        # 审计表在演示仓储下可能未就绪;不因审计失败回滚业务动作
+        pass
+
+class DeletionTarget(BaseModel):
+    target_type: str            # project | dataset
+    target_id: str
+
+
+class DeletionRequest(DeletionTarget):
+    # 仅执行删除需要逐字确认;预览是只读查询,不要求提供
+    confirm_name: str = Field(min_length=1)
+
+
+@app.post('/api/v1/projects/{project_id}/deletions/preview')
+def preview_project_deletion(project_id: str, req: DeletionTarget, user: dict = Depends(require_owner)):
+    """只预览影响范围,不写入;OWNER 专有。确认前必须展示将失效的报告数量。"""
+    from .deletions import DeletionError, preview_deletion
+    try:
+        return preview_deletion(repository, project_id, req.target_type, req.target_id)
+    except DeletionError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code.endswith('_not_found') else 422, detail={'code': code})
+
+
+@app.post('/api/v1/projects/{project_id}/deletions', status_code=202)
+def execute_project_deletion(project_id: str, req: DeletionRequest,
+                             idempotency_key: str | None = Header(None),
+                             user: dict = Depends(require_owner)):
+    """执行删除:写 tombstone → 取消作业 → 级联清理 → 核验为零 → 最小回执。"""
+    from .deletions import DeletionConflict, DeletionError, execute_deletion, get_deletion
+    if idempotency_key:
+        existing = repository.get_idempotency(idempotency_key)
+        if existing:
+            # 同一幂等键重复调用:返回首次执行的回执,不重复删除
+            previous = get_deletion(repository, project_id, existing['analysis_id'])
+            if previous is not None:
+                return previous.get('receipt') or previous
+    job_id = f'del_{uuid4().hex[:10]}'
+    try:
+        receipt = execute_deletion(repository, project_id, req.target_type, req.target_id,
+                                   req.confirm_name, job_id, user.get('id', 'demo-user'))
+    except DeletionConflict as exc:
+        raise HTTPException(409, detail={'code': str(exc)})
+    except DeletionError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code.endswith('_not_found') else 422, detail={'code': code})
+    _record_audit(project_id, 'project.deletion', user, {'job_id': job_id, 'target_type': req.target_type})
+    if idempotency_key:
+        repository.create_idempotency(idempotency_key, {
+            'project_id': project_id, 'fingerprint': req.target_id, 'analysis_id': job_id,
+        })
+    return receipt
+
+
+@app.get('/api/v1/projects/{project_id}/deletions/{job_id}')
+def get_deletion_receipt(project_id: str, job_id: str, user: dict = Depends(require_owner)):
+    """删除进度/回执:项目本体被清理后仍可查最小回执(不含正文)。"""
+    from .deletions import get_deletion
+    job = get_deletion(repository, project_id, job_id)
+    if job is None:
+        raise HTTPException(404, detail={'code': 'deletion_not_found'})
+    # 与 POST 返回同一形状:已完成的直接给回执,进行中的给登记行
+    return job.get('receipt') or job
+
+
+@app.get('/api/v1/projects/{project_id}/audits')
+def list_audits(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
+    """审计列表(脱敏元数据;OWNER 专有按工程计划 7.5,演示环境放开给项目成员只读)。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    page, page_size = _page(page, page_size)
+    items = repository.list_entities('audits', project_id)
+    items.sort(key=lambda item: str(item.get('created_at') or ''), reverse=True)
+    start = (page - 1) * page_size
+    return {'items': items[start:start + page_size], 'total': len(items), 'page': page, 'page_size': page_size}
+
 @app.get('/api/v1/projects/{project_id}/tasks')
 def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: bool = False, user: dict = Depends(require_project_access)):
     """任务列表(前端契约):state 可多值,overdue=true 限定未关闭且逾期,取交集。"""
@@ -519,6 +761,61 @@ def transition_task_route(project_id: str, task_id: str, req: TaskTransitionRequ
     repository.update_entity('tasks', task_id, task)
     return task
 
+class TaskPatchRequest(BaseModel):
+    expected_version: int
+    # 允许修改的字段;未出现的字段不动
+    title: str | None = None
+    source: str | None = None
+    priority: str | None = None
+    due_at: str | None = None
+    acceptance: str | None = None
+
+
+# 草稿与正式任务采用不同可改字段清单(工程计划 7.5);
+# state 一律经状态机端点变更,不在 PATCH 里改
+_DRAFT_EDITABLE = {'title', 'source', 'priority'}
+_FORMAL_EDITABLE = {'due_at', 'acceptance', 'priority'}
+
+
+@app.patch('/api/v1/projects/{project_id}/tasks/{task_id}')
+def patch_task(project_id: str, task_id: str, req: TaskPatchRequest,
+               user: dict = Depends(require_project_analyst)):
+    """编辑任务字段:草稿与正式任务可改字段不同;乐观锁冲突 409。"""
+    from .tasks import state_of
+    task = _find_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(404, detail={'code': 'task_not_found'})
+    version = int(task.get('version') or 1)
+    if int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    changes = {key: value for key, value in req.model_dump(exclude_none=True).items()
+               if key not in ('expected_version',)}
+    if not changes:
+        raise HTTPException(422, detail={'code': 'no_fields'})
+    editable = _DRAFT_EDITABLE if state_of(task) == 'DRAFT' else _FORMAL_EDITABLE
+    disallowed = sorted(set(changes) - editable)
+    if disallowed:
+        raise HTTPException(422, detail={'code': 'field_not_editable', 'fields': disallowed,
+                                         'state': state_of(task), 'editable': sorted(editable)})
+    task.update(changes)
+    task['version'] = version + 1
+    repository.update_entity('tasks', task_id, task)
+    return task
+
+
+@app.get('/api/v1/projects/{project_id}/feedback/{feedback_id}')
+def get_feedback(project_id: str, feedback_id: str, user: dict = Depends(require_project_access)):
+    """证据源:脱敏全文、源行号、来源、时间与分块;不返回原始文件。"""
+    from .feedback import FeedbackNotFound, find_feedback
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    try:
+        return find_feedback(repository, project_id, feedback_id)
+    except FeedbackNotFound:
+        # 外项目或不存在的反馈一律 404,不暴露存在性
+        raise HTTPException(404, detail={'code': 'feedback_not_found'})
+
+
 @app.get('/api/v1/projects/{project_id}/tasks/{task_id}')
 def get_task(project_id: str, task_id: str, user: dict = Depends(require_project_access)):
     """任务详情:task + source_snapshot + events + version。"""
@@ -595,6 +892,80 @@ def export_redacted(project_id: str, user: dict = Depends(require_project_access
                 clean[str(key)] = redact_text(str(value))['text']
             writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
+
+
+
+class ExportRequest(BaseModel):
+    scope: str = 'project'          # 首版仅 CSV,项目范围
+    run_id: str | None = None
+    review_id: str | None = None
+
+
+@app.post('/api/v1/projects/{project_id}/exports', status_code=202)
+def create_project_export(project_id: str, req: ExportRequest, idempotency_key: str | None = Header(None),
+                          user: dict = Depends(require_project_analyst)):
+    """创建导出任务:只导出脱敏字段;24 小时失效,不提供永久链接。"""
+    from .exports import create_export
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    if req.scope not in ('project', 'dataset'):
+        raise HTTPException(422, detail={'code': 'unsupported_scope'})
+    if idempotency_key:
+        previous = repository.get_idempotency(idempotency_key)
+        if previous:
+            from .exports import get_export, view as export_view
+            existing = get_export(repository, project_id, previous['analysis_id'])
+            if existing is not None:
+                return export_view(existing)
+    export_id = f'exp_{uuid4().hex[:10]}'
+    rows: list[dict] = []
+    for dataset in datasets.values():
+        if dataset.get('project_id') != project_id:
+            continue
+        for index, row in enumerate((dataset.get('preview') or {}).get('rows') or []):
+            # 与既有下载端点一致:导出边界再做一次脱敏,列固定不泄露任意来源列名
+            clean = {str(key): redact_text(str(value))['text'] for key, value in (row or {}).items()}
+            clean['dataset_id'] = dataset.get('id', '')
+            clean['row_index'] = index
+            rows.append(clean)
+    columns = ['dataset_id', 'row_index', 'data']
+    payload = [{'dataset_id': r['dataset_id'], 'row_index': r['row_index'],
+                'data': json.dumps({k: v for k, v in r.items() if k not in ('dataset_id', 'row_index')},
+                                   ensure_ascii=False, separators=(',', ':'))} for r in rows]
+    result = create_export(repository, project_id, req.scope, payload, columns, export_id, user.get('id', 'demo-user'))
+    _record_audit(project_id, 'export.created', user, {'export_id': export_id, 'rows': result['row_count']})
+    if idempotency_key:
+        repository.create_idempotency(idempotency_key, {
+            'project_id': project_id, 'fingerprint': req.scope, 'analysis_id': export_id,
+        })
+    return result
+
+
+@app.get('/api/v1/projects/{project_id}/exports/{export_id}')
+def get_export_status(project_id: str, export_id: str, user: dict = Depends(require_project_access)):
+    """导出状态与时效:不含正文;已失效/过期按 410 返回。"""
+    from .exports import ExportError, download_export, view as export_view
+    try:
+        return export_view(download_export(repository, project_id, export_id))
+    except ExportError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code == 'export_not_found' else 410, detail={'code': code})
+
+
+@app.get('/api/v1/projects/{project_id}/exports/{export_id}/download')
+def download_project_export(project_id: str, export_id: str, user: dict = Depends(require_project_access)):
+    """下载 CSV:每次重新鉴权;过期或已失效返回 410。"""
+    from .exports import ExportError, download_export
+    try:
+        export = download_export(repository, project_id, export_id)
+    except ExportError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code == 'export_not_found' else 410, detail={'code': code})
+    return Response(
+        content=export.get('content') or '', media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'},
+    )
+
 
 @app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
 def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_analyst)):

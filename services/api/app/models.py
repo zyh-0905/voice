@@ -1,5 +1,5 @@
 ﻿from datetime import datetime
-from sqlalchemy import DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -10,7 +10,18 @@ class Project(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     source_namespace: Mapped[str | None] = mapped_column(String(128), index=True)
     source_kind: Mapped[str | None] = mapped_column(String(64), index=True)
+    # W03 项目设置:timezone 单列,limits/rules/model_available/version 存 settings_json
+    timezone: Mapped[str | None] = mapped_column(String(64))
+    settings_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+class Membership(Base):
+    """W03 项目成员:(project_id, user_id) 唯一,角色 OWNER/EDITOR/VIEWER。"""
+    __tablename__ = "memberships"
+    project_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255))
 
 class Dataset(Base):
     __tablename__ = "datasets"
@@ -71,6 +82,49 @@ class SessionToken(Base):
     # 空闲过期时间:每次访问滑动续期
     idle_exp: Mapped[float | None] = mapped_column(nullable=True)
 
+class ExportJob(Base):
+    """10.3 导出:24 小时失效、下载重新鉴权;删除项目后未过期导出一并失效。
+
+    演示实现把内容存在行内;生产应落对象存储并以短期签名路径下发。
+    """
+    __tablename__ = 'export_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default='DONE', nullable=False)
+    columns: Mapped[list | None] = mapped_column(JSON)
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    content: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[str | None] = mapped_column(String(64))
+    invalidated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class DeletionJob(Base):
+    """10.4 删除登记:写 tombstone 后级联清理,回执不含正文。"""
+    __tablename__ = 'deletion_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_name: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(32), default='RUNNING', nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    steps: Mapped[list | None] = mapped_column(JSON, default=list)
+    receipt: Mapped[dict | None] = mapped_column(JSON)
+
+
+class RiskAudit(Base):
+    """W14 审计:风险裁决等动作的脱敏元数据(不含正文)。"""
+    __tablename__ = 'risk_audits'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[str | None] = mapped_column(String(64))
+
 class Risk(Base):
     __tablename__ = 'risks'
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -82,6 +136,10 @@ class Risk(Base):
     # W14:候选来源规则与复核状态与 severity 分开
     rule: Mapped[str | None] = mapped_column(String(128))
     review_state: Mapped[str] = mapped_column(String(32), default='pending', nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64))
+    review_reason: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[str | None] = mapped_column(String(64))
 
 class Task(Base):
     __tablename__ = 'tasks'

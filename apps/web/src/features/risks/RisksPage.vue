@@ -1,6 +1,6 @@
 <template>
   <div class="vl-page">
-    <PageHeader title="风险复核" description="待复核队列与原文;候选不是已确认事故,裁决须填写理由。">
+    <PageHeader :icon="Warning" title="风险复核" description="待复核队列与原文;候选不是已确认事故,裁决须填写理由。">
       <template #actions>
         <VlButton variant="ghost" data-testid="view-pending" @click="filterPending = !filterPending">
           {{ filterPending ? '查看全部风险' : '只看待复核' }}
@@ -8,13 +8,19 @@
       </template>
     </PageHeader>
 
-    <p v-if="!isDemoMode" class="vl-risks__note" data-testid="demo-notice-real">
-      当前为真实 API 模式:裁决需等服务端状态机端点,列表来自 GET /risks。
-    </p>
 
-    <AsyncState :status="status" :message="error ?? undefined" empty-message="当前筛选下没有风险候选。">
+    <AsyncState :status="status" :message="error ?? undefined">
+      <template #empty>
+        <EmptyState text="当前筛选下没有风险候选" hint="风险候选来自规则扫描,不是已确认事故" />
+      </template>
+
+      <!-- 严重度构成:取自当前列表,不新增口径 -->
+      <VlPanel v-if="items.length" title="严重度构成" :description="`共 ${items.length} 条候选`" class="vl-risks__dist">
+        <DistributionBar :segments="severitySegments" label="风险严重度分布" />
+      </VlPanel>
+
       <div class="vl-table-scroll">
-        <table class="vl-risk-table" data-testid="risk-table">
+        <table class="vl-table vl-risk-table" data-testid="risk-table">
           <thead>
             <tr>
               <th scope="col">风险候选</th>
@@ -35,7 +41,7 @@
               <td><StatusBadge kind="task" :state="risk.status" /></td>
               <td>
                 <VlButton
-                  v-if="canAct && isDemoMode && risk.reviewState === 'pending'"
+                  v-if="canAct && risk.reviewState === 'pending'"
                   variant="secondary"
                   size="small"
                   data-testid="risk-confirm"
@@ -70,12 +76,15 @@
             placeholder="说明依据:命中规则、证据原文与业务上下文"
           ></textarea>
           <span v-if="reasonError" class="vl-risk-review__error" data-testid="risk-reason-error">请填写裁决理由</span>
+          <span v-if="conflict" class="vl-risk-review__conflict" data-testid="risk-version-conflict">
+            该候选已被其他人裁决,请关闭后重新加载再操作(你填写的内容不会被清空)。
+          </span>
         </div>
         <div class="vl-risk-review__actions">
-          <VlButton variant="danger" data-testid="risk-exclude" :disabled="!reason.trim()" @click="decide('excluded')">
+          <VlButton variant="danger" data-testid="risk-exclude" :loading="pending" @click="decide('excluded')">
             排除候选
           </VlButton>
-          <VlButton variant="primary" data-testid="risk-confirm-submit" :disabled="!reason.trim()" @click="decide('confirmed')">
+          <VlButton variant="primary" data-testid="risk-confirm-submit" :loading="pending" @click="decide('confirmed')">
             确认风险
           </VlButton>
         </div>
@@ -90,13 +99,18 @@
 // 真实模式:列表来自 GET /risks,裁决待服务端状态机端点。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { Warning } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
-import { apiClient } from '../../api/client'
+import { ApiHttpError, apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import DistributionBar, { type DistributionSegment } from '../../components/common/DistributionBar.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 import type { RiskItem } from '../../types/domain'
+
+type RiskView = RiskItem & { version?: number }
 
 const session = useSessionStore()
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
@@ -106,7 +120,7 @@ const client = apiClient()
 const route = useRoute()
 const projectId = computed(() => String(route.params.p))
 
-const items = ref<RiskItem[]>([])
+const items = ref<RiskView[]>([])
 const status = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle')
 const error = ref('')
 const filterPending = ref(false)
@@ -128,33 +142,70 @@ const visible = computed(() => {
   return [...list].sort((a, b) => Number(b.severity === 'CRITICAL') - Number(a.severity === 'CRITICAL'))
 })
 
+// 严重度构成:按当前列表聚合,颜色表达升级关系(规范 3.1:红色仅用于高严重度)
+const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'NONE'] as const
+const SEVERITY_LABEL: Record<string, string> = { CRITICAL: '严重', HIGH: '高', MEDIUM: '中', LOW: '低', NONE: '无' }
+const SEVERITY_COLOR: Record<string, string> = {
+  CRITICAL: 'var(--vl-color-danger)',
+  HIGH: 'var(--vl-color-brand-vivid)',
+  MEDIUM: 'var(--vl-chart-6)',
+  LOW: 'var(--vl-chart-2)',
+  NONE: 'var(--vl-color-border-control)',
+}
+const severitySegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const risk of items.value) counts.set(risk.severity, (counts.get(risk.severity) ?? 0) + 1)
+  return SEVERITY_ORDER.filter(s => counts.has(s)).map(s => ({
+    label: SEVERITY_LABEL[s] ?? s, value: counts.get(s) ?? 0, color: SEVERITY_COLOR[s] ?? 'var(--vl-color-border-control)',
+  }))
+})
+
 const reviewOpen = ref(false)
-const current = ref<RiskItem | null>(null)
+const current = ref<RiskView | null>(null)
 const reason = ref('')
 const reasonError = ref(false)
+const pending = ref(false)
+const conflict = ref(false)
 
-function openReview(risk: RiskItem) {
+function openReview(risk: RiskView) {
   current.value = risk
   reason.value = ''
   reasonError.value = false
   reviewOpen.value = true
 }
 
-function decide(next: 'confirmed' | 'excluded') {
+async function decide(decision: 'confirmed' | 'excluded') {
   if (!reason.value.trim()) {
     reasonError.value = true
     return
   }
-  if (current.value) {
-    const target = items.value.find(r => r.id === current.value!.id)
-    if (target) {
-      target.reviewState = next
-      target.status = next === 'confirmed' ? 'OPEN' : 'CLOSED'
+  const target = current.value
+  if (!target) return
+  pending.value = true
+  conflict.value = false
+  try {
+    // 等待服务端确认,不做误导性的乐观更新(规范 9.3)
+    const updated = await client.reviewRisk(projectId.value, target.id, {
+      decision, reason: reason.value.trim(), expected_version: target.version,
+    })
+    const index = items.value.findIndex(r => r.id === updated.id)
+    if (index >= 0) items.value[index] = updated
+    reviewOpen.value = false
+    current.value = null
+    reason.value = ''
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 409) {
+      // 版本冲突:保留本地输入,提示重新加载
+      conflict.value = true
+    } else if (err instanceof ApiHttpError && err.status === 403) {
+      reasonError.value = true
+      error.value = '当前角色无权裁决风险'
+    } else {
+      error.value = err instanceof Error ? err.message : '裁决失败,请稍后重试'
     }
+  } finally {
+    pending.value = false
   }
-  reviewOpen.value = false
-  current.value = null
-  reason.value = ''
 }
 </script>
 
@@ -167,22 +218,8 @@ function decide(next: 'confirmed' | 'excluded') {
   color: var(--vl-color-info);
   font-size: var(--vl-text-xs);
 }
-.vl-risk-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-.vl-risk-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-risk-table tbody th,
-.vl-risk-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
+.vl-risks__dist {
+  margin-bottom: var(--vl-space-4);
 }
 .vl-risk-table__title {
   font-weight: 600;
@@ -218,6 +255,15 @@ function decide(next: 'confirmed' | 'excluded') {
   display: block;
   margin-top: var(--vl-space-1);
   color: var(--vl-color-danger);
+  font-size: var(--vl-text-xs);
+}
+.vl-risk-review__conflict {
+  display: block;
+  margin-top: var(--vl-space-2);
+  padding: var(--vl-space-2) var(--vl-space-3);
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-warning-bg);
+  color: var(--vl-color-warning);
   font-size: var(--vl-text-xs);
 }
 .vl-risk-review__actions {

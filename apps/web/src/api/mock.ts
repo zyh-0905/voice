@@ -2,10 +2,17 @@ import {
   ApiHttpError,
   type ApiClient,
   type CorrectionBody,
+  type DeletionBody,
+  type DeletionTarget,
   type ReviewCreateBody,
+  type RiskReviewBody,
   type TaskConfirmBody,
+  type TaskPatchBody,
   type TaskTransitionBody,
   type TopicDetailResponse,
+  type ProjectMember,
+  type ProjectSettings,
+  type ProjectSettingsPatchBody,
 } from './client'
 import type {
   AiProvenance,
@@ -191,6 +198,49 @@ const SYNTHETIC_RISKS: RiskItem[] = [
   { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
 ]
 
+/** W16 合成项目成员:派发任务的负责人只能来自成员接口;owner-1 沿用既有 E2E 流程。 */
+const SYNTHETIC_MEMBERS: ProjectMember[] = [
+  { id: 'owner-1', display_name: 'Demo Analyst', role: 'OWNER' },
+  { id: 'viewer-1', display_name: 'Demo Viewer', role: 'VIEWER' },
+]
+
+function defaultProjectSettings(): ProjectSettings {
+  return {
+    timezone: 'UTC',
+    limits: { max_feedback_rows: 5000, max_upload_bytes: 50 * 1024 * 1024 },
+    rules: { min_severity: 'LOW', scan_on_import: true },
+    model_available: true,
+    version: 1,
+  }
+}
+
+/** 演示项目设置:默认值与后端 W03 一致;expected_version 过期抛 409 VERSION_CONFLICT。 */
+class MockSettingsStore {
+  private settings = defaultProjectSettings()
+
+  get(): ProjectSettings {
+    return { ...this.settings, limits: { ...this.settings.limits }, rules: { ...this.settings.rules } }
+  }
+
+  patch(body: ProjectSettingsPatchBody): ProjectSettings {
+    if (Number(body.expected_version) !== this.settings.version) throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    const hasChanges = [body.timezone, body.limits, body.rules, body.model_available].some(value => value !== undefined)
+    if (!hasChanges) throw new ApiHttpError(422, 'no_fields')
+    if (body.timezone !== undefined) this.settings.timezone = body.timezone
+    if (body.limits !== undefined) this.settings.limits = { ...body.limits }
+    if (body.rules !== undefined) this.settings.rules = { ...body.rules }
+    if (body.model_available !== undefined) this.settings.model_available = body.model_available
+    this.settings.version += 1
+    return this.get()
+  }
+
+  reset() {
+    this.settings = defaultProjectSettings()
+  }
+}
+
+const MOCK_SETTINGS_STORE = new MockSettingsStore()
+
 /** 演示任务状态机:与后端 W15 语义一致(草稿不能直接验收、负责人不得自验收、幂等确认)。 */
 class MockTaskStore {
   private tasks = new Map<string, TaskSummary & { owner_id?: string | null; acceptance?: string | null; effect_status?: string; events?: TaskEvent[] }>()
@@ -248,6 +298,26 @@ class MockTaskStore {
     return { ...task }
   }
 
+  patch(taskId: string, body: TaskPatchBody): TaskSummary {
+    const task = this.require(taskId)
+    const record = task as never as { version: number; state?: string }
+    if (body.expected_version !== Number(record.version)) throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    const editable = (record.state ?? 'DRAFT') === 'DRAFT'
+      ? ['title', 'source', 'priority']
+      : ['due_at', 'acceptance', 'priority']
+    const changes = Object.entries(body).filter(([key]) => !['expected_version'].includes(key))
+    if (!changes.length) throw new ApiHttpError(422, 'no_fields')
+    const disallowed = changes.filter(([key]) => !editable.includes(key)).map(([key]) => key)
+    if (disallowed.length) throw new ApiHttpError(422, 'field_not_editable')
+    for (const [key, value] of changes) {
+      if (key === 'due_at') task.dueAt = value as string
+      else if (key === 'acceptance') (task as never as { acceptance?: string }).acceptance = value as string
+      else (task as never as Record<string, unknown>)[key] = value
+    }
+    ;(task as never as { version: number }).version = Number(record.version) + 1
+    return { ...task }
+  }
+
   transition(taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
     const task = this.require(taskId)
     if (idempotencyKey && this.keys.has(`${taskId}:${idempotencyKey}`)) return { ...task }
@@ -282,6 +352,50 @@ class MockTaskStore {
     this.keys.clear()
   }
 }
+
+/** 演示风险裁决:与后端 W14 一致——理由必填、版本冲突、确认不等于事故发生。 */
+class MockRiskStore {
+  private risks = new Map<string, RiskItem & { version?: number; reviewedBy?: string; reviewReason?: string }>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const risk of SYNTHETIC_RISKS) this.risks.set(risk.id, { ...risk, version: 1 })
+  }
+
+  list(): RiskItem[] {
+    this.seed()
+    return [...this.risks.values()].map(r => ({ ...r }))
+  }
+
+  review(riskId: string, body: RiskReviewBody): RiskItem {
+    this.seed()
+    const risk = this.risks.get(riskId)
+    if (!risk) throw new ApiHttpError(404, 'risk_not_found')
+    if (!body.reason.trim()) throw new ApiHttpError(422, 'reason_required')
+    const version = risk.version ?? 1
+    if (body.expected_version !== undefined && body.expected_version !== version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    const next = body.decision === 'confirmed' ? 'confirmed' : body.decision === 'excluded' ? 'excluded' : 'pending'
+    Object.assign(risk, {
+      reviewState: next,
+      status: next === 'confirmed' ? 'OPEN' : next === 'excluded' ? 'CLOSED' : risk.status,
+      version: version + 1,
+      reviewedBy: 'demo-user',
+      reviewReason: body.reason.trim(),
+    })
+    return { ...risk }
+  }
+
+  reset() {
+    this.seeded = false
+    this.risks.clear()
+  }
+}
+
+const MOCK_RISK_STORE = new MockRiskStore()
 
 const MOCK_TASK_STORE = new MockTaskStore()
 
@@ -495,7 +609,19 @@ export const mockApi: ApiClient = {
       user: { id: 'demo-user', name: 'Demo Analyst', email: 'demo@voicelens.local', role: 'ANALYST' },
     }
   },
-  async exportRedactedCsv() {
+  async createExport(projectId: string, body: { scope: string }, _key: string) {
+    await delay(250)
+    const now = new Date()
+    const expires = new Date(now.getTime() + 24 * 3600 * 1000)
+    return {
+      id: 'exp_demo_1', project_id: projectId, scope: body.scope, state: 'DONE',
+      row_count: SYNTHETIC_BATCHES.reduce((sum, b) => sum + b.rows, 0),
+      created_at: now.toISOString(), expires_at: expires.toISOString(),
+      expired: false, invalidated: false,
+      download_path: `/api/v1/projects/${projectId}/exports/exp_demo_1/download`,
+    }
+  },
+  async downloadExport() {
     await delay(200)
     return new Blob(['dataset_id,row_index,data\n'], { type: 'text/csv;charset=utf-8' })
   },
@@ -534,7 +660,38 @@ export const mockApi: ApiClient = {
   },
   async listRisks() {
     await delay(300)
-    return SYNTHETIC_RISKS
+    return MOCK_RISK_STORE.list()
+  },
+  async patchTask(_projectId: string, taskId: string, body: TaskPatchBody) {
+    await delay(200)
+    return MOCK_TASK_STORE.patch(taskId, body)
+  },
+  async listMembers() {
+    await delay(200)
+    return SYNTHETIC_MEMBERS.map(member => ({ ...member }))
+  },
+  async getSettings() {
+    await delay(200)
+    return MOCK_SETTINGS_STORE.get()
+  },
+  async patchSettings(_projectId: string, body: ProjectSettingsPatchBody) {
+    await delay(250)
+    return MOCK_SETTINGS_STORE.patch(body)
+  },
+  async getFeedback(_projectId: string, feedbackId: string) {
+    await delay(200)
+    const quote = SYNTHETIC_TOPICS.flatMap(t => t.quote).find(q => q.feedbackId === feedbackId)
+      ?? SYNTHETIC_TOPICS[0]!.quote
+    return {
+      feedback_id: feedbackId, dataset_id: 'ds_demo_001', dataset_name: '8 月第 4 周反馈批次',
+      source_row: quote.rowIndex ?? 0, channel: quote.channel, occurred_at: quote.occurredAt,
+      text: quote.text,
+      segments: [{ start: 0, end: Array.from(quote.text).length, text: quote.text }],
+    }
+  },
+  async reviewRisk(_projectId: string, riskId: string, body: RiskReviewBody) {
+    await delay(250)
+    return MOCK_RISK_STORE.review(riskId, body)
   },
   async getTopicDetail(_projectId: string, topicId: string, topicVersionId?: number): Promise<TopicDetailResponse> {
     await delay(200)
@@ -561,5 +718,34 @@ export const mockApi: ApiClient = {
   async recentBatches() {
     await delay(300)
     return SYNTHETIC_BATCHES
+  },
+  async previewDeletion(_projectId: string, body: DeletionTarget) {
+    await delay(200)
+    // target_name 必须是目标的真实名称(供用户逐字确认),不是 confirm_name 的回显
+    const targetName = body.target_type === 'project'
+      ? 'VoiceLens Demo Project'
+      : (SYNTHETIC_BATCHES.find(b => b.id === body.target_id)?.name ?? body.target_id)
+    return {
+      target_type: body.target_type,
+      target_id: body.target_id,
+      target_name: targetName,
+      datasets: body.target_type === 'project' ? SYNTHETIC_BATCHES.length : 1,
+      runs: 1, topics: SYNTHETIC_TOPICS.length, tasks: SYNTHETIC_TASKS.length,
+      reviews: 2, risks: SYNTHETIC_RISKS.length,
+      invalidates_reports: body.target_type === 'dataset',
+    }
+  },
+  async executeDeletion(_projectId: string, body: DeletionBody) {
+    await delay(300)
+    return {
+      job_id: `del_${body.target_id.slice(0, 8)}`, state: 'DONE',
+      target_type: body.target_type, target_id: body.target_id,
+      steps: [
+        { name: 'tombstone', status: 'done' }, { name: 'cancel_jobs', status: 'done' },
+        { name: 'purge_runs', status: 'done' }, { name: 'purge_datasets', status: 'done' },
+        { name: 'verify', status: 'done' },
+      ],
+      removed: { datasets: 1, runs: 1, topics: SYNTHETIC_TOPICS.length, tasks: 0, reviews: 0, risks: 0 },
+    }
   },
 }

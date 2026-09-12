@@ -1,48 +1,65 @@
-/* apps/web/src/styles/tokens.css — Frontend Style v1.0
+/* apps/web/src/styles/tokens.css — Frontend Style v1.1
  * 颜色/尺寸的唯一规格源。业务代码禁止新增十六进制/RGB/HSL 颜色,
  * 图表通过 lib/chart-theme.ts 从计算后的 CSS 变量读取颜色。
- * 文件末尾为迁移期别名,后续轮次随页面迁移逐步删除。
+ *
+ * v1.1 变更(风格规范 14.3 变更流程):主色由青绿改为浅橙,中性色改为
+ * Apple 式近白/分层灰,图表扩为 6 个可辨识色相;对比度经 design-tokens
+ * 单测逐对校验(全部 ≥4.5:1 文字 / ≥3:1 控件与图形)。
  */
 :root {
   color-scheme: light;
 
-  /* 语义色表(风格规范 3.1) */
-  --vl-color-bg: #F6F7F4;
+  /* 中性色:近白底 + 分层灰 + 近黑文字 */
+  --vl-color-bg: #FBFBFD;
   --vl-color-surface: #FFFFFF;
-  --vl-color-subtle: #EFF2EE;
-  --vl-color-hover: #F1F4F1;
-  --vl-color-text: #182B28;
-  --vl-color-text-secondary: #4B5E57;
-  --vl-color-text-muted: #607168;
-  --vl-color-brand: #0B6E63;
-  --vl-color-brand-hover: #095D53;
-  --vl-color-brand-active: #074B43;
-  --vl-color-brand-soft: #E6F2EE;
-  --vl-color-brand-line: #A4CFC2;
-  --vl-color-border: #DEE5DF;
-  --vl-color-border-control: #7A8E82;
-  --vl-color-success: #2C6E49;
-  --vl-color-success-bg: #EEF7F0;
-  --vl-color-warning: #8A4B08;
-  --vl-color-warning-bg: #FFF4E0;
-  --vl-color-danger: #B23B3B;
-  --vl-color-danger-bg: #FFF0EF;
-  --vl-color-info: #285F86;
-  --vl-color-info-bg: #EDF4FA;
-  --vl-color-overlay: rgba(24, 43, 40, 0.38);
+  --vl-color-subtle: #F5F5F7;
+  --vl-color-hover: #F1F1F4;
+  --vl-color-text: #1D1D1F;
+  --vl-color-text-secondary: #515154;
+  --vl-color-text-muted: #6E6E73;
 
-  /* 图表系列色 */
-  --vl-chart-1: #0B6E63;
-  --vl-chart-2: #386A98;
-  --vl-chart-3: #8A5A2B;
-  --vl-chart-4: #716093;
-  --vl-chart-5: #48705C;
-  --vl-chart-6: #526372;
+  /* 品牌:浅橙(v1.2 降浓度)
+   * #CC4A0D 是「最浅且白字仍达标」的橙(4.613:1);再浅即低于 4.5 门槛。
+   * 观感更轻由三处实现:浅橙渐变底、玻璃背板、图形色只用亮橙不承载文字。 */
+  --vl-color-brand: #CC4A0D;
+  --vl-color-brand-hover: #B03C0A;
+  --vl-color-brand-active: #93300A;
+  --vl-color-brand-soft: #FFF4EC;
+  --vl-color-brand-line: #FDBA74;
+  /* 品牌文字色:浅橙底上的文字/图标用它(#CC4A0D 在 #FFF4EC 上仅 4.26:1)。
+   * 与实底分工:brand 承载白字,brand-ink 承载浅底上的品牌色文字。 */
+  --vl-color-brand-ink: #B03C0A;
+  /* 图形强调(图标/描边/图表,不承载文字),接近系统橙明度 */
+  --vl-color-brand-vivid: #F97316;
+  --vl-color-brand-tint: #FFE8D6;
 
-  /* 字体 */
-  --vl-font-sans: system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --vl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* 分隔与控件边界 */
+  --vl-color-border: #E5E5EA;
+  --vl-color-border-control: #8E8E93;
+
+  /* 语义色 */
+  --vl-color-success: #2E7D32;
+  --vl-color-success-bg: #EDF7ED;
+  --vl-color-warning: #B45309;
+  --vl-color-warning-bg: #FEF3E2;
+  --vl-color-danger: #B3261E;
+  --vl-color-danger-bg: #FDECEA;
+  --vl-color-info: #0B5EA8;
+  --vl-color-info-bg: #EAF3FD;
+  --vl-color-overlay: rgba(29, 29, 31, 0.4);
+
+  /* 图表:六个可辨识色相(橙/蓝/绿/靛/紫/青),全部 ≥3:1 on white */
+  --vl-chart-1: #EA580C;
+  --vl-chart-2: #0071E3;
+  --vl-chart-3: #2E7D32;
+  --vl-chart-4: #5856D6;
+  --vl-chart-5: #AF52DE;
+  --vl-chart-6: #0E7490;
+
+  /* 字体:优先系统字体栈(Apple 平台即 SF Pro) */
+  --vl-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    system-ui, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --vl-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   /* 排版标尺(参考 16px 根字号;不修改 html 字号) */
   --vl-text-xs: 0.75rem;    /* 12px:仅辅助信息 */
@@ -50,9 +67,11 @@
   --vl-text-md: 1rem;      /* 16px:证据原文、区块标题 */
   --vl-text-lg: 1.25rem;   /* 20px:二级页标题 */
   --vl-text-xl: 1.625rem;  /* 26px:页面标题 */
-  --vl-text-metric: 1.875rem; /* 30px:指标值 */
+  --vl-text-metric: 2rem;  /* 32px:指标值 */
   --vl-leading-body: 1.5714286;
   --vl-leading-evidence: 1.625;
+  /* Apple 式标题字距收紧 */
+  --vl-tracking-tight: -0.015em;
 
   /* 间距 */
   --vl-space-1: 0.25rem;
@@ -65,11 +84,11 @@
   --vl-space-10: 2.5rem;
   --vl-space-12: 3rem;
 
-  /* 圆角与控件 */
-  --vl-radius-sm: 0.375rem;
-  --vl-radius-control: 0.5rem;
-  --vl-radius-panel: 0.75rem;
-  --vl-radius-dialog: 1rem;
+  /* 圆角与控件(Apple 式更圆润) */
+  --vl-radius-sm: 0.5rem;
+  --vl-radius-control: 0.625rem;
+  --vl-radius-panel: 1rem;
+  --vl-radius-dialog: 1.25rem;
   --vl-control-height: 2.5rem;
   --vl-control-height-touch: 2.75rem;
   --vl-control-height-compact: 2rem;
@@ -80,9 +99,42 @@
   --vl-evidence-width: 22.5rem;
   --vl-content-max: 100rem;
 
-  /* 阴影 */
-  --vl-shadow-panel: 0 1px 2px rgba(24, 43, 40, 0.035);
-  --vl-shadow-float: 0 12px 32px rgba(24, 43, 40, 0.12);
+  /* 阴影:更柔、更分层 */
+  --vl-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
+  --vl-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  /* 玻璃:内高光模拟材质边缘,外阴影制造层叠 */
+  --vl-shadow-glass: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(31, 24, 18, 0.06);
+  --vl-highlight-inset: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+
+  /* 玻璃材质(v1.2):仅用于外壳与面板背板;承载正文的表面保持高不透明度,
+   * 混合后对比度经 design-tokens 单测按最差底色校验(全部 ≥4.5:1)。 */
+  --vl-glass-chrome: rgba(255, 255, 255, 0.62);
+  --vl-glass-panel: rgba(255, 255, 255, 0.74);
+  --vl-glass-float: rgba(255, 255, 255, 0.88);
+  --vl-glass-border: rgba(255, 255, 255, 0.6);
+  --vl-glass-blur: 20px;
+  --vl-glass-blur-strong: 32px;
+  --vl-glass-saturate: 180%;
+
+  /* 渐变:页面柔光底(给玻璃提供可折射的背景)+ 品牌微渐变(按钮/装饰)。
+   * 染色峰值受约束:辅助文字 #6E6E73 压在任一染色上须 ≥4.5:1(约 4.58 已接近上限),
+   * 因此层次靠「更大半径 + 更慢衰减 + 更多色晕」实现,不靠加深颜色。 */
+  --vl-tint-warm: #FFF1E6;
+  --vl-tint-cool: #EEF4FF;
+  --vl-tint-blush: #FFF0F2;
+  --vl-tint-sand: #FFF7E8;
+  --vl-tint-mint: #EEF7F1;
+  --vl-gradient-page:
+    radial-gradient(78rem 44rem at 6% -14%, var(--vl-tint-warm) 0%, rgba(255, 255, 255, 0) 74%),
+    radial-gradient(64rem 38rem at 98% -8%, var(--vl-tint-cool) 0%, rgba(255, 255, 255, 0) 72%),
+    radial-gradient(56rem 42rem at -10% 88%, var(--vl-tint-blush) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(52rem 36rem at 106% 96%, var(--vl-tint-sand) 0%, rgba(255, 255, 255, 0) 68%),
+    radial-gradient(40rem 30rem at 50% 118%, var(--vl-tint-mint) 0%, rgba(255, 255, 255, 0) 64%),
+    var(--vl-color-bg);
+  --vl-gradient-brand: linear-gradient(180deg, #CC4A0D 0%, #B03C0A 100%);
+  --vl-gradient-brand-soft: linear-gradient(180deg, #FFF7F1 0%, #FFEFE2 100%);
+  /* 装饰性渐变(不承载文字):占比条、分布段、环形图 */
+  --vl-gradient-accent: linear-gradient(90deg, #F97316 0%, #EA580C 100%);
 
   /* 动效 */
   --vl-motion-fast: 120ms;
@@ -95,7 +147,3 @@
   --vl-z-modal: 2000;
   --vl-z-message: 3000;
 }
-
-/* 迁移期别名:风格规范 3.3 定义的旧变量。已无页面引用,随本轮全页迁移完成而删除。
- * 仅保留注释说明;新组件一律使用 --vl-color-* 语义 token。 */
-

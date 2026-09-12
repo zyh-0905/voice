@@ -1,19 +1,22 @@
 <template>
   <div class="vl-page">
-    <PageHeader title="效果复盘" description="选择 run、revision 与两个时间窗,确认主题映射后生成固定口径的复盘结果。">
+    <PageHeader :icon="TrendCharts" title="效果复盘" description="选择 run、revision 与两个时间窗,确认主题映射后生成固定口径的复盘结果。">
       <template #actions>
         <VlButton v-if="canAct" variant="primary" data-testid="review-create" @click="wizardOpen = true">创建复盘</VlButton>
       </template>
     </PageHeader>
 
-    <AsyncState :status="status" :message="error ?? undefined" empty-message="暂无复盘记录。">
+    <AsyncState :status="status" :message="error ?? undefined">
+      <template #empty>
+        <EmptyState text="暂无复盘记录" hint="选择任务、主题与两个时间窗后生成固定的对照口径" />
+      </template>
       <template #error>
         <p class="vl-reviews__error">暂时无法获取复盘记录,请稍后重试。</p>
         <VlButton variant="secondary" @click="load">重试</VlButton>
       </template>
 
       <div class="vl-table-scroll">
-        <table class="vl-review-table" data-testid="review-table">
+        <table class="vl-table vl-review-table" data-testid="review-table">
           <thead>
             <tr>
               <th scope="col">复盘中主题</th>
@@ -126,9 +129,11 @@
 // 不可比数据不显示改善结论;n/N、占比、百分点、相对变化始终可见。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { TrendCharts } from '@element-plus/icons-vue'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 import { apiClient } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import { effectStatusLabel } from '../../lib/ui-status'
@@ -230,18 +235,6 @@ function statusKind(record: ReviewRecord): string {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-}
-.vl-review-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-review-table tbody th,
-.vl-review-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
 }
 .vl-review-table__title {
   font-weight: 600;

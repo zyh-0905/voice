@@ -1,14 +1,20 @@
 <template>
   <section class="vl-page" data-testid="import-page">
-    <PageHeader title="数据导入" :description="`项目:${projectId}`">
+    <PageHeader :icon="Upload" title="数据导入" :description="`项目:${projectId}`">
       <template #actions>
         <VlButton v-if="step !== 'upload'" variant="ghost" @click="restart">重新开始</VlButton>
       </template>
     </PageHeader>
 
     <ol class="vl-import-steps" aria-label="导入步骤">
-      <li v-for="(label, key) in stepOrder" :key="key" class="vl-import-steps__item" :class="{ 'vl-import-steps__item--current': step === key, 'vl-import-steps__item--done': isDone(key) }">
-        {{ label }}
+      <li
+        v-for="(label, key) in stepOrder"
+        :key="key"
+        class="vl-import-steps__item"
+        :class="{ 'vl-import-steps__item--current': step === key, 'vl-import-steps__item--done': isDone(key) }"
+      >
+        <el-icon v-if="isDone(key)" :size="14" aria-hidden="true"><CircleCheckFilled /></el-icon>
+        <span>{{ label }}</span>
       </li>
     </ol>
 
@@ -67,6 +73,7 @@
 // 授权不预勾选;每步独立 loading/error;刷新从已存 step/dataset 恢复,不丢用户输入。
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { CircleCheckFilled, Upload } from '@element-plus/icons-vue'
 import { ApiHttpError, fetchHttpClient } from '../../api/client'
 import { mockApi } from '../../api/mock'
 import PageHeader from '../../components/common/PageHeader.vue'
@@ -147,17 +154,21 @@ function restart() {
   flex-wrap: wrap;
 }
 .vl-import-steps__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vl-space-2);
   border: 1px solid var(--vl-color-border);
-  border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-surface);
+  border-radius: var(--vl-radius-control);
+  background: var(--vl-glass-panel);
   color: var(--vl-color-text-muted);
   padding: var(--vl-space-2) var(--vl-space-3);
   font-size: var(--vl-text-xs);
+  box-shadow: var(--vl-highlight-inset);
 }
 .vl-import-steps__item--current {
-  border-color: var(--vl-color-brand);
-  background: var(--vl-color-brand-soft);
-  color: var(--vl-color-brand);
+  border-color: var(--vl-color-brand-line);
+  background: var(--vl-gradient-brand-soft);
+  color: var(--vl-color-brand-ink);
   font-weight: 600;
 }
 .vl-import-steps__item--done {

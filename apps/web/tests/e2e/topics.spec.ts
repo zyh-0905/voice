@@ -38,3 +38,37 @@ test('MERGE 至少需要两个来源主题', async ({ page }) => {
   await page.getByTestId('correction-submit').click()
   await expect(page.getByTestId('correction-error')).toContainText('两个来源')
 })
+
+
+// W14 风险裁决:理由必填、裁决后状态更新、确认不等于"已确认事故"
+test('风险裁决需填写理由,确认后状态更新', async ({ page }) => {
+  await page.goto('/p/demo-project/risks')
+  const row = page.locator('[data-testid="risk-table"] tbody tr').filter({ hasText: '待复核' }).first()
+  await row.getByTestId('risk-confirm').click()
+
+  // 未填理由直接提交 → 拦在对话框内
+  await page.getByTestId('risk-confirm-submit').click()
+  await expect(page.getByTestId('risk-reason-error')).toBeVisible()
+
+  await page.locator('#vl-risk-reason').fill('已对照原文与命中规则,确认属实际问题')
+  await page.getByTestId('risk-confirm-submit').click()
+  await expect(page.locator('[data-testid="risk-table"]').getByText('已确认').first()).toBeVisible()
+})
+
+
+// 10.4 删除:必须输入项目名才能确认;确认按钮在名称匹配前不可用
+test('删除项目需先看影响范围并输入名称确认', async ({ page }) => {
+  await page.goto('/p/demo-project/settings')
+  await page.getByTestId('delete-data').click()
+
+  // 影响范围逐项展示,且明确说明旧报告不再有效
+  await expect(page.getByTestId('delete-impact')).toBeVisible()
+  await expect(page.getByTestId('delete-invalidates')).toContainText('不再作为有效结果')
+
+  const confirm = page.getByTestId('delete-project-confirm')
+  await expect(confirm).toBeDisabled()
+  await page.getByTestId('delete-confirm-name').fill('写错的名称')
+  await expect(confirm).toBeDisabled()
+  await page.getByTestId('delete-confirm-name').fill('VoiceLens Demo Project')
+  await expect(confirm).toBeEnabled()
+})
