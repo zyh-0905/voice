@@ -108,20 +108,28 @@
 
   /* 玻璃材质(v1.2):仅用于外壳与面板背板;承载正文的表面保持高不透明度,
    * 混合后对比度经 design-tokens 单测按最差底色校验(全部 ≥4.5:1)。 */
-  --vl-glass-chrome: rgba(255, 255, 255, 0.66);
-  --vl-glass-panel: rgba(255, 255, 255, 0.78);
-  --vl-glass-float: rgba(255, 255, 255, 0.86);
+  --vl-glass-chrome: rgba(255, 255, 255, 0.62);
+  --vl-glass-panel: rgba(255, 255, 255, 0.74);
+  --vl-glass-float: rgba(255, 255, 255, 0.88);
   --vl-glass-border: rgba(255, 255, 255, 0.6);
   --vl-glass-blur: 20px;
   --vl-glass-blur-strong: 32px;
   --vl-glass-saturate: 180%;
 
-  /* 渐变:页面柔光底(给玻璃提供可折射的背景)+ 品牌微渐变(按钮/装饰) */
+  /* 渐变:页面柔光底(给玻璃提供可折射的背景)+ 品牌微渐变(按钮/装饰)。
+   * 染色峰值受约束:辅助文字 #6E6E73 压在任一染色上须 ≥4.5:1(约 4.58 已接近上限),
+   * 因此层次靠「更大半径 + 更慢衰减 + 更多色晕」实现,不靠加深颜色。 */
   --vl-tint-warm: #FFF1E6;
   --vl-tint-cool: #EEF4FF;
+  --vl-tint-blush: #FFF0F2;
+  --vl-tint-sand: #FFF7E8;
+  --vl-tint-mint: #EEF7F1;
   --vl-gradient-page:
-    radial-gradient(60rem 30rem at 12% -8%, var(--vl-tint-warm) 0%, rgba(255, 255, 255, 0) 60%),
-    radial-gradient(48rem 26rem at 92% -4%, var(--vl-tint-cool) 0%, rgba(255, 255, 255, 0) 55%),
+    radial-gradient(78rem 44rem at 6% -14%, var(--vl-tint-warm) 0%, rgba(255, 255, 255, 0) 74%),
+    radial-gradient(64rem 38rem at 98% -8%, var(--vl-tint-cool) 0%, rgba(255, 255, 255, 0) 72%),
+    radial-gradient(56rem 42rem at -10% 88%, var(--vl-tint-blush) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(52rem 36rem at 106% 96%, var(--vl-tint-sand) 0%, rgba(255, 255, 255, 0) 68%),
+    radial-gradient(40rem 30rem at 50% 118%, var(--vl-tint-mint) 0%, rgba(255, 255, 255, 0) 64%),
     var(--vl-color-bg);
   --vl-gradient-brand: linear-gradient(180deg, #CC4A0D 0%, #B03C0A 100%);
   --vl-gradient-brand-soft: linear-gradient(180deg, #FFF7F1 0%, #FFEFE2 100%);

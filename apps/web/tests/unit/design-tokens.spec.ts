@@ -82,7 +82,7 @@ function contrastRgb(fgHex: string, bgRgb: { r: number; g: number; b: number }):
 }
 
 const glassSurfaces = ['--vl-glass-chrome', '--vl-glass-panel', '--vl-glass-float']
-const backgroundTints = ['--vl-tint-warm', '--vl-tint-cool', '--vl-color-bg']
+const backgroundTints = ['--vl-tint-warm', '--vl-tint-cool', '--vl-tint-blush', '--vl-tint-sand', '--vl-tint-mint', '--vl-color-bg']
 const textTokens = ['--vl-color-text', '--vl-color-text-secondary', '--vl-color-text-muted']
 const glassCases: [string, string, string][] = glassSurfaces.flatMap(surface =>
   backgroundTints.flatMap(tint => textTokens.map(text => [surface, tint, text])),
@@ -93,6 +93,16 @@ test.each(glassCases)('%s over %s:文字 %s 混合后仍 >= 4.5', (surfaceToken,
   const base = hexToRgb(color(tintToken))
   expect(contrastRgb(textToken, composite(surface, base))).toBeGreaterThanOrEqual(4.5)
 })
+
+test.each(backgroundTints.filter(t => t !== '--vl-color-bg'))(
+  '%s:文字直接压在原始染色上(不经玻璃)仍 >= 4.5',
+  (tintToken) => {
+    const tint = hexToRgb(color(tintToken))
+    for (const textToken of textTokens) {
+      expect(contrastRgb(textToken, tint)).toBeGreaterThanOrEqual(4.5)
+    }
+  },
+)
 
 test('品牌渐变最浅一级仍满足白字 4.5:1', () => {
   // 取渐变中最浅的色标(白字承载在其上,是最差情形)
