@@ -2,7 +2,7 @@ from collections.abc import MutableMapping
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from .db import Base, SessionLocal
-from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, RiskAudit, Task, Review, IdempotencyKey
+from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, RiskAudit, DeletionJob, Task, Review, IdempotencyKey
 from .repository import MAX_PUBLISH_ATTEMPTS
 
 
@@ -93,7 +93,7 @@ class SQLAlchemyRepository:
                 Base.metadata.create_all(session.get_bind())
         self.datasets = _EntityMap(self, 'datasets')
         self.analyses = _EntityMap(self, 'analyses')
-        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review, 'audits': RiskAudit}
+        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review, 'audits': RiskAudit, 'deletions': DeletionJob}
 
     def _project_dict(self, obj):
         return {'id': obj.id, 'name': obj.name, 'description': 'Project', 'status': 'active'}
@@ -127,6 +127,21 @@ class SQLAlchemyRepository:
             for k,v in changes.items():
                 if k in model.__table__.columns.keys() and k != 'id': setattr(o,k,v)
             s.flush(); return {c.name:getattr(o,c.name) for c in model.__table__.columns}
+
+    def delete_entity(self, kind, key):
+        model = self._domain[kind]
+        with self.session() as s, s.begin():
+            o = s.get(model, key)
+            if o is None: raise KeyError(key)
+            s.delete(o)
+
+    def delete_analysis(self, key):
+        del self.analyses[key]
+
+    def delete_project(self, key):
+        with self.session() as s, s.begin():
+            o = s.get(Project, key)
+            if o is not None: s.delete(o)
 
     def session(self):
         return self._session_factory()

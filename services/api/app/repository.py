@@ -29,6 +29,9 @@ class Repository(Protocol):
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
     def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
+    def delete_entity(self, kind: str, key: str) -> None: ...
+    def delete_analysis(self, key: str) -> None: ...
+    def delete_project(self, key: str) -> None: ...
 
 
 class InMemoryRepository:
@@ -38,7 +41,7 @@ class InMemoryRepository:
         self.analyses = {}
         self.outbox = []
         self.idempotency = {}
-        self.risks, self.tasks, self.reviews, self.audits = {}, {}, {}, {}
+        self.risks, self.tasks, self.reviews, self.audits, self.deletions = {}, {}, {}, {}, {}
 
     def _create(self, collection, value):
         key = value['id']
@@ -66,6 +69,15 @@ class InMemoryRepository:
     def list_entities(self, kind, project_id): return [deepcopy(v) for v in getattr(self, kind).values() if v.get('project_id') == project_id]
     def create_entity(self, kind, value): return self._create(getattr(self, kind), value)
     def update_entity(self, kind, key, changes): return self._update(getattr(self, kind), key, changes)
+    def delete_entity(self, kind, key):
+        collection = getattr(self, kind)
+        if key not in collection: raise KeyError(key)
+        del collection[key]
+    def delete_analysis(self, key):
+        if key not in self.analyses: raise KeyError(key)
+        del self.analyses[key]
+    def delete_project(self, key):
+        self.projects.pop(key, None)
     def create_outbox_event(self, event):
         if any(e['event_key'] == event['event_key'] for e in self.outbox): return next(e for e in self.outbox if e['event_key'] == event['event_key'])
         value = deepcopy({**event, 'status': event.get('status', 'pending')}); self.outbox.append(value); return deepcopy(value)

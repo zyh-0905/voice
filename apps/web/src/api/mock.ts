@@ -2,6 +2,8 @@ import {
   ApiHttpError,
   type ApiClient,
   type CorrectionBody,
+  type DeletionBody,
+  type DeletionTarget,
   type ReviewCreateBody,
   type RiskReviewBody,
   type TaskConfirmBody,
@@ -610,5 +612,34 @@ export const mockApi: ApiClient = {
   async recentBatches() {
     await delay(300)
     return SYNTHETIC_BATCHES
+  },
+  async previewDeletion(_projectId: string, body: DeletionTarget) {
+    await delay(200)
+    // target_name 必须是目标的真实名称(供用户逐字确认),不是 confirm_name 的回显
+    const targetName = body.target_type === 'project'
+      ? 'VoiceLens Demo Project'
+      : (SYNTHETIC_BATCHES.find(b => b.id === body.target_id)?.name ?? body.target_id)
+    return {
+      target_type: body.target_type,
+      target_id: body.target_id,
+      target_name: targetName,
+      datasets: body.target_type === 'project' ? SYNTHETIC_BATCHES.length : 1,
+      runs: 1, topics: SYNTHETIC_TOPICS.length, tasks: SYNTHETIC_TASKS.length,
+      reviews: 2, risks: SYNTHETIC_RISKS.length,
+      invalidates_reports: body.target_type === 'dataset',
+    }
+  },
+  async executeDeletion(_projectId: string, body: DeletionBody) {
+    await delay(300)
+    return {
+      job_id: `del_${body.target_id.slice(0, 8)}`, state: 'DONE',
+      target_type: body.target_type, target_id: body.target_id,
+      steps: [
+        { name: 'tombstone', status: 'done' }, { name: 'cancel_jobs', status: 'done' },
+        { name: 'purge_runs', status: 'done' }, { name: 'purge_datasets', status: 'done' },
+        { name: 'verify', status: 'done' },
+      ],
+      removed: { datasets: 1, runs: 1, topics: SYNTHETIC_TOPICS.length, tasks: 0, reviews: 0, risks: 0 },
+    }
   },
 }

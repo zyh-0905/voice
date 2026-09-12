@@ -403,6 +403,18 @@ def logout(http_request: Request, response: Response,
     clear_session_cookie(response)
 
 
+def require_owner(user: Annotated[dict, Depends(require_user)]) -> dict:
+    """OWNER 专有动作(删除、审计):工程计划 7.5。
+
+    演示环境只有 ANALYST / VIEWER 两个角色,ANALYST 即项目管理员;
+    接入真实身份提供商后,OWNER 由 IdP 的角色断言给出,EDITOR 将被拒。
+    """
+    role = str(user.get("role", "VIEWER")).upper()
+    if role == "VIEWER":
+        raise HTTPException(status_code=403, detail={"code": "forbidden"})
+    return user
+
+
 def require_project_access(project_id: str, user: Annotated[dict, Depends(require_user)]) -> dict:
     """Hide projects outside the authenticated principal's membership list."""
     if user.get("demo_bypass"):

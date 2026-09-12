@@ -71,6 +71,20 @@ class SessionToken(Base):
     # 空闲过期时间:每次访问滑动续期
     idle_exp: Mapped[float | None] = mapped_column(nullable=True)
 
+class DeletionJob(Base):
+    """10.4 删除登记:写 tombstone 后级联清理,回执不含正文。"""
+    __tablename__ = 'deletion_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_name: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(32), default='RUNNING', nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    steps: Mapped[list | None] = mapped_column(JSON, default=list)
+    receipt: Mapped[dict | None] = mapped_column(JSON)
+
+
 class RiskAudit(Base):
     """W14 审计:风险裁决等动作的脱敏元数据(不含正文)。"""
     __tablename__ = 'risk_audits'

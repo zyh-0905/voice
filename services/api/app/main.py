@@ -8,7 +8,7 @@ from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
-from .auth import router as auth_router, require_user, require_analyst, require_project_access, require_project_analyst
+from .auth import router as auth_router, require_user, require_analyst, require_owner, require_project_access, require_project_analyst
 from .config import dedupe_hmac_secret
 from .settings import validate_production_settings
 import hashlib
@@ -458,6 +458,68 @@ def _record_audit(project_id: str, action: str, user: dict, detail: dict) -> Non
     except (ValueError, KeyError):
         # 审计表在演示仓储下可能未就绪;不因审计失败回滚业务动作
         pass
+
+class DeletionTarget(BaseModel):
+    target_type: str            # project | dataset
+    target_id: str
+
+
+class DeletionRequest(DeletionTarget):
+    # 仅执行删除需要逐字确认;预览是只读查询,不要求提供
+    confirm_name: str = Field(min_length=1)
+
+
+@app.post('/api/v1/projects/{project_id}/deletions/preview')
+def preview_project_deletion(project_id: str, req: DeletionTarget, user: dict = Depends(require_owner)):
+    """只预览影响范围,不写入;OWNER 专有。确认前必须展示将失效的报告数量。"""
+    from .deletions import DeletionError, preview_deletion
+    try:
+        return preview_deletion(repository, project_id, req.target_type, req.target_id)
+    except DeletionError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code.endswith('_not_found') else 422, detail={'code': code})
+
+
+@app.post('/api/v1/projects/{project_id}/deletions', status_code=202)
+def execute_project_deletion(project_id: str, req: DeletionRequest,
+                             idempotency_key: str | None = Header(None),
+                             user: dict = Depends(require_owner)):
+    """执行删除:写 tombstone → 取消作业 → 级联清理 → 核验为零 → 最小回执。"""
+    from .deletions import DeletionConflict, DeletionError, execute_deletion, get_deletion
+    if idempotency_key:
+        existing = repository.get_idempotency(idempotency_key)
+        if existing:
+            # 同一幂等键重复调用:返回首次执行的回执,不重复删除
+            previous = get_deletion(repository, project_id, existing['analysis_id'])
+            if previous is not None:
+                return previous.get('receipt') or previous
+    job_id = f'del_{uuid4().hex[:10]}'
+    try:
+        receipt = execute_deletion(repository, project_id, req.target_type, req.target_id,
+                                   req.confirm_name, job_id, user.get('id', 'demo-user'))
+    except DeletionConflict as exc:
+        raise HTTPException(409, detail={'code': str(exc)})
+    except DeletionError as exc:
+        code = str(exc)
+        raise HTTPException(404 if code.endswith('_not_found') else 422, detail={'code': code})
+    _record_audit(project_id, 'project.deletion', user, {'job_id': job_id, 'target_type': req.target_type})
+    if idempotency_key:
+        repository.create_idempotency(idempotency_key, {
+            'project_id': project_id, 'fingerprint': req.target_id, 'analysis_id': job_id,
+        })
+    return receipt
+
+
+@app.get('/api/v1/projects/{project_id}/deletions/{job_id}')
+def get_deletion_receipt(project_id: str, job_id: str, user: dict = Depends(require_owner)):
+    """删除进度/回执:项目本体被清理后仍可查最小回执(不含正文)。"""
+    from .deletions import get_deletion
+    job = get_deletion(repository, project_id, job_id)
+    if job is None:
+        raise HTTPException(404, detail={'code': 'deletion_not_found'})
+    # 与 POST 返回同一形状:已完成的直接给回执,进行中的给登记行
+    return job.get('receipt') or job
+
 
 @app.get('/api/v1/projects/{project_id}/audits')
 def list_audits(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):

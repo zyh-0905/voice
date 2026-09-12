@@ -44,6 +44,38 @@ export interface TopicDetailResponse {
   revision: number
 }
 
+export interface DeletionTarget {
+  target_type: 'project' | 'dataset'
+  target_id: string
+}
+
+export interface DeletionBody extends DeletionTarget {
+  /** 仅执行删除需要:用户逐字输入的目标名称 */
+  confirm_name: string
+}
+
+export interface DeletionPreview {
+  target_type: 'project' | 'dataset'
+  target_id: string
+  target_name: string
+  datasets: number
+  runs: number
+  topics: number
+  tasks: number
+  reviews: number
+  risks: number
+  invalidates_reports?: boolean
+}
+
+export interface DeletionReceipt {
+  job_id: string
+  state: string
+  target_type: string
+  target_id: string
+  steps: Array<{ name: string; status: string }>
+  removed: Record<string, number>
+}
+
 export interface RiskReviewBody {
   decision: 'confirmed' | 'excluded' | 'reopened'
   reason: string
@@ -114,6 +146,8 @@ export interface ApiClient {
   getReview(projectId: string, reviewId: string, signal?: AbortSignal): Promise<ReviewRecord>
   createReview(projectId: string, body: ReviewCreateBody): Promise<ReviewRecord>
   recentBatches(projectId: string, signal?: AbortSignal): Promise<DatasetBatch[]>
+  previewDeletion(projectId: string, body: DeletionTarget): Promise<DeletionPreview>
+  executeDeletion(projectId: string, body: DeletionBody, idempotencyKey: string): Promise<DeletionReceipt>
   /** GET /exports/redacted.csv,返回脱敏导出文件 */
   exportRedactedCsv(projectId: string, signal?: AbortSignal): Promise<Blob>
 }
@@ -281,6 +315,17 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    previewDeletion(projectId: string, body: DeletionTarget) {
+      return request<DeletionPreview>(`${project(projectId)}/deletions/preview`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    executeDeletion(projectId: string, body: DeletionBody, idempotencyKey: string) {
+      return request<DeletionReceipt>(`${project(projectId)}/deletions`, {
+        method: 'POST', body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      })
     },
     reviewRisk(projectId: string, riskId: string, body: RiskReviewBody) {
       return request<RiskItem>(`${project(projectId)}/risks/${encodeURIComponent(riskId)}/reviews`, {
