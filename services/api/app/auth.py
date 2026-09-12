@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -19,14 +20,15 @@ from typing import Annotated
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 
-_DEFAULT_TOKEN_TTL_SECONDS = 3600
+_DEFAULT_TOKEN_TTL_SECONDS = 8 * 3600
+_DEFAULT_IDLE_SECONDS = 30 * 60
 _LOGIN_FAIL_WINDOW = 60.0
 _LOGIN_FAIL_LIMIT = 5
 _LOGIN_LOCKOUT_SECONDS = 60.0
@@ -53,6 +55,81 @@ def _token_ttl() -> int:
         return _DEFAULT_TOKEN_TTL_SECONDS
 
 
+def _idle_ttl() -> int:
+    """空闲过期(默认 30 分钟);每次访问滑动续期。"""
+    try:
+        return max(0, int(os.getenv("AUTH_IDLE_SECONDS", str(_DEFAULT_IDLE_SECONDS))))
+    except (TypeError, ValueError):
+        return _DEFAULT_IDLE_SECONDS
+
+
+def insecure_dev() -> bool:
+    """显式开发开关:允许非 Secure Cookie 与 http 场景;生产必须为 false。"""
+    return os.getenv("AUTH_INSECURE_DEV", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+SESSION_COOKIE = "vl_session"
+CSRF_COOKIE = "vl_csrf"
+CSRF_HEADER = "X-CSRF-Token"
+
+
+def _cookie_secure() -> bool:
+    return not insecure_dev()
+
+
+def _allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173,http://localhost:8080,http://127.0.0.1:8080",
+    )
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def set_session_cookie(response: Response, token: str, max_age: int) -> None:
+    response.set_cookie(
+        SESSION_COOKIE, token,
+        max_age=max_age, httponly=True, secure=_cookie_secure(), samesite="lax", path="/",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, secure=_cookie_secure(), samesite="lax")
+
+
+def issue_csrf_token() -> str:
+    """预登录 CSRF token:双提交 Cookie,前端读取后放入请求头。"""
+    return token_urlsafe(24)
+
+
+def set_csrf_cookie(response: Response, token: str) -> None:
+    # 前端需要读取该值放入头部,因此不能是 HttpOnly
+    response.set_cookie(CSRF_COOKIE, token, httponly=False, secure=_cookie_secure(), samesite="lax", path="/")
+
+
+def csrf_required(http_request) -> bool:
+    """开发环境下无会话的请求(预登录/演示旁路)不校验 CSRF;其余一律校验。
+
+    生产环境(insecure dev 关闭)对包括登录在内的所有写请求校验,
+    这正是「登录前先取预登录 CSRF token」的落点。
+    """
+    if insecure_dev() and not http_request.cookies.get(SESSION_COOKIE):
+        return False
+    return True
+
+
+def verify_csrf(http_request) -> None:
+    """写请求必须携带匹配的 CSRF 头,且 Origin 在白名单内。"""
+    if not csrf_required(http_request):
+        return
+    origin = http_request.headers.get("origin")
+    if origin and origin not in _allowed_origins():
+        raise HTTPException(status_code=403, detail={"code": "origin_not_allowed"})
+    cookie_token = http_request.cookies.get(CSRF_COOKIE)
+    header_token = http_request.headers.get(CSRF_HEADER)
+    if not cookie_token or not header_token or not secrets.compare_digest(cookie_token, header_token):
+        raise HTTPException(status_code=403, detail={"code": "csrf_failed"})
+
+
 class TokenStore:
     def issue(self, user: dict) -> str: ...
     def get(self, token: str) -> dict | None: ...
@@ -74,8 +151,14 @@ class InMemoryTokenStore(TokenStore):
         session = self._tokens.get(token)
         if session is None:
             return None
-        if time.time() >= session["exp"]:
+        now = time.time()
+        if now >= session["exp"]:
             return None  # 保留记录供 is_expired 区分「过期」与「不存在」
+        idle_exp = session.get("idle_exp")
+        if idle_exp is not None and now >= idle_exp:
+            return None  # 空闲过期
+        if idle_exp is not None:
+            session["idle_exp"] = now + _idle_ttl()  # 滑动续期
         return session
 
     def is_expired(self, token: str) -> bool:
@@ -107,19 +190,26 @@ class SqlTokenStore(TokenStore):
         token = token_urlsafe(32)
         with self._SessionLocal() as session, session.begin():
             session.execute(delete(self._SessionToken).where(self._SessionToken.user_id == user["id"]))
+            now = time.time()
             session.add(self._SessionToken(
                 token=token, user_id=user["id"], role=user.get("role", "ANALYST"),
-                projects=user.get("projects", []), issued_at=time.time(), exp=user["exp"],
+                projects=user.get("projects", []), issued_at=now, exp=user["exp"],
+                idle_exp=user.get("idle_exp", now + _idle_ttl()),
             ))
         return token
 
     def get(self, token: str) -> dict | None:
-        with self._SessionLocal() as session:
+        now = time.time()
+        with self._SessionLocal() as session, session.begin():
             row = session.get(self._SessionToken, token)
             if row is None:
                 return None
-            if time.time() >= row.exp:
+            if now >= row.exp:
                 return None  # 保留行供 is_expired 区分「过期」与「不存在」
+            if row.idle_exp is not None and now >= row.idle_exp:
+                return None
+            if row.idle_exp is not None:
+                row.idle_exp = now + _idle_ttl()  # 滑动续期
             return {"id": row.user_id, "role": row.role, "projects": row.projects, "exp": row.exp}
 
     def is_expired(self, token: str) -> bool:
@@ -199,29 +289,43 @@ def _verify_password(user: dict, password: str) -> bool:
         return False
 
 
-def current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict:
-    if not credentials or credentials.scheme.lower() != "bearer":
+def session_token_of(http_request, credentials) -> str | None:
+    """浏览器用 HttpOnly Cookie,非浏览器客户端用 Bearer;两者等价。"""
+    if credentials and credentials.scheme.lower() == "bearer":
+        return credentials.credentials
+    return http_request.cookies.get(SESSION_COOKIE)
+
+
+def current_user(
+    http_request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> dict:
+    token = session_token_of(http_request, credentials)
+    if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": "unauthorized"},
                             headers={"WWW-Authenticate": "Bearer"})
     store = get_token_store()
-    session = store.get(credentials.credentials)
+    session = store.get(token)
     if session is None:
-        code = 'token_expired' if store.is_expired(credentials.credentials) else 'unauthorized'
+        code = 'token_expired' if store.is_expired(token) else 'unauthorized'
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": code},
                             headers={"WWW-Authenticate": "Bearer"})
     return session
 
 
-def require_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict:
-    """Require a valid bearer token when AUTH_REQUIRED is enabled.
+def require_user(
+    http_request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> dict:
+    """Require a valid session (cookie or bearer) when AUTH_REQUIRED is enabled.
 
     Demo mode deliberately supplies an analyst identity so existing local
     workflows remain usable without a login round trip.
     """
     required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
-    if not required and not credentials:
+    if not required and not session_token_of(http_request, credentials):
         return _public(_USERS["demo"]) | {"demo_bypass": True, "projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
-    return current_user(credentials)
+    return current_user(http_request, credentials)
 
 
 def require_analyst(user: Annotated[dict, Depends(require_user)]) -> dict:
@@ -230,8 +334,17 @@ def require_analyst(user: Annotated[dict, Depends(require_user)]) -> dict:
     return user
 
 
+@router.get("/csrf")
+def csrf_token(response: Response):
+    """预登录 CSRF token:双提交 Cookie,登录与所有写接口都要回传该值。"""
+    token = issue_csrf_token()
+    set_csrf_cookie(response, token)
+    return {"csrf_token": token}
+
+
 @router.post("/login")
-def login(request: LoginRequest, http_request: Request):
+def login(request: LoginRequest, http_request: Request, response: Response):
+    verify_csrf(http_request)
     user = _USERS.get(request.username)
     client = http_request.client.host if http_request.client else "unknown"
     rate_key = f"{request.username}:{client}"
@@ -242,15 +355,19 @@ def login(request: LoginRequest, http_request: Request):
     if user is None or not _verify_password(user, request.password):
         _record_login_failure(rate_key)
         # 统一错误文案,不泄露账号存在性
-        raise HTTPException(status_code=401, detail={"code": "invalid_credentials"},
-                            headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(status_code=401, detail={"code": "invalid_credentials"})
     issued_at = time.time()
     ttl = _token_ttl()
-    session = _public(user) | {"projects": _projects(user), "issued_at": issued_at, "exp": issued_at + ttl}
+    session = _public(user) | {
+        "projects": _projects(user), "issued_at": issued_at,
+        "exp": issued_at + ttl, "idle_exp": issued_at + _idle_ttl(),
+    }
     store = get_token_store()
     # 登录成功轮换/撤销该用户旧会话(单会话)
     store.revoke_user_sessions(user["id"])
     token = store.issue(session)
+    set_session_cookie(response, token, max_age=ttl)
+    # access_token 仍返回,供非浏览器客户端使用;浏览器以 HttpOnly Cookie 为准
     return {"access_token": token, "token_type": "bearer", "expires_in": ttl,
             "user": _public(user) | {"projects": _projects(user)}}
 
@@ -261,9 +378,12 @@ def me(user: Annotated[dict, Depends(current_user)]):
 
 
 @router.post("/logout", status_code=204)
-def logout(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
-    if credentials and credentials.credentials:
-        get_token_store().revoke(credentials.credentials)
+def logout(http_request: Request, response: Response,
+           credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+    token = credentials.credentials if credentials else http_request.cookies.get(SESSION_COOKIE)
+    if token:
+        get_token_store().revoke(token)
+    clear_session_cookie(response)
 
 
 def require_project_access(project_id: str, user: Annotated[dict, Depends(require_user)]) -> dict:

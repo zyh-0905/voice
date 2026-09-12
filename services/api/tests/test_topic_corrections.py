@@ -1,9 +1,9 @@
 """W13 校正契约:新快照不覆写旧版本、并发 409、MERGE 去重、SPLIT 保留、CREATE 待归类。"""
-from fastapi.testclient import TestClient
 
 from app.main import app
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 def _correct(topic_case, topic_id, operation, expected_revision, **extra):

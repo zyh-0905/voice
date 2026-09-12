@@ -53,7 +53,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { DEMO_USER, DEMO_VIEWER, useSessionStore, type User } from '../stores/session'
-import { apiClient, ApiHttpError, setAccessToken } from '../api/client'
+import { apiClient, ApiHttpError, clearAccessToken, setAccessToken } from '../api/client'
 import VlButton from '../components/common/VlButton.vue'
 
 const router = useRouter()
@@ -72,7 +72,8 @@ async function submit() {
     busy.value = true
     try {
       const result = await client.login(username.value, password.value)
-      setAccessToken(result.access_token)
+      // 会话由服务端 HttpOnly Cookie 承载,前端不保存令牌
+      clearAccessToken()
       session.loginAs({ id: result.user.id, name: result.user.name, email: result.user.email, role: (result.user.role as User['role']) || 'VIEWER' })
       void router.push('/overview')
     } catch (err) {

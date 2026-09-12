@@ -90,7 +90,7 @@ import DemoNotice from '../components/common/DemoNotice.vue'
 import VlButton from '../components/common/VlButton.vue'
 import { useSessionStore } from '../stores/session'
 import { useProjectStore } from '../stores/project'
-import { clearAccessToken } from '../api/client'
+import { apiClient, clearAccessToken } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -127,7 +127,13 @@ function onProjectChange(selectedId: string) {
   void router.push(`/p/${selectedId}/overview`)
 }
 
-function logout() {
+async function logout() {
+  // 先通知服务端撤销会话(清 HttpOnly Cookie),再清本地状态
+  try {
+    await apiClient().logout()
+  } catch {
+    // 服务端不可达也要完成本地登出
+  }
   session.logout()
   clearAccessToken()
   void router.push('/login')

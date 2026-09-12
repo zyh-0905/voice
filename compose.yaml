@@ -24,6 +24,7 @@
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
       REDIS_URL: redis://redis:6379/0
       AUTH_REQUIRED: "true"
+      AUTH_INSECURE_DEV: "true"
       USE_DATABASE: "1"
     depends_on:
       migrate:
@@ -79,6 +80,7 @@
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
       REDIS_URL: redis://redis:6379/0
       AUTH_REQUIRED: "true"
+      AUTH_INSECURE_DEV: "true"
       USE_DATABASE: "1"
     depends_on:
       migrate:
@@ -97,6 +99,7 @@
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
       REDIS_URL: redis://redis:6379/0
       AUTH_REQUIRED: "true"
+      AUTH_INSECURE_DEV: "true"
       USE_DATABASE: "1"
       OUTBOX_RELAY_INTERVAL_SECONDS: "5"
     depends_on:

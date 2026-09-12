@@ -39,6 +39,8 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
         errors.append("DATABASE_URL must not use sqlite in production")
     if os.getenv("SESSION_STORE", "memory") != "db":
         errors.append("SESSION_STORE must be db in production (server-side sessions must survive restarts)")
+    if os.getenv("AUTH_INSECURE_DEV", "false").strip().lower() in ("1", "true", "yes", "on"):
+        errors.append("AUTH_INSECURE_DEV must be false in production (insecure cookies are dev-only)")
     if errors:
         raise RuntimeError("Invalid production settings: " + "; ".join(errors))
     return cfg

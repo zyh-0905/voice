@@ -1,10 +1,10 @@
 ﻿"""Regression coverage for write rate limiting."""
 
-from fastapi.testclient import TestClient
 from app.main import app
 from app.rate_limit import WriteRateLimitMiddleware
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 def _rate_middleware() -> WriteRateLimitMiddleware:

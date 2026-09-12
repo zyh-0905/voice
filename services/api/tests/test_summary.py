@@ -2,12 +2,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.main import app
 from app.summary import build_summary
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 AS_OF = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
 

@@ -78,6 +78,8 @@ export interface ApiClient {
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
   /** POST /auth/login,返回真实 access_token 与用户 */
   login(username: string, password: string): Promise<LoginResponse>
+  /** POST /auth/logout,服务端撤销会话并清除 Cookie */
+  logout(): Promise<void>
   /** 工程计划 7.7:行动首页只读聚合 */
   summary(projectId: string, signal?: AbortSignal): Promise<SummaryResponse>
   topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
@@ -115,12 +117,54 @@ export function setAccessToken(token: string): void { if (typeof window !== 'und
 export function clearAccessToken(): void { if (typeof window !== 'undefined') window.sessionStorage.removeItem(ACCESS_TOKEN_KEY) }
 function getAccessToken(): string | null { return typeof window === 'undefined' ? null : window.sessionStorage.getItem(ACCESS_TOKEN_KEY) }
 
+const CSRF_COOKIE = 'vl_csrf'
+const CSRF_HEADER = 'X-CSRF-Token'
+// /auth/csrf 负责签发令牌,登录自身在服务端按环境判定是否强制,两者都无需预先取令牌
+const URL_IS_CSRF_FREE = /^\/auth\/(csrf|login)$/
+
+function readCsrfCookie(): string | null {
+  if (typeof document === 'undefined') return null
+  const match = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(`${CSRF_COOKIE}=`))
+  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null
+}
+
 /** Real HTTP implementation. The mock client remains the default for demo pages. */
 export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'): ApiClient {
   const base = baseUrl.replace(/\/$/, '')
+  let csrfToken: string | null = null
+
+  async function ensureCsrf(): Promise<void> {
+    if (csrfToken) return
+    const response = await fetch(`${base}/auth/csrf`, { credentials: 'include', headers: { Accept: 'application/json' } })
+    if (response.ok) {
+      const body = await response.json() as { csrf_token?: string }
+      csrfToken = body.csrf_token ?? readCsrfCookie()
+    }
+  }
+
+  function isUnsafe(method: string | undefined): boolean {
+    return ['POST', 'PUT', 'PATCH', 'DELETE'].includes((method ?? 'GET').toUpperCase())
+  }
+
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const method = (init.method ?? 'GET').toUpperCase()
+    // Cookie 会话的写请求需要双提交 CSRF 令牌;读请求与 Bearer 客户端不需要
+    if (isUnsafe(method) && !URL_IS_CSRF_FREE.test(path)) {
+      await ensureCsrf()
+    }
     const token = getAccessToken()
-    const response = await fetch(`${base}${path}`, { ...init, headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) } })
+    const csrf = csrfToken ?? readCsrfCookie()
+    const unsafe = isUnsafe(method) && !URL_IS_CSRF_FREE.test(path)
+    const response = await fetch(`${base}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(unsafe && csrf ? { [CSRF_HEADER]: csrf } : {}),
+        ...(init.headers || {}),
+      },
+    })
     if (!response.ok) {
       let body: ApiErrorBody | undefined
       try { body = await response.json() } catch { /* non-json error */ }
@@ -158,10 +202,20 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     login(username: string, password: string) {
       return request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), headers: { 'Content-Type': 'application/json' } })
     },
+    async logout() {
+      await ensureCsrf()
+      const csrf = csrfToken ?? readCsrfCookie()
+      await fetch(`${base}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json', ...(csrf ? { [CSRF_HEADER]: csrf } : {}) },
+      })
+    },
     async exportRedactedCsv(projectId: string, signal?: AbortSignal) {
       const token = getAccessToken()
       const response = await fetch(`${base}${project(projectId)}/exports/redacted.csv`, {
         signal,
+        credentials: 'include',
         headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       })
       if (!response.ok) throw new ApiHttpError(response.status, `Export failed (${response.status})`)

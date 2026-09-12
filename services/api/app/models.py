@@ -68,6 +68,8 @@ class SessionToken(Base):
     projects: Mapped[list] = mapped_column(JSON, nullable=False)
     issued_at: Mapped[float] = mapped_column(nullable=False)
     exp: Mapped[float] = mapped_column(nullable=False)
+    # 空闲过期时间:每次访问滑动续期
+    idle_exp: Mapped[float | None] = mapped_column(nullable=True)
 
 class Risk(Base):
     __tablename__ = 'risks'

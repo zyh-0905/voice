@@ -1,11 +1,11 @@
 """Regression coverage for security middleware and route guards."""
 
-from fastapi.testclient import TestClient
 
 from app.main import app
+from support.client import make_client
 
 
-client = TestClient(app)
+client = make_client()
 
 
 def test_health_includes_security_headers():

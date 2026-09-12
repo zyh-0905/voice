@@ -6,7 +6,7 @@ from uuid import uuid4
 from .ingestion import parse_csv_text, parse_xlsx_bytes, redact_text
 from .repository import get_repository
 from .worker import AnalysisWorker
-from .middleware import SecurityHeadersMiddleware
+from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
 from .auth import router as auth_router, require_user, require_analyst, require_project_access, require_project_analyst
 from .config import dedupe_hmac_secret
@@ -19,15 +19,17 @@ validate_production_settings()
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 # 开发环境跨域:默认放行本地 vite/nginx 来源,生产用 CORS_ORIGINS 覆盖。
-# 认证走 Authorization: Bearer 头,不依赖 cookie,无需 allow_credentials。
+# 会话走 HttpOnly Cookie,跨源开发必须允许凭据;来源是显式白名单,不是通配。
 _cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173,http://localhost:8080,http://127.0.0.1:8080').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(WriteRateLimitMiddleware)
 app.include_router(auth_router)
 repository = get_repository()

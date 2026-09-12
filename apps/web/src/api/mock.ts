@@ -472,6 +472,9 @@ export const mockApi: ApiClient = {
     await delay(500)
     return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
   },
+  async logout() {
+    await delay(100)
+  },
   async login() {
     await delay(200)
     return {
