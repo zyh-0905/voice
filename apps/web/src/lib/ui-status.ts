@@ -58,6 +58,17 @@ export function effectStatusLabel(status: string): string {
   return EFFECT_STATUS_LABELS[status] ?? status
 }
 
+/** 复盘可比性(计划 7.5):ok/insufficient/low_sample 的中文说明 */
+const COMPARABILITY_LABELS: Record<string, string> = {
+  ok: '可比',
+  insufficient: '无法比较',
+  low_sample: '样本量不足',
+}
+
+export function comparabilityLabel(value: string): string {
+  return COMPARABILITY_LABELS[value] ?? value
+}
+
 const REVIEW_STATE_LABELS: Record<string, { label: string; appearance: StatusAppearance }> = {
   pending: { label: '待复核', appearance: 'warning' },
   confirmed: { label: '已确认', appearance: 'success' },

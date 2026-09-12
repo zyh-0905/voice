@@ -154,7 +154,20 @@ export interface ReviewMetrics {
   comparable: boolean
 }
 
-/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 限制 */
+/** 复盘可比性(计划 7.5):ok 可比;insufficient 不可比;low_sample 保留数量但不给结论 */
+export type ReviewComparability = 'ok' | 'insufficient' | 'low_sample'
+
+/** 复盘的单个窗口:边界 + 服务端推导的 n/N + 无法确定发生时间的行数;半开区间 [start, end) */
+export interface ReviewWindow {
+  start: string
+  end: string
+  n: number
+  N: number
+  untimed: number
+}
+
+/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 可比性与原因;
+ *  不可比时 metrics 为 null,不得回退展示任何变化数字。 */
 export interface ReviewRecord {
   id: string
   project_id: string
@@ -162,10 +175,14 @@ export interface ReviewRecord {
   revision: number
   topic_version_ids: string[]
   task_id: string | null
-  before: { n: number; N: number }
-  after: { n: number; N: number }
-  metrics: ReviewMetrics
-  effect_status: 'NOT_EVALUATED' | 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
+  before: ReviewWindow
+  after: ReviewWindow
+  filters: Record<string, string | null>
+  alignment_confirmed: boolean
+  metrics: ReviewMetrics | null
+  comparability: ReviewComparability
+  reasons: string[]
+  effect_status: 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
   limitations: string[]
 }
 

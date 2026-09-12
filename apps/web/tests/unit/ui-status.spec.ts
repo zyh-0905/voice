@@ -1,6 +1,7 @@
 // ui-status.spec.ts — 业务 enum 的中文标签与未知来源安全回退(风格规范 8.1/12.1)。
 import { expect, test } from 'vitest'
 import {
+  comparabilityLabel,
   effectStatusLabel,
   reviewStateAppearance,
   reviewStateLabel,
@@ -60,10 +61,18 @@ test('效果状态', () => {
   expect(effectStatusLabel('OBSERVED_CHANGE')).toBe('观察到变化')
 })
 
+test('复盘可比性标签:low_sample 不能写成「可比」', () => {
+  expect(comparabilityLabel('ok')).toBe('可比')
+  expect(comparabilityLabel('insufficient')).toBe('无法比较')
+  expect(comparabilityLabel('low_sample')).toBe('样本量不足')
+  expect(comparabilityLabel('low_sample')).not.toContain('可比')
+})
+
 test('未知值安全回退:返回原值且不抛错', () => {
   expect(taskStatusLabel('UNKNOWN_STATE')).toBe('UNKNOWN_STATE')
   expect(severityLabel('weird')).toBe('weird')
   expect(sourceLabel('weird')).toBe('weird')
   expect(reviewStateLabel('weird')).toBe('weird')
   expect(effectStatusLabel('weird')).toBe('weird')
+  expect(comparabilityLabel('weird')).toBe('weird')
 })

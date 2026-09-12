@@ -5,6 +5,7 @@ import {
   type DeletionBody,
   type DeletionTarget,
   type ReviewCreateBody,
+  type ReviewWindowInput,
   type RiskReviewBody,
   type TaskConfirmBody,
   type TaskPatchBody,
@@ -21,7 +22,10 @@ import type {
   DatasetPreview,
   EvidenceContext,
   EvidenceQuoteItem,
+  ReviewComparability,
+  ReviewMetrics,
   ReviewRecord,
+  ReviewWindow,
   RiskItem,
   SummaryResponse,
   TaskEvent,
@@ -399,7 +403,48 @@ const MOCK_RISK_STORE = new MockRiskStore()
 
 const MOCK_TASK_STORE = new MockTaskStore()
 
-/** 演示复盘:与后端 W17 同口径(百分点、不可比不输出改善结论)。 */
+/** 演示 run 与可识别主题:窗口外的一切按服务端口径拒绝或标记不可比 */
+const MOCK_RUN_REVISION = 1
+const MOCK_KNOWN_RUNS = new Set(['run_demo_001'])
+const MOCK_TOPIC_IDS = new Set(['delivery', 'refund', 'product', 't1'])
+/** 演示口径:窗口每持续一天记 30 条反馈,前后窗口占比固定 */
+const MOCK_ROWS_PER_DAY = 30
+
+/** 与后端 W17 同口径:占比为百分点,零分母不输出任何变化结论。 */
+function compareCounts(before: ReviewWindow, after: ReviewWindow): ReviewMetrics {
+  if (before.N <= 0 || after.N <= 0) {
+    return {
+      count_change: after.n - before.n, share_before_pp: null, share_after_pp: null,
+      share_delta_pp: null, relative_share_change: null, comparable: false,
+    }
+  }
+  const shareBefore = (before.n / before.N) * 100
+  const shareAfter = (after.n / after.N) * 100
+  const deltaPp = shareAfter - shareBefore
+  const relative = shareBefore > 0 ? deltaPp / shareBefore : null
+  return {
+    count_change: after.n - before.n,
+    share_before_pp: Math.round(shareBefore * 100) / 100,
+    share_after_pp: Math.round(shareAfter * 100) / 100,
+    share_delta_pp: Math.round(deltaPp * 100) / 100,
+    relative_share_change: relative === null ? null : Math.round(relative * 10000) / 10000,
+    comparable: true,
+  }
+}
+
+/** 两窗之间的可比性理由,与后端 reviews.py 的 _window_reasons 文案一致 */
+function windowReasons(before: ReviewWindow, after: ReviewWindow): string[] {
+  const bStart = Date.parse(before.start), bEnd = Date.parse(before.end)
+  const aStart = Date.parse(after.start), aEnd = Date.parse(after.end)
+  if ([bStart, bEnd, aStart, aEnd].some(Number.isNaN)) return ['窗口时间无法解析']
+  if (!(bStart < bEnd) || !(aStart < aEnd)) return ['窗口起点必须早于终点']
+  const reasons: string[] = []
+  if (bEnd - bStart !== aEnd - aStart) reasons.push('前后窗口时长不等')
+  if (bStart < aEnd && aStart < bEnd) reasons.push('前后窗口重叠')
+  return reasons
+}
+
+/** 演示复盘:口径由窗口推导(等长且不重叠才可能可比),低样本保留数量但不给结论。 */
 class MockReviewStore {
   private reviews = new Map<string, ReviewRecord>()
   private seeded = false
@@ -407,33 +452,48 @@ class MockReviewStore {
   private seed() {
     if (this.seeded) return
     this.seeded = true
-    this.reviews.set('review-001', this.build('review-001', { n_before: 168, N_before: 1000, n_after: 102, N_after: 1000 }))
-    this.reviews.set('review-002', this.build('review-002', { n_before: 100, N_before: 1000, n_after: 80, N_after: 500 }))
-    this.reviews.set('review-003', this.build('review-003', { n_before: 0, N_before: 0, n_after: 12, N_after: 400 }))
+    const before: ReviewWindow = { start: '2026-08-01T00:00:00+00:00', end: '2026-08-31T00:00:00+00:00', n: 168, N: 1000, untimed: 0 }
+    const after: ReviewWindow = { start: '2026-09-01T00:00:00+00:00', end: '2026-10-01T00:00:00+00:00', n: 102, N: 1000, untimed: 0 }
+    this.reviews.set('review-001', this.record('review-001', before, after, {
+      topicVersionIds: ['t1'], alignmentConfirmed: true, comparability: 'ok', reasons: [],
+    }))
+    this.reviews.set('review-002', this.record(
+      'review-002', before, { ...after, n: 80, N: 500 },
+      { topicVersionIds: ['t1'], alignmentConfirmed: true, comparability: 'ok', reasons: [] },
+    ))
+    this.reviews.set('review-003', this.record(
+      'review-003', { ...before, n: 0, N: 0 }, { ...after, n: 12, N: 400 },
+      { topicVersionIds: ['t1'], alignmentConfirmed: true, comparability: 'insufficient', reasons: ['窗口内无可比数据(分母为 0)'] },
+    ))
   }
 
-  private build(id: string, counts: { n_before: number; N_before: number; n_after: number; N_after: number }): ReviewRecord {
-    const comparable = counts.N_before > 0 && counts.N_after > 0
-    const shareBefore = comparable ? (counts.n_before / counts.N_before) * 100 : null
-    const shareAfter = comparable ? (counts.n_after / counts.N_after) * 100 : null
-    const deltaPp = shareBefore !== null && shareAfter !== null ? Math.round((shareAfter - shareBefore) * 100) / 100 : null
-    const relative = deltaPp !== null && shareBefore ? Math.round((deltaPp / shareBefore) * 10000) / 10000 : null
+  private record(
+    id: string, before: ReviewWindow, after: ReviewWindow,
+    spec: { topicVersionIds: string[]; alignmentConfirmed: boolean; comparability: ReviewComparability; reasons: string[] },
+  ): ReviewRecord {
+    // 与后端一致:只要不可比,metrics 即为 null,页面不得回退展示变化数字
+    const metrics = spec.comparability === 'insufficient' ? null : compareCounts(before, after)
     return {
-      id, project_id: 'demo-project', run_id: 'run_demo_001', revision: 1,
-      topic_version_ids: ['t1'], task_id: null,
-      before: { n: counts.n_before, N: counts.N_before },
-      after: { n: counts.n_after, N: counts.N_after },
-      metrics: {
-        count_change: counts.n_after - counts.n_before,
-        share_before_pp: shareBefore === null ? null : Math.round(shareBefore * 100) / 100,
-        share_after_pp: shareAfter === null ? null : Math.round(shareAfter * 100) / 100,
-        share_delta_pp: deltaPp,
-        relative_share_change: relative,
-        comparable,
-      },
-      effect_status: comparable ? 'OBSERVED_CHANGE' : 'INSUFFICIENT_DATA',
-      limitations: comparable ? [] : ['数据不足,暂不输出变化结论'],
+      id, project_id: 'demo-project', run_id: 'run_demo_001', revision: MOCK_RUN_REVISION,
+      topic_version_ids: spec.topicVersionIds, task_id: null,
+      before, after, filters: {}, alignment_confirmed: spec.alignmentConfirmed,
+      metrics,
+      comparability: spec.comparability,
+      reasons: [...spec.reasons],
+      effect_status: spec.comparability === 'ok' ? 'OBSERVED_CHANGE' : 'INSUFFICIENT_DATA',
+      limitations: spec.reasons.length ? [...spec.reasons] : ['变化是观察到的,不构成因果证明'],
     }
+  }
+
+  /** 演示数据没有真实行集:用窗口时长推导 N,再用固定占比推导 n */
+  private queryWindow(spec: ReviewWindowInput, share: number): ReviewWindow {
+    const start = Date.parse(spec.start), end = Date.parse(spec.end)
+    if (Number.isNaN(start) || Number.isNaN(end) || start >= end) {
+      return { start: spec.start, end: spec.end, n: 0, N: 0, untimed: 0 }
+    }
+    const days = (end - start) / 86_400_000
+    const N = Math.round(days * MOCK_ROWS_PER_DAY)
+    return { start: spec.start, end: spec.end, n: Math.round(N * share), N, untimed: 0 }
   }
 
   list(): ReviewRecord[] {
@@ -449,8 +509,27 @@ class MockReviewStore {
 
   create(body: ReviewCreateBody): ReviewRecord {
     this.seed()
+    if (!MOCK_KNOWN_RUNS.has(body.run_id)) throw new ApiHttpError(404, 'analysis_not_found')
+    const before = this.queryWindow(body.before, 0.168)
+    const after = this.queryWindow(body.after, 0.102)
+    const reasons: string[] = []
+    if (body.revision !== MOCK_RUN_REVISION) reasons.push(`版本不一致:请求 ${body.revision},当前 ${MOCK_RUN_REVISION}`)
+    const unknown = body.topic_version_ids.filter(id => !MOCK_TOPIC_IDS.has(id))
+    if (unknown.length) reasons.push(`目标主题不属于该 revision: ${unknown.join(', ')}`)
+    reasons.push(...windowReasons(before, after))
+    if (!body.alignment_confirmed) reasons.push('目标映射尚未人工确认')
+    if (!reasons.length && (before.N === 0 || after.N === 0)) reasons.push('窗口内无可比数据(分母为 0)')
+    const comparability: ReviewComparability = reasons.length
+      ? 'insufficient'
+      : before.N < 50 || after.N < 50 ? 'low_sample' : 'ok'
+    if (comparability === 'low_sample') reasons.push('样本量不足(<50),不输出变化结论')
     const id = `review-${Date.now()}`
-    const review = this.build(id, body)
+    const review = this.record(id, before, after, {
+      topicVersionIds: [...body.topic_version_ids],
+      alignmentConfirmed: body.alignment_confirmed,
+      comparability,
+      reasons,
+    })
     this.reviews.set(id, review)
     return { ...review }
   }

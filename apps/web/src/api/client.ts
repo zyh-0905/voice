@@ -151,15 +151,22 @@ export interface RiskReviewBody {
   expected_version?: number
 }
 
+/** 计划 7.5/8.7:窗口只给边界;n/N 由服务端从 run 推导,调用方不得提供 */
+export interface ReviewWindowInput {
+  start: string
+  end: string
+}
+
 export interface ReviewCreateBody {
   task_id?: string | null
   run_id: string
   revision: number
   topic_version_ids: string[]
-  n_before: number
-  N_before: number
-  n_after: number
-  N_after: number
+  before: ReviewWindowInput
+  after: ReviewWindowInput
+  /** 两个窗口共用的渠道/产品条件;不传表示不筛选 */
+  filters?: Record<string, string | null>
+  alignment_confirmed: boolean
 }
 
 export interface LoginUser {
@@ -236,7 +243,26 @@ export function apiClient(): ApiClient {
   return import.meta.env.VITE_USE_MOCK !== 'false' ? mockApi : fetchHttpClient()
 }
 
-export interface ApiErrorBody { detail?: string; message?: string }
+export interface ApiErrorDetail { code?: string; message?: string; [key: string]: unknown }
+export interface ApiErrorBody { detail?: string | ApiErrorDetail; message?: string }
+
+/** 把服务端的错误体折成一行可读文案。
+ *
+ * FastAPI 的 `detail` 多数是 `{'code': 'VERSION_CONFLICT'}` 这类结构化对象,直接
+ * 塞进 `Error.message` 会显示成 `[object Object]`——真正的错误码被丢掉,排查时只
+ * 能看到一条没信息的消息。字符串 detail 仍然原样使用。
+ */
+export function apiErrorMessage(body: ApiErrorBody | undefined, status: number): string {
+  const detail = body?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (detail && typeof detail === 'object') {
+    const parts = [detail.code, detail.message].filter(
+      (part): part is string => typeof part === 'string' && part.length > 0,
+    )
+    if (parts.length) return parts.join(': ')
+  }
+  return body?.message || `Request failed (${status})`
+}
 export class ApiHttpError extends Error {
   constructor(public readonly status: number, message: string, public readonly body?: ApiErrorBody) {
     super(message)
@@ -299,7 +325,7 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     if (!response.ok) {
       let body: ApiErrorBody | undefined
       try { body = await response.json() } catch { /* non-json error */ }
-      throw new ApiHttpError(response.status, body?.detail || body?.message || `Request failed (${response.status})`, body)
+      throw new ApiHttpError(response.status, apiErrorMessage(body, response.status), body)
     }
     return response.json() as Promise<T>
   }

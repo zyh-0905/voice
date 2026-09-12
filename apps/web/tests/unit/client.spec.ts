@@ -116,3 +116,40 @@ describe('http client project members & settings', () => {
     expect((failure as ApiHttpError).status).toBe(409)
   })
 })
+
+
+describe('apiErrorMessage:把服务端错误体折成可读文案', () => {
+  // FastAPI 的 detail 多数是 {'code': ...} 结构化对象;直接塞进 Error.message 会显示成
+  // '[object Object]',真正的错误码被丢掉
+  function stubError(body: unknown, status: number) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      String(url).includes('/auth/csrf')
+        ? jsonResponse({ csrf_token: CSRF_TOKEN })
+        : jsonResponse(body, status)))
+    return fetchHttpClient('/api')
+  }
+
+  it('结构化 detail 不再显示 [object Object]', async () => {
+    const err = await stubError({ detail: { code: 'VERSION_CONFLICT' } }, 409)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect(err).toBeInstanceOf(ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('VERSION_CONFLICT')
+  })
+
+  it('带 message 的结构化 detail 同时保留错误码与说明', async () => {
+    const err = await stubError({ detail: { code: 'invalid_file', message: 'CSV 表头缺失' } }, 422)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('invalid_file: CSV 表头缺失')
+  })
+
+  it('字符串 detail 保持原样', async () => {
+    const err = await stubError({ detail: 'plain reason' }, 400)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('plain reason')
+  })
+
+  it('无 detail 时回落到状态码文案', async () => {
+    const err = await stubError({}, 503).getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('Request failed (503)')
+  })
+})
