@@ -33,6 +33,24 @@ def row_text(row) -> str:
     )
 
 
+def iter_run_feedback(run) -> list[tuple[str, dict]]:
+    """遍历一个 run 输入集合里的反馈,返回 (feedback_id, 原始行)。
+
+    feedback_id 的派生规则集中在这里:行内显式 id 优先,否则 `fb_{dataset_id}_{行号}`。
+    流水线与复盘计算都依赖它——两处各拼一套的话,主题证据和复盘分子会指向不同的
+    反馈集合,而且不会有任何报错。
+    """
+    items: list[tuple[str, dict]] = []
+    for dataset in (run or {}).get('datasets') or []:
+        preview = dataset.get('preview') or {}
+        for index, row in enumerate(preview.get('rows') or []):
+            if not isinstance(row, dict):
+                continue
+            feedback_id = str(row.get('feedback_id') or f"fb_{dataset.get('id', 'ds')}_{index}")
+            items.append((feedback_id, row))
+    return items
+
+
 def redact_row(row: dict) -> dict:
     """逐值脱敏一行。
 

@@ -826,28 +826,54 @@ def get_task(project_id: str, task_id: str, user: dict = Depends(require_project
             'version': task.get('version', 1)}
 
 # —— W17 复盘路由 ——
+class ReviewWindow(BaseModel):
+    start: str
+    end: str
+
+
 class ReviewCreateRequest(BaseModel):
+    """计划 7.5 冻结契约:两个窗口 + filters + alignment,不含 n/N。
+
+    调用方给数字的接口等于没有口径——窗口是否等长、是否重叠、主题是否属于该
+    revision、样本是否够,全都无从校验。分子分母由服务端从 run 推导。
+    """
     task_id: str | None = None
     run_id: str
     revision: int
     topic_version_ids: list[str] = []
-    n_before: int
-    N_before: int
-    n_after: int
-    N_after: int
+    before: ReviewWindow
+    after: ReviewWindow
+    filters: dict = {}
+    alignment_confirmed: bool = False
 
 @app.post('/api/v1/projects/{project_id}/reviews', status_code=201)
 def create_review(project_id: str, req: ReviewCreateRequest, user: dict = Depends(require_project_analyst)):
-    """复盘创建:同口径计算,结果不可变保存;不可比 → insufficient,不输出改善结论。"""
-    from .review_metrics import compare_counts, effect_status
-    metrics = compare_counts(req.n_before, req.N_before, req.n_after, req.N_after)
+    """复盘创建:口径由服务端从 run 推导(计划 8.7);不可比 → insufficient,不输出改善结论。"""
+    from .reviews import INSUFFICIENT, WindowSpec, compute_review
+    run = analyses.get(req.run_id)
+    if not run or run.get('project_id') != project_id:
+        raise HTTPException(404, detail={'code': 'analysis_not_found'})
+
+    computation = compute_review(
+        run,
+        revision=req.revision,
+        topic_version_ids=req.topic_version_ids,
+        before=WindowSpec(req.before.start, req.before.end),
+        after=WindowSpec(req.after.start, req.after.end),
+        filters=req.filters,
+        alignment_confirmed=req.alignment_confirmed,
+    )
     review = {
         'id': 'review_' + uuid4().hex[:8], 'project_id': project_id, 'run_id': req.run_id,
         'revision': req.revision, 'topic_version_ids': req.topic_version_ids, 'task_id': req.task_id,
-        'before': {'n': req.n_before, 'N': req.N_before}, 'after': {'n': req.n_after, 'N': req.N_after},
-        'metrics': metrics.__dict__,
-        'effect_status': effect_status(metrics),
-        'limitations': [] if metrics.comparable else ['数据不足,暂不输出变化结论'],
+        'before': computation.before.__dict__, 'after': computation.after.__dict__,
+        'filters': req.filters, 'alignment_confirmed': req.alignment_confirmed,
+        'metrics': computation.metrics.__dict__ if computation.metrics else None,
+        # 可比才给效果判断;低样本保留数量但不宣称变化
+        'effect_status': 'OBSERVED_CHANGE' if computation.comparable else 'INSUFFICIENT_DATA',
+        'comparability': computation.comparability,
+        'reasons': list(computation.reasons),
+        'limitations': list(computation.reasons) or ['变化是观察到的,不构成因果证明'],
     }
     repository.create_entity('reviews', review)
     return review
