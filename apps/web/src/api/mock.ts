@@ -3,6 +3,7 @@ import {
   type ApiClient,
   type CorrectionBody,
   type ReviewCreateBody,
+  type RiskReviewBody,
   type TaskConfirmBody,
   type TaskTransitionBody,
   type TopicDetailResponse,
@@ -283,6 +284,50 @@ class MockTaskStore {
   }
 }
 
+/** 演示风险裁决:与后端 W14 一致——理由必填、版本冲突、确认不等于事故发生。 */
+class MockRiskStore {
+  private risks = new Map<string, RiskItem & { version?: number; reviewedBy?: string; reviewReason?: string }>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const risk of SYNTHETIC_RISKS) this.risks.set(risk.id, { ...risk, version: 1 })
+  }
+
+  list(): RiskItem[] {
+    this.seed()
+    return [...this.risks.values()].map(r => ({ ...r }))
+  }
+
+  review(riskId: string, body: RiskReviewBody): RiskItem {
+    this.seed()
+    const risk = this.risks.get(riskId)
+    if (!risk) throw new ApiHttpError(404, 'risk_not_found')
+    if (!body.reason.trim()) throw new ApiHttpError(422, 'reason_required')
+    const version = risk.version ?? 1
+    if (body.expected_version !== undefined && body.expected_version !== version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    const next = body.decision === 'confirmed' ? 'confirmed' : body.decision === 'excluded' ? 'excluded' : 'pending'
+    Object.assign(risk, {
+      reviewState: next,
+      status: next === 'confirmed' ? 'OPEN' : next === 'excluded' ? 'CLOSED' : risk.status,
+      version: version + 1,
+      reviewedBy: 'demo-user',
+      reviewReason: body.reason.trim(),
+    })
+    return { ...risk }
+  }
+
+  reset() {
+    this.seeded = false
+    this.risks.clear()
+  }
+}
+
+const MOCK_RISK_STORE = new MockRiskStore()
+
 const MOCK_TASK_STORE = new MockTaskStore()
 
 /** 演示复盘:与后端 W17 同口径(百分点、不可比不输出改善结论)。 */
@@ -534,7 +579,11 @@ export const mockApi: ApiClient = {
   },
   async listRisks() {
     await delay(300)
-    return SYNTHETIC_RISKS
+    return MOCK_RISK_STORE.list()
+  },
+  async reviewRisk(_projectId: string, riskId: string, body: RiskReviewBody) {
+    await delay(250)
+    return MOCK_RISK_STORE.review(riskId, body)
   },
   async getTopicDetail(_projectId: string, topicId: string, topicVersionId?: number): Promise<TopicDetailResponse> {
     await delay(200)

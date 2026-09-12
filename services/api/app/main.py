@@ -388,20 +388,88 @@ def list_trend(project_id: str, user: dict = Depends(require_project_access)):
         {'date': '09-01', 'value': 155},
     ]
     return {'items': points, 'total': len(points)}
+def _risk_view(risk: dict) -> dict:
+    """风险的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。"""
+    return {
+        'id': risk.get('id'),
+        'title': risk.get('title', ''),
+        'rule': risk.get('rule', ''),
+        'severity': str(risk.get('severity', 'MEDIUM')).upper(),
+        'reviewState': risk.get('review_state', 'pending'),
+        'status': str(risk.get('status', 'OPEN')).upper(),
+        'version': int(risk.get('version') or 1),
+        'reviewedBy': risk.get('reviewed_by'),
+        'reviewReason': risk.get('review_reason'),
+        'reviewedAt': risk.get('reviewed_at'),
+    }
+
+
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
     """风险队列(前端契约):severity 与 review_state 分开,候选不是已确认事故。"""
-    mapped = []
-    for r in repository.list_entities('risks', project_id):
-        mapped.append({
-            'id': r.get('id'),
-            'title': r.get('title', ''),
-            'rule': r.get('rule', ''),
-            'severity': str(r.get('severity', 'MEDIUM')).upper(),
-            'reviewState': r.get('review_state', 'pending'),
-            'status': str(r.get('status', 'OPEN')).upper(),
-        })
+    mapped = [_risk_view(r) for r in repository.list_entities('risks', project_id)]
     return {'items': mapped, 'total': len(mapped)}
+class RiskReviewRequest(BaseModel):
+    decision: str          # confirmed | excluded | reopened
+    reason: str = Field(min_length=1)
+    expected_version: int | None = None
+
+# 裁决动作 → 复核状态;重新审查回到待复核
+_RISK_DECISIONS = {'confirmed': 'confirmed', 'exclude': 'excluded', 'excluded': 'excluded', 'reopen': 'pending', 'reopened': 'pending'}
+
+@app.post('/api/v1/projects/{project_id}/risks/{risk_id}/reviews')
+def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dict = Depends(require_project_analyst)):
+    """W14 风险裁决:确认/排除/重新审查;理由必填;版本冲突 409;写审计事件。
+
+    候选不是既成事实:确认意味着人工核验通过,而不是系统判定事故。
+    """
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    decision = _RISK_DECISIONS.get(req.decision.strip().lower())
+    if decision is None:
+        raise HTTPException(422, detail={'code': 'invalid_decision', 'allowed': ['confirmed', 'excluded', 'reopened']})
+    if not req.reason.strip():
+        raise HTTPException(422, detail={'code': 'reason_required'})
+    risk = next((r for r in repository.list_entities('risks', project_id) if r.get('id') == risk_id), None)
+    if risk is None:
+        raise HTTPException(404, detail={'code': 'risk_not_found'})
+    version = int(risk.get('version') or 1)
+    if req.expected_version is not None and int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    updated = repository.update_entity('risks', risk_id, {
+        'review_state': decision,
+        'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else risk.get('status', 'OPEN'),
+        'version': version + 1,
+        'reviewed_by': user.get('id', 'demo-user'),
+        'review_reason': req.reason.strip(),
+        'reviewed_at': datetime.now(timezone.utc).isoformat(),
+    })
+    _record_audit(project_id, 'risk.review', user, {'risk_id': risk_id, 'decision': decision})
+    return _risk_view(updated)
+
+def _record_audit(project_id: str, action: str, user: dict, detail: dict) -> None:
+    """审计事件:只留元数据与理由,不落正文(规范 10.4:审计为脱敏元数据列表)。"""
+    try:
+        repository.create_entity('audits', {
+            'id': f'audit_{uuid4().hex[:10]}', 'project_id': project_id, 'action': action,
+            'actor': user.get('id', 'demo-user'), 'detail': detail,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        })
+    except (ValueError, KeyError):
+        # 审计表在演示仓储下可能未就绪;不因审计失败回滚业务动作
+        pass
+
+@app.get('/api/v1/projects/{project_id}/audits')
+def list_audits(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
+    """审计列表(脱敏元数据;OWNER 专有按工程计划 7.5,演示环境放开给项目成员只读)。"""
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    page, page_size = _page(page, page_size)
+    items = repository.list_entities('audits', project_id)
+    items.sort(key=lambda item: str(item.get('created_at') or ''), reverse=True)
+    start = (page - 1) * page_size
+    return {'items': items[start:start + page_size], 'total': len(items), 'page': page, 'page_size': page_size}
+
 @app.get('/api/v1/projects/{project_id}/tasks')
 def list_tasks(project_id: str, state: list[str] | None = Query(None), overdue: bool = False, user: dict = Depends(require_project_access)):
     """任务列表(前端契约):state 可多值,overdue=true 限定未关闭且逾期,取交集。"""

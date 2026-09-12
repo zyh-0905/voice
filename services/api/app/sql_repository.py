@@ -2,7 +2,7 @@ from collections.abc import MutableMapping
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from .db import Base, SessionLocal
-from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, Task, Review, IdempotencyKey
+from .models import Project, Dataset, AnalysisRun, OutboxEvent, Risk, RiskAudit, Task, Review, IdempotencyKey
 from .repository import MAX_PUBLISH_ATTEMPTS
 
 
@@ -93,7 +93,7 @@ class SQLAlchemyRepository:
                 Base.metadata.create_all(session.get_bind())
         self.datasets = _EntityMap(self, 'datasets')
         self.analyses = _EntityMap(self, 'analyses')
-        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review}
+        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review, 'audits': RiskAudit}
 
     def _project_dict(self, obj):
         return {'id': obj.id, 'name': obj.name, 'description': 'Project', 'status': 'active'}

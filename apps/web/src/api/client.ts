@@ -44,6 +44,12 @@ export interface TopicDetailResponse {
   revision: number
 }
 
+export interface RiskReviewBody {
+  decision: 'confirmed' | 'excluded' | 'reopened'
+  reason: string
+  expected_version?: number
+}
+
 export interface ReviewCreateBody {
   task_id?: string | null
   run_id: string
@@ -101,6 +107,7 @@ export interface ApiClient {
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
+  reviewRisk(projectId: string, riskId: string, body: RiskReviewBody): Promise<RiskItem>
   getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal): Promise<TopicDetailResponse>
   correctTopic(projectId: string, topicId: string, body: CorrectionBody): Promise<{ revision: number; affected_topic_ids: string[] }>
   listReviews(projectId: string, signal?: AbortSignal): Promise<ReviewRecord[]>
@@ -274,6 +281,11 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     listRisks(projectId: string, signal?: AbortSignal) {
       return list<RiskItem>(`${project(projectId)}/risks`, signal)
+    },
+    reviewRisk(projectId: string, riskId: string, body: RiskReviewBody) {
+      return request<RiskItem>(`${project(projectId)}/risks/${encodeURIComponent(riskId)}/reviews`, {
+        method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
     },
     getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal) {
       const query = topicVersionId === undefined ? '' : `?topic_version_id=${topicVersionId}`

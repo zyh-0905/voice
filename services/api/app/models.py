@@ -71,6 +71,16 @@ class SessionToken(Base):
     # 空闲过期时间:每次访问滑动续期
     idle_exp: Mapped[float | None] = mapped_column(nullable=True)
 
+class RiskAudit(Base):
+    """W14 审计:风险裁决等动作的脱敏元数据(不含正文)。"""
+    __tablename__ = 'risk_audits'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[str | None] = mapped_column(String(64))
+
 class Risk(Base):
     __tablename__ = 'risks'
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -82,6 +92,10 @@ class Risk(Base):
     # W14:候选来源规则与复核状态与 severity 分开
     rule: Mapped[str | None] = mapped_column(String(128))
     review_state: Mapped[str] = mapped_column(String(32), default='pending', nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64))
+    review_reason: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[str | None] = mapped_column(String(64))
 
 class Task(Base):
     __tablename__ = 'tasks'
