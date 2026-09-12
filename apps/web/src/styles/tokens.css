@@ -18,16 +18,20 @@
   --vl-color-text-secondary: #515154;
   --vl-color-text-muted: #6E6E73;
 
-  /* 品牌:浅橙
-   * 实底用深一档橙承载白字(亮橙 #FF9500 与白字仅 2.2:1,不可读);
-   * 浅橙大面积用于表面、选中态与图标,保证整体是暖橙观感。 */
-  --vl-color-brand: #C2410C;
-  --vl-color-brand-hover: #9A3412;
-  --vl-color-brand-active: #7C2D12;
+  /* 品牌:浅橙(v1.2 降浓度)
+   * #CC4A0D 是「最浅且白字仍达标」的橙(4.613:1);再浅即低于 4.5 门槛。
+   * 观感更轻由三处实现:浅橙渐变底、玻璃背板、图形色只用亮橙不承载文字。 */
+  --vl-color-brand: #CC4A0D;
+  --vl-color-brand-hover: #B03C0A;
+  --vl-color-brand-active: #93300A;
   --vl-color-brand-soft: #FFF4EC;
   --vl-color-brand-line: #FDBA74;
-  /* 图形强调(图标/描边,不承载文字),更接近系统橙的明度 */
+  /* 品牌文字色:浅橙底上的文字/图标用它(#CC4A0D 在 #FFF4EC 上仅 4.26:1)。
+   * 与实底分工:brand 承载白字,brand-ink 承载浅底上的品牌色文字。 */
+  --vl-color-brand-ink: #B03C0A;
+  /* 图形强调(图标/描边/图表,不承载文字),接近系统橙明度 */
   --vl-color-brand-vivid: #F97316;
+  --vl-color-brand-tint: #FFE8D6;
 
   /* 分隔与控件边界 */
   --vl-color-border: #E5E5EA;
@@ -98,6 +102,31 @@
   /* 阴影:更柔、更分层 */
   --vl-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
   --vl-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  /* 玻璃:内高光模拟材质边缘,外阴影制造层叠 */
+  --vl-shadow-glass: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(31, 24, 18, 0.06);
+  --vl-highlight-inset: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+
+  /* 玻璃材质(v1.2):仅用于外壳与面板背板;承载正文的表面保持高不透明度,
+   * 混合后对比度经 design-tokens 单测按最差底色校验(全部 ≥4.5:1)。 */
+  --vl-glass-chrome: rgba(255, 255, 255, 0.66);
+  --vl-glass-panel: rgba(255, 255, 255, 0.78);
+  --vl-glass-float: rgba(255, 255, 255, 0.86);
+  --vl-glass-border: rgba(255, 255, 255, 0.6);
+  --vl-glass-blur: 20px;
+  --vl-glass-blur-strong: 32px;
+  --vl-glass-saturate: 180%;
+
+  /* 渐变:页面柔光底(给玻璃提供可折射的背景)+ 品牌微渐变(按钮/装饰) */
+  --vl-tint-warm: #FFF1E6;
+  --vl-tint-cool: #EEF4FF;
+  --vl-gradient-page:
+    radial-gradient(60rem 30rem at 12% -8%, var(--vl-tint-warm) 0%, rgba(255, 255, 255, 0) 60%),
+    radial-gradient(48rem 26rem at 92% -4%, var(--vl-tint-cool) 0%, rgba(255, 255, 255, 0) 55%),
+    var(--vl-color-bg);
+  --vl-gradient-brand: linear-gradient(180deg, #CC4A0D 0%, #B03C0A 100%);
+  --vl-gradient-brand-soft: linear-gradient(180deg, #FFF7F1 0%, #FFEFE2 100%);
+  /* 装饰性渐变(不承载文字):占比条、分布段、环形图 */
+  --vl-gradient-accent: linear-gradient(90deg, #F97316 0%, #EA580C 100%);
 
   /* 动效 */
   --vl-motion-fast: 120ms;

@@ -81,16 +81,21 @@ const displayValue = computed(() => {
   min-width: 0;
   border: 1px solid var(--vl-color-border);
   border-radius: var(--vl-radius-panel);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-panel);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-5);
-  box-shadow: var(--vl-shadow-panel);
+  box-shadow: var(--vl-shadow-glass), var(--vl-highlight-inset);
   transition: border-color var(--vl-motion-fast) var(--vl-ease),
               box-shadow var(--vl-motion-fast) var(--vl-ease);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-metric { background: var(--vl-color-surface); }
 }
 .vl-metric--link:hover,
 .vl-metric--link:focus-visible {
   border-color: var(--vl-color-brand-line);
-  box-shadow: var(--vl-shadow-float);
+  box-shadow: var(--vl-shadow-float), var(--vl-highlight-inset);
 }
 .vl-metric__head {
   display: flex;
@@ -105,8 +110,9 @@ const displayValue = computed(() => {
   width: 1.75rem;
   height: 1.75rem;
   border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-brand-soft);
-  color: var(--vl-color-brand);
+  background: var(--vl-gradient-brand-soft);
+  color: var(--vl-color-brand-ink);
+  box-shadow: var(--vl-highlight-inset);
   flex: none;
 }
 .vl-metric__title {

@@ -494,7 +494,7 @@ function goTasks() { void router.push(`/p/${projectId.value}/tasks`) }
   display: block;
   height: 100%;
   border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-brand);
+  background: var(--vl-gradient-accent);
   transition: width var(--vl-motion-normal) var(--vl-ease);
 }
 .vl-topic-table__trend {

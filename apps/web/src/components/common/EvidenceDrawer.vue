@@ -97,9 +97,14 @@ function onKeydown(event: KeyboardEvent): void {
   inset-inline-end: 0;
   width: min(30rem, 100vw);
   overflow-y: auto;
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-float);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-6);
-  box-shadow: var(--vl-shadow-float);
+  box-shadow: var(--vl-shadow-float), var(--vl-highlight-inset);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-evidence-drawer { background: var(--vl-color-surface); }
 }
 .vl-evidence-drawer__header {
   display: flex;

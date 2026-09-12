@@ -143,7 +143,7 @@ function trendLabel(trend: TopicTrend): string {
   white-space: nowrap;
 }
 .vl-topic-table__link {
-  color: var(--vl-color-brand);
+  color: var(--vl-color-brand-ink);
   font-size: var(--vl-text-sm);
 }
 .vl-sr-only {

@@ -62,6 +62,7 @@ const ariaLabel = computed(() => {
   border-radius: var(--vl-radius-sm);
   overflow: hidden;
   background: var(--vl-color-subtle);
+  box-shadow: var(--vl-highlight-inset);
 }
 .vl-dist__segment {
   display: block;

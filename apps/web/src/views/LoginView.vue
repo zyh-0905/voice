@@ -160,14 +160,18 @@ function enterReadonly() {
   padding: var(--vl-space-8);
   border: 1px solid var(--vl-color-brand-line);
   border-radius: var(--vl-radius-dialog);
-  background: var(--vl-color-brand-soft);
+  background: var(--vl-gradient-brand-soft);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur)) saturate(var(--vl-glass-saturate));
+  box-shadow: var(--vl-shadow-glass), var(--vl-highlight-inset);
 }
 .vl-login__mark-block {
   display: inline-block;
   width: 1.75rem;
   height: 1.75rem;
   border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-brand);
+  background: var(--vl-gradient-brand);
+  box-shadow: var(--vl-highlight-inset);
 }
 .vl-login__title {
   margin: var(--vl-space-4) 0 0;
@@ -178,7 +182,7 @@ function enterReadonly() {
 .vl-login__latin {
   font-size: var(--vl-text-md);
   font-weight: 400;
-  color: var(--vl-color-brand);
+  color: var(--vl-color-brand-ink);
 }
 .vl-login__slogan {
   margin: var(--vl-space-2) 0 0;
@@ -205,8 +209,9 @@ function enterReadonly() {
   width: 1.75rem;
   height: 1.75rem;
   border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-surface);
-  color: var(--vl-color-brand);
+  background: var(--vl-glass-float);
+  color: var(--vl-color-brand-ink);
+  box-shadow: var(--vl-highlight-inset);
   flex: none;
 }
 .vl-login__pillar-desc {
@@ -224,9 +229,11 @@ function enterReadonly() {
 .vl-login__form {
   border: 1px solid var(--vl-color-border);
   border-radius: var(--vl-radius-dialog);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-float);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-8);
-  box-shadow: var(--vl-shadow-panel);
+  box-shadow: var(--vl-shadow-float), var(--vl-highlight-inset);
 }
 .vl-login__heading {
   margin: 0 0 var(--vl-space-5);

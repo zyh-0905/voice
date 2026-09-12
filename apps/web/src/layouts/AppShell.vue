@@ -163,8 +163,13 @@ async function logout() {
   display: flex;
   flex-direction: column;
   border-inline-end: 1px solid var(--vl-color-border);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-chrome);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   padding: var(--vl-space-4) var(--vl-space-3);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-sidebar { background: var(--vl-color-surface); }
 }
 .vl-sidebar__brand {
   display: flex;
@@ -177,7 +182,8 @@ async function logout() {
   width: 1.75rem;
   height: 1.75rem;
   border-radius: var(--vl-radius-sm);
-  background: var(--vl-color-brand);
+  background: var(--vl-gradient-brand);
+  box-shadow: var(--vl-highlight-inset);
   flex: none;
 }
 .vl-sidebar__wordmark {
@@ -223,7 +229,7 @@ async function logout() {
 /* 当前项:浅青绿底 + 左侧品牌指示条(风格规范 5.1) */
 .vl-nav__link--active {
   background: var(--vl-color-brand-soft);
-  color: var(--vl-color-brand);
+  color: var(--vl-color-brand-ink);
   font-weight: 600;
 }
 .vl-nav__link--active::before {
@@ -251,8 +257,13 @@ async function logout() {
   flex-wrap: wrap;
   gap: var(--vl-space-3) var(--vl-space-4);
   padding: var(--vl-space-2) var(--vl-space-6);
-  background: var(--vl-color-surface);
+  background: var(--vl-glass-chrome);
+  -webkit-backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
+  backdrop-filter: blur(var(--vl-glass-blur-strong)) saturate(var(--vl-glass-saturate));
   border-bottom: 1px solid var(--vl-color-border);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vl-header { background: var(--vl-color-surface); }
 }
 .vl-header__menu {
   display: none;
@@ -284,7 +295,7 @@ async function logout() {
   height: 2rem;
   border-radius: 50%;
   background: var(--vl-color-brand-soft);
-  color: var(--vl-color-brand);
+  color: var(--vl-color-brand-ink);
   font-weight: 600;
   flex: none;
 }
