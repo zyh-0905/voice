@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from .ingestion import redact_text
+from .ingestion import redact_text, row_text
 from .segments import split_redacted
 
 # 行内可识别为反馈标识/时间/渠道的字段名(治理后的脱敏行)
@@ -35,13 +35,12 @@ def _redact(value: object) -> str:
 
 
 def _row_text(row: Mapping) -> str:
-    """拼出脱敏全文。
+    """拼出脱敏正文——与流水线共用 `ingestion.row_text`,保证两处口径一致。
 
-    仓储里存的是解析后的**原始行**(`parse_csv_text` 只对 stats 走脱敏),所以这里
-    与导出边界(`export_redacted`)一致,在出站前对每个值再脱敏一次——否则旧解析器
-    写入的裸数据会从这个端点漏出。逐值处理(而非先拼接)可避免跨字段边界误判。
+    仓储里存的是解析后的**原始行**(`parse_csv_text` 只对 stats 走脱敏),所以那里
+    会逐值再脱敏一次(纵深防御);标识字段不并入正文。
     """
-    return ' '.join(_redact(value) for value in row.values() if value is not None)
+    return row_text(row)
 
 
 def find_feedback(repository, project_id: str, feedback_id: str) -> dict:

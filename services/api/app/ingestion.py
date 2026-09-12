@@ -14,6 +14,25 @@ def redact_text(text: str) -> dict:
         out = pattern.sub(sub, out)
     return {"text": out, "hits": dict(hits), "version": REDACTION_VERSION}
 
+# 标识这一行、不属于反馈正文的字段名(与 feedback.py 的取值键一致)
+IDENTITY_KEYS = ('feedback_id', 'id')
+
+
+def row_text(row) -> str:
+    """把治理后的一行拼成反馈正文——逐值脱敏,并排除标识字段。
+
+    排除标识字段是有意的:它们标识这一行,不是用户说的话。拼进正文会让 ID 进入
+    向量、主题引语与证据摘录,用户会看到引文以 "fb_xxx" 开头。
+    代价是:若来源表真有一列名为 `id` 且承载业务内容,那段内容不会被分析。
+    这与取值逻辑一致——`feedback_id` / `id` 在本仓库本来就被当作标识。
+    """
+    return ' '.join(
+        redact_text(str(value))['text']
+        for key, value in row.items()
+        if str(key) not in IDENTITY_KEYS and value is not None
+    )
+
+
 def redact_row(row: dict) -> dict:
     """逐值脱敏一行。
 

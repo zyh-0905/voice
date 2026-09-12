@@ -210,3 +210,22 @@ def test_reupload_dedupe_echo_is_redacted():
     blob = json.dumps(echoed.json(), ensure_ascii=False)
     for raw in ('person@example.com', '13812345678'):
         assert raw not in blob, f'重传回显泄漏了 {raw}'
+
+
+def test_identity_field_is_not_part_of_the_feedback_body():
+    """标识字段不属于反馈正文。
+
+    把它拼进正文会让 ID 进入向量、主题引语与证据摘录——用户会在「原文与来源」
+    里读到以 "fb_xxx" 开头的引文。流水线与证据源端点共用同一份口径。
+    """
+    from app.ingestion import row_text
+
+    body = row_text({'feedback_id': 'fb_7', 'id': 'fb_7', 'note': '物流很慢', 'channel': '在线客服'})
+    assert 'fb_7' not in body, '标识不得并入正文'
+    assert '物流很慢' in body and '在线客服' in body, '业务字段仍要保留'
+    # 与流水线取数保持一致(两处对不上会让引文 offset 无法定位)
+    from app.pipeline import _flatten_rows
+    rows, sources, _ = _flatten_rows({'datasets': [{'id': 'ds', 'preview': {'rows': [
+        {'feedback_id': 'fb_7', 'note': '物流很慢'},
+    ]}}]})
+    assert sources['fb_7'] == '物流很慢'

@@ -35,7 +35,7 @@ app.include_router(auth_router)
 repository = get_repository()
 datasets = repository.datasets
 analyses = repository.analyses
-worker = AnalysisWorker(analyses)
+worker = AnalysisWorker(analyses, repository)
 MAX_BYTES = 50 * 1024 * 1024
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -207,7 +207,7 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
     if os.getenv('USE_CELERY', '').lower() in ('1','true','yes'):
-        from .tasks import run_analysis_task
+        from .celery_tasks import run_analysis_task
         if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
     elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
     return _redacted_out(analyses[analysis_id])
