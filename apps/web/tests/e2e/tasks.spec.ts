@@ -73,3 +73,37 @@ test('VIEWER 只读:详情页不出现主动作', async ({ page }) => {
   await expect(page.getByTestId('task-approve')).toHaveCount(0)
   await expect(page.getByTestId('task-confirm')).toHaveCount(0)
 })
+
+
+// W22:草稿内联编辑——草稿与正式任务的可改字段不同,state 不走这个入口
+test('草稿可内联编辑标题与优先级,正式任务字段不出现在草稿表单', async ({ page }) => {
+  await page.goto('/p/demo-project/tasks')
+  await page.getByTestId('create-task-draft').click()
+  const draftRow = page.locator('[data-resource-id^="task-draft-"]').first()
+  await draftRow.getByTestId('task-open').click()
+  await expect(page.getByTestId('task-state')).toContainText('草稿')
+
+  await page.getByTestId('task-edit').click()
+  const form = page.getByTestId('task-edit-form')
+  await expect(form).toBeVisible()
+  // 草稿阶段的可改控件只有标题/来源/优先级;期限与验收标准要到派发后才可调
+  await expect(form.locator('input, select')).toHaveCount(3)
+  await expect(form.getByLabel('验收标准')).toHaveCount(0)
+  await expect(form.getByLabel('期限')).toHaveCount(0)
+
+  await page.getByTestId('task-edit-title').fill('草稿标题已修订')
+  await page.getByTestId('task-edit-priority').selectOption('HIGH')
+  await page.getByTestId('task-edit-save').click()
+
+  // 保存后表单收起,详情回写新值
+  await expect(form).toBeHidden()
+  await expect(page.getByTestId('page-title')).toContainText('草稿标题已修订')
+  await expect(page.getByTestId('task-state')).toContainText('草稿')
+})
+
+test('派发后的任务不再提供草稿编辑入口', async ({ page }) => {
+  await page.goto('/p/demo-project/tasks')
+  await page.locator('[data-resource-id="task-003"]').getByTestId('task-open').click()
+  await expect(page.getByTestId('task-state')).toContainText('待验收')
+  await expect(page.getByTestId('task-edit')).toHaveCount(0)
+})

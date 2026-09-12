@@ -649,6 +649,61 @@ def transition_task_route(project_id: str, task_id: str, req: TaskTransitionRequ
     repository.update_entity('tasks', task_id, task)
     return task
 
+class TaskPatchRequest(BaseModel):
+    expected_version: int
+    # 允许修改的字段;未出现的字段不动
+    title: str | None = None
+    source: str | None = None
+    priority: str | None = None
+    due_at: str | None = None
+    acceptance: str | None = None
+
+
+# 草稿与正式任务采用不同可改字段清单(工程计划 7.5);
+# state 一律经状态机端点变更,不在 PATCH 里改
+_DRAFT_EDITABLE = {'title', 'source', 'priority'}
+_FORMAL_EDITABLE = {'due_at', 'acceptance', 'priority'}
+
+
+@app.patch('/api/v1/projects/{project_id}/tasks/{task_id}')
+def patch_task(project_id: str, task_id: str, req: TaskPatchRequest,
+               user: dict = Depends(require_project_analyst)):
+    """编辑任务字段:草稿与正式任务可改字段不同;乐观锁冲突 409。"""
+    from .tasks import state_of
+    task = _find_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(404, detail={'code': 'task_not_found'})
+    version = int(task.get('version') or 1)
+    if int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    changes = {key: value for key, value in req.model_dump(exclude_none=True).items()
+               if key not in ('expected_version',)}
+    if not changes:
+        raise HTTPException(422, detail={'code': 'no_fields'})
+    editable = _DRAFT_EDITABLE if state_of(task) == 'DRAFT' else _FORMAL_EDITABLE
+    disallowed = sorted(set(changes) - editable)
+    if disallowed:
+        raise HTTPException(422, detail={'code': 'field_not_editable', 'fields': disallowed,
+                                         'state': state_of(task), 'editable': sorted(editable)})
+    task.update(changes)
+    task['version'] = version + 1
+    repository.update_entity('tasks', task_id, task)
+    return task
+
+
+@app.get('/api/v1/projects/{project_id}/feedback/{feedback_id}')
+def get_feedback(project_id: str, feedback_id: str, user: dict = Depends(require_project_access)):
+    """证据源:脱敏全文、源行号、来源、时间与分块;不返回原始文件。"""
+    from .feedback import FeedbackNotFound, find_feedback
+    if not repository.get_project(project_id):
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+    try:
+        return find_feedback(repository, project_id, feedback_id)
+    except FeedbackNotFound:
+        # 外项目或不存在的反馈一律 404,不暴露存在性
+        raise HTTPException(404, detail={'code': 'feedback_not_found'})
+
+
 @app.get('/api/v1/projects/{project_id}/tasks/{task_id}')
 def get_task(project_id: str, task_id: str, user: dict = Depends(require_project_access)):
     """任务详情:task + source_snapshot + events + version。"""

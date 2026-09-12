@@ -49,6 +49,26 @@ export interface DeletionTarget {
   target_id: string
 }
 
+export interface TaskPatchBody {
+  expected_version: number
+  title?: string
+  source?: string
+  priority?: string
+  due_at?: string
+  acceptance?: string
+}
+
+export interface FeedbackSource {
+  feedback_id: string
+  dataset_id: string
+  dataset_name: string
+  source_row: number
+  channel: string | null
+  occurred_at: string | null
+  text: string
+  segments: Array<{ start: number; end: number; text: string }>
+}
+
 export interface ExportJob {
   id: string
   project_id: string
@@ -151,6 +171,8 @@ export interface ApiClient {
   createTaskDraft(projectId: string, body: { title: string; source_topic_version_id?: string | null }): Promise<TaskSummary>
   confirmTask(projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string): Promise<TaskSummary>
   transitionTask(projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string): Promise<TaskSummary>
+  patchTask(projectId: string, taskId: string, body: TaskPatchBody): Promise<TaskSummary>
+  getFeedback(projectId: string, feedbackId: string, signal?: AbortSignal): Promise<FeedbackSource>
   listRisks(projectId: string, signal?: AbortSignal): Promise<RiskItem[]>
   reviewRisk(projectId: string, riskId: string, body: RiskReviewBody): Promise<RiskItem>
   getTopicDetail(projectId: string, topicId: string, topicVersionId?: number, signal?: AbortSignal): Promise<TopicDetailResponse>
@@ -349,6 +371,14 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         method: 'POST', body: JSON.stringify(body),
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
       })
+    },
+    patchTask(projectId: string, taskId: string, body: TaskPatchBody) {
+      return request<TaskSummary>(`${project(projectId)}/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    getFeedback(projectId: string, feedbackId: string, signal?: AbortSignal) {
+      return request<FeedbackSource>(`${project(projectId)}/feedback/${encodeURIComponent(feedbackId)}`, { signal })
     },
     reviewRisk(projectId: string, riskId: string, body: RiskReviewBody) {
       return request<RiskItem>(`${project(projectId)}/risks/${encodeURIComponent(riskId)}/reviews`, {

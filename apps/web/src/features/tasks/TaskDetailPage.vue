@@ -12,6 +12,33 @@
         <VlButton variant="secondary" @click="load">重试</VlButton>
       </template>
 
+      <section v-if="editing" class="vl-panel vl-task-detail__edit" data-testid="task-edit-form">
+        <h2 class="vl-task-detail__edit-title">编辑草稿</h2>
+        <p class="vl-task-detail__hint">草稿阶段可改标题、来源与优先级;派发后改为可调期限与验收标准。</p>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-title">标题</label>
+          <input id="vl-task-edit-title" v-model="editForm.title" class="vl-confirm-form__input" data-testid="task-edit-title" />
+        </div>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-source">来源</label>
+          <input id="vl-task-edit-source" v-model="editForm.source" class="vl-confirm-form__input" data-testid="task-edit-source" />
+        </div>
+        <div class="vl-field vl-confirm-form__field">
+          <label for="vl-task-edit-priority">优先级</label>
+          <select id="vl-task-edit-priority" v-model="editForm.priority" class="vl-confirm-form__input" data-testid="task-edit-priority">
+            <option value="LOW">低</option>
+            <option value="MEDIUM">中</option>
+            <option value="HIGH">高</option>
+            <option value="CRITICAL">严重</option>
+          </select>
+        </div>
+        <p v-if="editError" class="vl-task-detail__error" data-testid="task-edit-error" role="alert">{{ editError }}</p>
+        <div class="vl-confirm-form__actions">
+          <VlButton variant="secondary" @click="editing = false">取消</VlButton>
+          <VlButton variant="primary" :loading="saving" data-testid="task-edit-save" @click="saveEdit">保存修改</VlButton>
+        </div>
+      </section>
+
       <div v-if="task" class="vl-task-detail">
         <VlPanel title="任务信息">
           <dl class="vl-task-detail__meta">
@@ -35,6 +62,14 @@
           </dl>
 
           <template #actions>
+            <VlButton
+              v-if="task?.status === 'DRAFT' && canAct"
+              variant="secondary"
+              data-testid="task-edit"
+              @click="startEdit"
+            >
+              编辑草稿
+            </VlButton>
             <VlButton
               v-if="primaryAction"
               :variant="primaryAction.variant"
@@ -273,6 +308,49 @@ async function onDialogConfirm(comment: string) {
   }
 }
 
+// 草稿编辑:409 保留本地输入,由用户决定是否重新加载
+const editing = ref(false)
+const saving = ref(false)
+const editError = ref('')
+const editForm = ref({ title: '', source: '', priority: 'MEDIUM' })
+
+function startEdit() {
+  if (!task.value) return
+  editForm.value = {
+    title: task.value.title,
+    source: String(task.value.source ?? ''),
+    priority: task.value.priority ?? 'MEDIUM',
+  }
+  editError.value = ''
+  editing.value = true
+}
+
+async function saveEdit() {
+  if (!detail.value) return
+  saving.value = true
+  editError.value = ''
+  try {
+    await client.patchTask(projectId.value, taskId.value, {
+      expected_version: detail.value.version,
+      title: editForm.value.title.trim(),
+      source: editForm.value.source.trim(),
+      priority: editForm.value.priority,
+    })
+    editing.value = false
+    await load()
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 409) {
+      editError.value = '任务已被他人更新,请重新加载后再保存(你填写的内容不会被清空)'
+    } else if (err instanceof ApiHttpError && err.status === 422) {
+      editError.value = '当前状态不允许修改这些字段'
+    } else {
+      editError.value = err instanceof Error ? err.message : '保存失败'
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
 function goBack() {
   void router.push(`/p/${projectId.value}/tasks`)
 }
@@ -320,6 +398,18 @@ function goBack() {
   border-radius: var(--vl-radius-control);
   padding: 0 var(--vl-space-3);
   font: inherit;
+}
+.vl-task-detail__edit-title {
+  margin: 0 0 var(--vl-space-2);
+  font-size: var(--vl-text-md);
+}
+.vl-task-detail__edit {
+  margin-bottom: var(--vl-space-4);
+}
+.vl-confirm-form__actions {
+  display: flex;
+  gap: var(--vl-space-3);
+  margin-top: var(--vl-space-4);
 }
 .vl-confirm-form__error {
   display: block;

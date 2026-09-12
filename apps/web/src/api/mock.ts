@@ -7,6 +7,7 @@ import {
   type ReviewCreateBody,
   type RiskReviewBody,
   type TaskConfirmBody,
+  type TaskPatchBody,
   type TaskTransitionBody,
   type TopicDetailResponse,
 } from './client'
@@ -248,6 +249,26 @@ class MockTaskStore {
     Object.assign(task, { status: 'OPEN', owner: body.owner_id, dueAt: body.due_at, acceptance: body.acceptance })
     this.bump(task, 'confirm', '已派发,等待执行')
     if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
+    return { ...task }
+  }
+
+  patch(taskId: string, body: TaskPatchBody): TaskSummary {
+    const task = this.require(taskId)
+    const record = task as never as { version: number; state?: string }
+    if (body.expected_version !== Number(record.version)) throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    const editable = (record.state ?? 'DRAFT') === 'DRAFT'
+      ? ['title', 'source', 'priority']
+      : ['due_at', 'acceptance', 'priority']
+    const changes = Object.entries(body).filter(([key]) => !['expected_version'].includes(key))
+    if (!changes.length) throw new ApiHttpError(422, 'no_fields')
+    const disallowed = changes.filter(([key]) => !editable.includes(key)).map(([key]) => key)
+    if (disallowed.length) throw new ApiHttpError(422, 'field_not_editable')
+    for (const [key, value] of changes) {
+      if (key === 'due_at') task.dueAt = value as string
+      else if (key === 'acceptance') (task as never as { acceptance?: string }).acceptance = value as string
+      else (task as never as Record<string, unknown>)[key] = value
+    }
+    ;(task as never as { version: number }).version = Number(record.version) + 1
     return { ...task }
   }
 
@@ -594,6 +615,21 @@ export const mockApi: ApiClient = {
   async listRisks() {
     await delay(300)
     return MOCK_RISK_STORE.list()
+  },
+  async patchTask(_projectId: string, taskId: string, body: TaskPatchBody) {
+    await delay(200)
+    return MOCK_TASK_STORE.patch(taskId, body)
+  },
+  async getFeedback(_projectId: string, feedbackId: string) {
+    await delay(200)
+    const quote = SYNTHETIC_TOPICS.flatMap(t => t.quote).find(q => q.feedbackId === feedbackId)
+      ?? SYNTHETIC_TOPICS[0]!.quote
+    return {
+      feedback_id: feedbackId, dataset_id: 'ds_demo_001', dataset_name: '8 月第 4 周反馈批次',
+      source_row: quote.rowIndex ?? 0, channel: quote.channel, occurred_at: quote.occurredAt,
+      text: quote.text,
+      segments: [{ start: 0, end: Array.from(quote.text).length, text: quote.text }],
+    }
   },
   async reviewRisk(_projectId: string, riskId: string, body: RiskReviewBody) {
     await delay(250)
