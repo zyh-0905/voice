@@ -10,7 +10,18 @@ class Project(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     source_namespace: Mapped[str | None] = mapped_column(String(128), index=True)
     source_kind: Mapped[str | None] = mapped_column(String(64), index=True)
+    # W03 项目设置:timezone 单列,limits/rules/model_available/version 存 settings_json
+    timezone: Mapped[str | None] = mapped_column(String(64))
+    settings_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+class Membership(Base):
+    """W03 项目成员:(project_id, user_id) 唯一,角色 OWNER/EDITOR/VIEWER。"""
+    __tablename__ = "memberships"
+    project_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255))
 
 class Dataset(Base):
     __tablename__ = "datasets"

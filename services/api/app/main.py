@@ -8,7 +8,7 @@ from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
-from .auth import router as auth_router, require_user, require_analyst, require_owner, require_project_access, require_project_analyst
+from .auth import router as auth_router, require_user, require_analyst, require_owner, require_project_access, require_project_analyst, require_project_owner
 from .config import dedupe_hmac_secret
 from .settings import validate_production_settings
 import hashlib
@@ -135,6 +135,14 @@ def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dic
     start = (page - 1) * page_size
     return {'items': [_redacted_out(d) for d in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
 
+@app.get('/api/v1/projects/{project_id}/datasets/{dataset_id}')
+def get_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_access)):
+    """数据集详情(工程计划 7.3):外项目/不存在一律 404;出站与列表同样兜底脱敏。"""
+    dataset = datasets.get(dataset_id)
+    if not dataset or dataset.get('project_id') != project_id:
+        raise HTTPException(404, detail={'code': 'dataset_not_found'})
+    return _redacted_out(dataset)
+
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_project_analyst)):
     d=datasets.get(dataset_id)
@@ -220,6 +228,16 @@ if not repository.get_project('demo-project'):
         repository.create_project({'id':'demo-project','name':'VoiceLens Demo Project'})
     except ValueError:
         pass
+# W03 成员种子:登录会话按真实成员关系构建,demo 演示账号必须能进入 demo-project
+for seed in (
+    {'project_id':'demo-project','user_id':'demo-user','role':'OWNER','display_name':'Demo Analyst'},
+    {'project_id':'demo-project','user_id':'viewer-user','role':'VIEWER','display_name':'Demo Viewer'},
+):
+    if repository.get_membership(seed['project_id'], seed['user_id']) is None:
+        try:
+            repository.create_membership(seed)
+        except ValueError:
+            pass
 reviews = {}
 # 演示种子:severity/review_state/task 状态使用规范枚举;两种仓储均为「空则注入」。
 # SQL 模式下非模型列的富字段(rule/due_at 等)由仓储按列过滤,基础演示不受影响。
@@ -260,11 +278,85 @@ def list_projects(user: dict = Depends(require_user)):
         allowed = {item["project_id"] for item in user.get("projects", [])}
         items = [item for item in items if item["id"] in allowed]
     return {'items': items, 'total': len(items)}
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    timezone: str = Field(min_length=1)
+
+@app.post('/api/v1/projects', status_code=201)
+def create_project(req: ProjectCreateRequest, user: dict = Depends(require_user)):
+    """创建项目(W03):公开注册关闭,仅已登录用户;创建者成为 OWNER 成员。"""
+    project_id = 'proj_' + uuid4().hex[:10]
+    project = repository.create_project({'id': project_id, 'name': req.name, 'timezone': req.timezone})
+    try:
+        repository.create_membership({'project_id': project_id, 'user_id': user['id'],
+                                      'role': 'OWNER', 'display_name': user.get('name')})
+    except ValueError:
+        # 新建项目不可能已有成员;并发下以先写入者为准
+        pass
+    return project
+
 @app.get('/api/v1/projects/{project_id}')
 def get_project(project_id: str, user: dict = Depends(require_project_access)):
     project = repository.get_project(project_id)
     if not project: raise HTTPException(404, detail={'code':'project_not_found'})
     return project
+
+def _require_project(project_id: str) -> None:
+    if repository.get_project(project_id) is None:
+        raise HTTPException(404, detail={'code': 'project_not_found'})
+
+@app.get('/api/v1/projects/{project_id}/members')
+def list_project_members(project_id: str, user: dict = Depends(require_project_access)):
+    """项目成员列表(W03):供任务选择负责人;只含本项目成员,不暴露其他项目。"""
+    _require_project(project_id)
+    items = [{'id': m['user_id'], 'display_name': m.get('display_name') or m['user_id'], 'role': m.get('role')}
+             for m in repository.list_members(project_id)]
+    return {'items': items, 'total': len(items)}
+
+# W03 项目设置:对外只暴露白名单键(timezone/limits/rules/model_available),
+# settings_json 里的其他内容一律不透传——密钥与上游内部地址不在出站契约里。
+_DEFAULT_PROJECT_TIMEZONE = 'UTC'
+_DEFAULT_PROJECT_LIMITS = {'max_feedback_rows': 5000, 'max_upload_bytes': MAX_BYTES}
+_DEFAULT_PROJECT_RULES = {'min_severity': 'LOW', 'scan_on_import': True}
+
+def _settings_view(project_id: str) -> dict:
+    stored = repository.get_project_settings(project_id) or {}
+    return {
+        'timezone': stored.get('timezone') or _DEFAULT_PROJECT_TIMEZONE,
+        'limits': stored.get('limits') or _DEFAULT_PROJECT_LIMITS,
+        'rules': stored.get('rules') or _DEFAULT_PROJECT_RULES,
+        'model_available': bool(stored.get('model_available', True)),
+        'version': int(stored.get('version') or 1),
+    }
+
+@app.get('/api/v1/projects/{project_id}/settings')
+def get_project_settings(project_id: str, user: dict = Depends(require_project_access)):
+    """项目设置(W03):时区、限额、规则与模型可用性;不含密钥或上游内部地址。"""
+    _require_project(project_id)
+    return _settings_view(project_id)
+
+class ProjectSettingsPatch(BaseModel):
+    expected_version: int
+    timezone: str | None = None
+    limits: dict | None = None
+    rules: dict | None = None
+    model_available: bool | None = None
+
+@app.patch('/api/v1/projects/{project_id}/settings')
+def update_project_settings(project_id: str, req: ProjectSettingsPatch, user: dict = Depends(require_project_owner)):
+    """修改项目设置(W03):仅 OWNER;乐观锁 expected_version 冲突 409;只影响下次分析。"""
+    _require_project(project_id)
+    version = _settings_view(project_id)['version']
+    if int(req.expected_version) != version:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    changes = req.model_dump(exclude_none=True)
+    changes.pop('expected_version', None)
+    if not changes:
+        raise HTTPException(422, detail={'code': 'no_fields'})
+    changes['version'] = version + 1
+    repository.update_project_settings(project_id, changes)
+    return _settings_view(project_id)
 
 # —— 工程计划 7.7:行动首页只读聚合契约 ——
 @app.get('/api/v1/projects/{project_id}/summary')

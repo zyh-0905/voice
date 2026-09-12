@@ -48,6 +48,8 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'tasks': len(repository.list_entities('tasks', project_id)),
             'reviews': len(repository.list_entities('reviews', project_id)),
             'risks': len(repository.list_entities('risks', project_id)),
+            # 删除项目同时撤销访问,成员数属于影响范围
+            'memberships': len(repository.list_members(project_id)),
         }
     if target_type == 'dataset':
         dataset = repository.datasets.get(target_id)
@@ -61,7 +63,7 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'datasets': 1,
             'runs': len(affected),
             'topics': sum(_topic_count(run) for run in affected),
-            'tasks': 0, 'reviews': 0, 'risks': 0,
+            'tasks': 0, 'reviews': 0, 'risks': 0, 'memberships': 0,
             # 确认前必须说明:删除批次会让引用它的分析、主题结果与证据失效
             'invalidates_reports': len(affected) > 0,
         }
@@ -136,6 +138,8 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             for item in repository.list_entities(kind, project_id):
                 _safe_delete(repository, lambda key, _kind=kind: repository.delete_entity(_kind, key), item['id'])
             steps.append({'name': f'purge_{kind}', 'status': 'done'})
+        repository.delete_memberships(project_id)
+        steps.append({'name': 'purge_memberships', 'status': 'done'})
         repository.delete_project(project_id)
         steps.append({'name': 'purge_project', 'status': 'done'})
 
@@ -147,6 +151,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             'tasks': len(repository.list_entities('tasks', project_id)),
             'reviews': len(repository.list_entities('reviews', project_id)),
             'risks': len(repository.list_entities('risks', project_id)),
+            'memberships': len(repository.list_members(project_id)),
         }
     else:
         remaining = {'datasets': int(target_id in repository.datasets)}
@@ -158,7 +163,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         'job_id': job_id, 'state': 'DONE', 'target_type': target_type,
         'target_id': target_id, 'actor': actor, 'steps': steps,
         # 回执只保留计数,不含任何正文
-        'removed': {key: preview[key] for key in ('datasets', 'runs', 'topics', 'tasks', 'reviews', 'risks')},
+        'removed': {key: preview[key] for key in ('datasets', 'runs', 'topics', 'tasks', 'reviews', 'risks', 'memberships')},
     }
     try:
         repository.update_entity('deletions', job_id, {'state': 'DONE', 'steps': steps, 'receipt': receipt})

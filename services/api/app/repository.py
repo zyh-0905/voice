@@ -10,6 +10,15 @@ class Repository(Protocol):
     def list_projects(self) -> list[dict]: ...
     def get_project(self, key: str) -> dict | None: ...
     def create_project(self, value: dict) -> dict: ...
+    def list_members(self, project_id: str) -> list[dict]: ...
+    def list_user_memberships(self, user_id: str) -> list[dict]: ...
+    def get_membership(self, project_id: str, user_id: str) -> dict | None: ...
+    def get_member_role(self, project_id: str, user_id: str) -> str | None: ...
+    def create_membership(self, value: dict) -> dict: ...
+    def set_member_role(self, project_id: str, user_id: str, role: str) -> dict: ...
+    def delete_memberships(self, project_id: str) -> int: ...
+    def get_project_settings(self, project_id: str) -> dict | None: ...
+    def update_project_settings(self, project_id: str, changes: dict) -> dict: ...
     datasets: MutableMapping[str, dict]
     analyses: MutableMapping[str, dict]
     outbox: list[dict]
@@ -37,6 +46,7 @@ class Repository(Protocol):
 class InMemoryRepository:
     def __init__(self):
         self.projects = {}
+        self.memberships = {}
         self.datasets = {}
         self.analyses = {}
         self.outbox = []
@@ -53,6 +63,66 @@ class InMemoryRepository:
     def list_projects(self): return [deepcopy(v) for v in self.projects.values()]
     def get_project(self, key): return deepcopy(self.projects.get(key))
     def create_project(self, value): return self._create(self.projects, value)
+
+    # —— W03 成员关系:以 (project_id, user_id) 为键,读取一律 deepcopy ——
+    def list_members(self, project_id):
+        items = [deepcopy(v) for v in self.memberships.values() if v['project_id'] == project_id]
+        items.sort(key=lambda item: item['user_id'])
+        return items
+
+    def list_user_memberships(self, user_id):
+        items = [deepcopy(v) for v in self.memberships.values() if v['user_id'] == user_id]
+        items.sort(key=lambda item: item['project_id'])
+        return items
+
+    def get_membership(self, project_id, user_id):
+        return deepcopy(self.memberships.get((project_id, user_id)))
+
+    def get_member_role(self, project_id, user_id):
+        membership = self.get_membership(project_id, user_id)
+        return membership['role'] if membership else None
+
+    def create_membership(self, value):
+        key = (value['project_id'], value['user_id'])
+        if key in self.memberships:
+            raise ValueError(f'Membership already exists: {value["project_id"]}/{value["user_id"]}')
+        self.memberships[key] = deepcopy(value)
+        return deepcopy(self.memberships[key])
+
+    def set_member_role(self, project_id, user_id, role):
+        membership = self.memberships.get((project_id, user_id))
+        if membership is None:
+            raise KeyError(f'{project_id}/{user_id}')
+        membership['role'] = role
+        return deepcopy(membership)
+
+    def delete_memberships(self, project_id):
+        """项目删除时连同成员关系一起清理(10.4 级联):留下孤儿行等于留了访问权。"""
+        keys = [key for key, value in self.memberships.items() if value['project_id'] == project_id]
+        for key in keys:
+            del self.memberships[key]
+        return len(keys)
+
+    # —— W03 项目设置:timezone 与 settings_json 合并为一份存储值 ——
+    def get_project_settings(self, project_id):
+        project = self.projects.get(project_id)
+        if project is None:
+            return None
+        stored = dict(project.get('settings_json') or {})
+        if project.get('timezone') is not None:
+            stored['timezone'] = project['timezone']
+        return deepcopy(stored)
+
+    def update_project_settings(self, project_id, changes):
+        project = self.projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        if changes.get('timezone') is not None:
+            project['timezone'] = changes['timezone']
+        stored = dict(project.get('settings_json') or {})
+        stored.update({key: deepcopy(value) for key, value in changes.items() if key != 'timezone'})
+        project['settings_json'] = stored
+        return self.get_project_settings(project_id)
 
     def _update(self, collection, key, changes):
         collection[key].update(deepcopy(changes))

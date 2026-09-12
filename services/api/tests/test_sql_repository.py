@@ -111,3 +111,43 @@ def test_review_metrics_persist(repo):
     assert stored['metrics']['share_delta_pp'] == -6.6
     assert stored['before'] == {'n': 168, 'N': 1000}
     assert stored['effect_status'] == 'OBSERVED_CHANGE'
+
+
+# —— 迁移 0012:成员与项目设置与 InMemory 行为对齐 ——
+
+def test_memberships_round_trip(repo):
+    """W03:成员表 (project_id,user_id) 唯一;按项目/用户两向可查,角色可改。"""
+    repo.create_project({'id': 'p1', 'name': '成员用例', 'timezone': 'UTC'})
+    repo.create_membership({'project_id': 'p1', 'user_id': 'u1', 'role': 'OWNER', 'display_name': '一号'})
+    repo.create_membership({'project_id': 'p1', 'user_id': 'u2', 'role': 'VIEWER'})
+    repo.create_membership({'project_id': 'p2', 'user_id': 'u1', 'role': 'EDITOR'})
+
+    assert [m['user_id'] for m in repo.list_members('p1')] == ['u1', 'u2']
+    assert repo.list_members('p1')[0]['display_name'] == '一号'
+    assert repo.get_member_role('p1', 'u1') == 'OWNER'
+    assert repo.get_member_role('p1', 'missing') is None
+    repo.set_member_role('p1', 'u2', 'EDITOR')
+    assert repo.get_member_role('p1', 'u2') == 'EDITOR'
+    assert {m['project_id'] for m in repo.list_user_memberships('u1')} == {'p1', 'p2'}
+
+    with pytest.raises(ValueError):
+        repo.create_membership({'project_id': 'p1', 'user_id': 'u1', 'role': 'OWNER'})
+    with pytest.raises(KeyError):
+        repo.set_member_role('p1', 'missing', 'VIEWER')
+
+
+def test_project_settings_round_trip(repo):
+    """W03:时区落列、其余设置落 settings_json;合并写入后读回一致。"""
+    repo.create_project({'id': 'p1', 'name': '设置用例', 'timezone': 'UTC'})
+    assert repo.get_project_settings('p1') == {'timezone': 'UTC'}
+    assert repo.get_project_settings('missing') is None
+
+    repo.update_project_settings('p1', {'timezone': 'Asia/Shanghai',
+                                        'limits': {'max_feedback_rows': 10}, 'version': 2})
+    stored = repo.get_project_settings('p1')
+    assert stored['timezone'] == 'Asia/Shanghai'
+    assert stored['limits'] == {'max_feedback_rows': 10}
+    assert stored['version'] == 2
+    # 未提交的键不丢弃
+    repo.update_project_settings('p1', {'rules': {'scan_on_import': False}})
+    assert repo.get_project_settings('p1')['limits'] == {'max_feedback_rows': 10}

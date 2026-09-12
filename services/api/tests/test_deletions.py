@@ -168,3 +168,28 @@ def test_deletion_writes_audit_entry():
     assert len(entries) == 1
     assert entries[0]['action'] == 'project.deletion'
     assert entries[0]['detail']['target_type'] == 'project'
+
+
+def test_project_deletion_removes_memberships():
+    """成员关系属于项目影响范围:留下孤儿行等于留下访问权(10.4 级联)。"""
+    project_id, name = _project('成员级联')
+    repository.create_membership({'project_id': project_id, 'user_id': 'u_owner',
+                                  'role': 'OWNER', 'display_name': '负责人'})
+    repository.create_membership({'project_id': project_id, 'user_id': 'u_viewer',
+                                  'role': 'VIEWER', 'display_name': '只读'})
+    assert len(repository.list_members(project_id)) == 2
+
+    preview = client.post(f'/api/v1/projects/{project_id}/deletions/preview', json={
+        'target_type': 'project', 'target_id': project_id,
+    }).json()
+    assert preview['memberships'] == 2, '删除影响范围里要能看到成员会被一并清理'
+
+    receipt = client.post(f'/api/v1/projects/{project_id}/deletions', json={
+        'target_type': 'project', 'target_id': project_id, 'confirm_name': name,
+    }).json()
+
+    assert receipt['state'] == 'DONE'
+    assert 'purge_memberships' in [step['name'] for step in receipt['steps']]
+    assert receipt['removed']['memberships'] == 2
+    assert repository.list_members(project_id) == []
+    assert repository.list_user_memberships('u_owner') == []
