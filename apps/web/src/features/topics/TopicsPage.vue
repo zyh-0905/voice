@@ -69,13 +69,13 @@
 // 待归类筛选独立;证据侧栏复用 Overview 的证据联动。
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import PageHeader from '../components/common/PageHeader.vue'
-import VlButton from '../components/common/VlButton.vue'
-import AsyncState from '../components/common/AsyncState.vue'
-import StatusBadge from '../components/common/StatusBadge.vue'
-import EvidencePanel from '../components/common/EvidencePanel.vue'
-import { useTopicsData } from '../composables/useTopicsData'
-import type { EvidenceContext, TopicRow, TopicTrend } from '../types/domain'
+import PageHeader from '../../components/common/PageHeader.vue'
+import VlButton from '../../components/common/VlButton.vue'
+import AsyncState from '../../components/common/AsyncState.vue'
+import StatusBadge from '../../components/common/StatusBadge.vue'
+import EvidencePanel from '../../components/common/EvidencePanel.vue'
+import { useTopicsData } from '../../composables/useTopicsData'
+import type { EvidenceContext, TopicRow, TopicTrend } from '../../types/domain'
 
 const route = useRoute()
 const projectId = computed(() => String(route.params.p))
