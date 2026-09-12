@@ -166,7 +166,9 @@ class Review(Base):
     project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     run_id: Mapped[str | None] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(32), default='pending', nullable=False)
-    finding: Mapped[str] = mapped_column(Text, nullable=False)
+    # 旧「效果复查」设计遗留:计划 5.2 的 reviews 表没有这一列,复盘也不再写它。
+    # 保持可空,否则真实模式下插入复盘会 NotNullViolation(内存仓储看不见这个问题)。
+    finding: Mapped[str | None] = mapped_column(Text)
     confirmed_by: Mapped[str | None] = mapped_column(String(128))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
     # W17 复盘:固定口径结果不可变保存

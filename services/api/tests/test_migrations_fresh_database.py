@@ -79,3 +79,30 @@ def test_migrated_schema_matches_models(tmp_path):
             f'{table} 列不一致\n迁移多出: {sorted(migrated[table] - modelled[table])}\n'
             f'模型多出: {sorted(modelled[table] - migrated[table])}'
         )
+
+
+def test_migrated_schema_accepts_application_writes(tmp_path):
+    """迁移产出的 schema 必须能承受应用的真实写入。
+
+    只比对列名是不够的:`create_all` 按**当前模型**建表,而迁移产出的 schema 可能
+    带着历史约束。`reviews.finding` 曾是 NOT NULL(旧「效果复查」设计的遗留列,
+    计划 5.2 里根本没有它),而入内存仓储不校验列约束——于是一直到真实部署
+    PostgreSQL 上才炸成 500,整套测试全绿。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.sql_repository import SQLAlchemyRepository
+
+    url = _fresh_url(tmp_path, 'writable.db')
+    result = _upgrade_to_head(url)
+    assert result.returncode == 0, result.stderr
+    repo = SQLAlchemyRepository(session_factory=sessionmaker(bind=sa.create_engine(url)))
+
+    # 复盘写入:字段与路由构造的 review 字典一致
+    repo.create_entity('reviews', {
+        'id': 'rv_1', 'project_id': 'p', 'run_id': 'run_1', 'revision': 1,
+        'topic_version_ids': ['t1'], 'task_id': None,
+        'before': {'n': 1, 'N': 2}, 'after': {'n': 1, 'N': 2},
+        'metrics': None, 'effect_status': 'INSUFFICIENT_DATA', 'limitations': [],
+    })
+    assert [item['id'] for item in repo.list_entities('reviews', 'p')] == ['rv_1']
