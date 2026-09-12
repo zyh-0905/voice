@@ -1,9 +1,9 @@
 """W15 集成:草稿不能直接验收、缺字段 422、全生命周期、幂等确认、版本冲突。"""
-from fastapi.testclient import TestClient
 
 from app.main import app
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 def _draft(project_id='demo-project', title='整改草稿'):

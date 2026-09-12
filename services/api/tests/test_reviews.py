@@ -1,9 +1,9 @@
 """W17 集成:复盘创建保存不可变结果;不可比不输出改善结论;详情查询。"""
-from fastapi.testclient import TestClient
 
 from app.main import app
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 def _create_review(**overrides):

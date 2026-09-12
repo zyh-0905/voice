@@ -2,13 +2,13 @@
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app import auth
 from app.auth import InMemoryTokenStore, SqlTokenStore, reset_token_store
 from app.main import app
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 @pytest.fixture(autouse=True)
@@ -19,8 +19,15 @@ def fresh_store(monkeypatch):
     reset_token_store(None)
 
 
+def _csrf_headers() -> dict:
+    """预登录 CSRF token:带会话 Cookie 时重复登录必须携带(防登录 CSRF)。"""
+    token = client.get('/api/v1/auth/csrf').json()['csrf_token']
+    return {'X-CSRF-Token': token}
+
+
 def _login(username, password):
-    return client.post('/api/v1/auth/login', json={'username': username, 'password': password})
+    return client.post('/api/v1/auth/login', json={'username': username, 'password': password},
+                       headers=_csrf_headers())
 
 
 def test_correct_password_logs_in():
@@ -58,6 +65,7 @@ def test_single_session_rotation():
 def test_logout_revokes_session():
     token = _login('demo', 'demo').json()['access_token']
     assert client.post('/api/v1/auth/logout', headers={'Authorization': f'Bearer {token}'}).status_code == 204
+    client.cookies.clear()  # 只验证被撤销的 Bearer 令牌
     assert client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).status_code == 401
 
 

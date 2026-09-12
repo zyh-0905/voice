@@ -35,6 +35,13 @@ class FieldValidationError(ValueError):
     pass
 
 
+def state_of(task: Mapping) -> str:
+    """读取任务状态:规范字段是 state;兼容旧行的 status。"""
+    value = task.get('state') or task.get('status') or DRAFT
+    normalized = str(value).upper()
+    return normalized if normalized in _TRANSITIONS else DRAFT
+
+
 def can_transition(state: str, action: str, actor_role: str, is_assignee: bool) -> bool:
     """状态机判定:VIEWER 只读;approve(验收)不允许 assignee 自验收。"""
     if str(actor_role).upper() == 'VIEWER':
@@ -51,7 +58,7 @@ def transition_task(task: dict, action: str, expected_version: int, actor_id: st
     """执行状态变化,并把事件与状态一起写回 task(同一次更新)。"""
     if int(task.get('version') or 0) != int(expected_version):
         raise VersionConflict(f"expected version {expected_version}, current {task.get('version')}")
-    state = str(task.get('state') or DRAFT)
+    state = state_of(task)
     if not can_transition(state, action, actor_role, is_assignee):
         raise InvalidTransition(f'{action} not allowed from {state}')
     task['state'] = _TRANSITIONS[state][action]
@@ -68,7 +75,7 @@ def transition_task(task: dict, action: str, expected_version: int, actor_id: st
 def confirm_draft(task: dict, expected_version: int, owner_id: str, due_at: str, acceptance: str,
                   actor_id: str) -> dict:
     """草稿确认:owner_id/due_at/acceptance 必填;缺字段抛 FieldValidationError。"""
-    if str(task.get('state') or DRAFT) != DRAFT:
+    if state_of(task) != DRAFT:
         raise InvalidTransition('confirm only allowed from DRAFT')
     if int(task.get('version') or 0) != int(expected_version):
         raise VersionConflict(f"expected version {expected_version}, current {task.get('version')}")

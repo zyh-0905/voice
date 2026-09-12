@@ -16,3 +16,4 @@ PyYAML>=6.0
 scikit-learn>=1.5
 jsonschema>=4.20
 argon2-cffi>=23.1
+PyJWT[crypto]>=2.8

@@ -1,9 +1,9 @@
 """W11 集成:主题证据只返回本项目记录;版本不匹配/外项目路径 404;列表优先已发布。"""
-from fastapi.testclient import TestClient
 
 from app.main import app
+from support.client import make_client
 
-client = TestClient(app)
+client = make_client()
 
 
 def test_topic_returns_only_own_evidence(topic_case):

@@ -23,4 +23,5 @@ def test_production_accepts_safe_settings(monkeypatch):
     monkeypatch.setenv("DEDUPE_HMAC_SECRET", "a-long-production-secret")
     monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
     monkeypatch.setenv("SESSION_STORE", "db")
+    monkeypatch.setenv("AUTH_INSECURE_DEV", "false")
     assert validate_production_settings().environment == "production"

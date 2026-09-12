@@ -6,7 +6,7 @@ from uuid import uuid4
 from .ingestion import parse_csv_text, parse_xlsx_bytes, redact_text
 from .repository import get_repository
 from .worker import AnalysisWorker
-from .middleware import SecurityHeadersMiddleware
+from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
 from .rate_limit import WriteRateLimitMiddleware
 from .auth import router as auth_router, require_user, require_analyst, require_project_access, require_project_analyst
 from .config import dedupe_hmac_secret
@@ -19,15 +19,17 @@ validate_production_settings()
 
 app = FastAPI(title='VoiceLens API', version='0.1.0')
 # 开发环境跨域:默认放行本地 vite/nginx 来源,生产用 CORS_ORIGINS 覆盖。
-# 认证走 Authorization: Bearer 头,不依赖 cookie,无需 allow_credentials。
+# 会话走 HttpOnly Cookie,跨源开发必须允许凭据;来源是显式白名单,不是通配。
 _cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173,http://localhost:8080,http://127.0.0.1:8080').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(WriteRateLimitMiddleware)
 app.include_router(auth_router)
 repository = get_repository()
@@ -199,15 +201,37 @@ if not repository.get_project('demo-project'):
     except ValueError:
         pass
 reviews = {}
-# 演示种子:severity/review_state/task 状态使用规范枚举,仅 InMemory 演示环境注入
-if repository.__class__.__name__ == 'InMemoryRepository':
-    repository.risks.setdefault('risk-001', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
-    repository.risks.setdefault('risk-002', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
-    repository.risks.setdefault('risk-003', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
-    repository.tasks.setdefault('task-001', {'id':'task-001','project_id':'demo-project','title':'退款率异常整改','owner':'数据团队','status':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00'})
-    repository.tasks.setdefault('task-002', {'id':'task-002','project_id':'demo-project','title':'支付失败率复盘','owner':'运营团队','status':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00'})
-    repository.tasks.setdefault('task-003', {'id':'task-003','project_id':'demo-project','title':'字段治理复核','owner':'运营团队','status':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00'})
-    repository.reviews.setdefault('review-001', {'id':'review-001','project_id':'demo-project','run_id':None,'status':'pending','finding':'Finding requires review','confirmed_by':None})
+# 演示种子:severity/review_state/task 状态使用规范枚举;两种仓储均为「空则注入」。
+# SQL 模式下非模型列的富字段(rule/due_at 等)由仓储按列过滤,基础演示不受影响。
+if not repository.list_entities('risks', 'demo-project'):
+    repository.create_entity('risks', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
+    repository.create_entity('risks', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
+    repository.create_entity('risks', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
+if not repository.list_entities('tasks', 'demo-project'):
+    for seed in (
+        {'id':'task-001','title':'退款率异常整改','owner':'数据团队','owner_id':'owner-1','state':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00','acceptance':'退款率回落并复核一周','effect_status':'NOT_EVALUATED'},
+        {'id':'task-002','title':'支付失败率复盘','owner':'运营团队','owner_id':'owner-2','state':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00','acceptance':'失败率恢复正常区间','effect_status':'NOT_EVALUATED'},
+        {'id':'task-003','title':'字段治理复核','owner':'运营团队','owner_id':'owner-3','state':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00','acceptance':'时间字段缺失率低于 1%','effect_status':'NOT_EVALUATED'},
+    ):
+        repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'events':[], 'idempotency_keys':[]})
+if not repository.list_entities('reviews', 'demo-project'):
+    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条
+    repository.create_entity('reviews', {
+        'id':'review-001','project_id':'demo-project','run_id':'run_demo_001','revision':1,
+        'topic_version_ids':['delivery'], 'task_id':None,
+        'before':{'n':168,'N':1000}, 'after':{'n':102,'N':1000},
+        'metrics':{'count_change':-66,'share_before_pp':16.8,'share_after_pp':10.2,'share_delta_pp':-6.6,'relative_share_change':-0.3929,'comparable':True},
+        'effect_status':'OBSERVED_CHANGE', 'limitations':[],
+        'status':'pending','finding':'复盘:物流体验占比变化','confirmed_by':None,
+    })
+    repository.create_entity('reviews', {
+        'id':'review-002','project_id':'demo-project','run_id':'run_demo_001','revision':1,
+        'topic_version_ids':['refund'], 'task_id':None,
+        'before':{'n':0,'N':0}, 'after':{'n':12,'N':400},
+        'metrics':{'count_change':12,'share_before_pp':None,'share_after_pp':None,'share_delta_pp':None,'relative_share_change':None,'comparable':False},
+        'effect_status':'INSUFFICIENT_DATA', 'limitations':['数据不足,暂不输出变化结论'],
+        'status':'pending','finding':'复盘:退款进度(数据不足)','confirmed_by':None,
+    })
 def _project(pid): return repository.get_project(pid)
 @app.get('/api/v1/projects')
 def list_projects(user: dict = Depends(require_user)):
@@ -224,23 +248,32 @@ def get_project(project_id: str, user: dict = Depends(require_project_access)):
 
 # —— 工程计划 7.7:行动首页只读聚合契约 ——
 @app.get('/api/v1/projects/{project_id}/summary')
-def project_summary(project_id: str, user: dict = Depends(require_project_access)):
-    """行动首页聚合。insight 绑定所选分析;action 为项目全部运行。
-    演示环境返回合成契约样例,并显式标注合成身份;真实实现以数据库查询为准。"""
+def project_summary(
+    project_id: str,
+    run_id: str | None = Query(None),
+    revision: int | None = Query(None),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    channel: str | None = Query(None),
+    product: str | None = Query(None),
+    user: dict = Depends(require_project_access),
+):
+    """行动首页聚合(7.7):insight 绑定所选分析+筛选;action 绑定项目全部任务。
+
+    无已发布 run 时洞察指标为 null 而非 0;只给 revision 不给 run_id 返回 422;
+    指定不存在或外项目 run 返回 404,不悄悄换成默认 run。
+    """
+    from .summary import SummaryRequestError, build_summary
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
-    # 合成样例(与前端 mock 同源,规范 7.7):不冒充业务结果
-    return {
-        'project_id': project_id,
-        'run_id': 'run_demo_001',
-        'revision': 1,
-        'denominator': 1000,
-        'definition_version': 'summary-ui-v1',
-        'computed_at': '2026-09-09T00:00:00+08:00',
-        'filters': {'start': '2026-08-25T00:00:00+08:00', 'end': '2026-09-01T00:00:00+08:00', 'channel': None, 'product': None},
-        'insight_metrics': {'scope': 'selected_analysis', 'valid_feedback_count': 1000, 'topic_count': 8, 'pending_risk_feedback_count': 12},
-        'action_metrics': {'scope': 'project_all_runs', 'active_task_count': 18, 'overdue_task_count': 4, 'task_as_of': '2026-09-09T00:00:00+08:00'},
-    }
+    try:
+        return build_summary(
+            list(analyses.values()), repository.list_entities('tasks', project_id), project_id,
+            run_id=run_id, revision=revision,
+            filters={'start': start, 'end': end, 'channel': channel, 'product': product},
+        )
+    except SummaryRequestError as exc:
+        raise HTTPException(exc.status_code, detail={'code': exc.code})
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""

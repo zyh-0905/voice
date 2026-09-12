@@ -144,6 +144,52 @@ export interface TaskSummary {
   source?: string
 }
 
+/** 复盘度量(W17 契约):百分点差值而非百分比混用;分母为 0 不可比 */
+export interface ReviewMetrics {
+  count_change: number | null
+  share_before_pp: number | null
+  share_after_pp: number | null
+  share_delta_pp: number | null
+  relative_share_change: number | null
+  comparable: boolean
+}
+
+/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 限制 */
+export interface ReviewRecord {
+  id: string
+  project_id: string
+  run_id: string
+  revision: number
+  topic_version_ids: string[]
+  task_id: string | null
+  before: { n: number; N: number }
+  after: { n: number; N: number }
+  metrics: ReviewMetrics
+  effect_status: 'NOT_EVALUATED' | 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
+  limitations: string[]
+}
+
+/** 任务事件(状态机流转记录,W15 契约) */
+export interface TaskEvent {
+  action: string
+  actor: string
+  comment: string
+  state: TaskStatus
+}
+
+/** 任务详情(GET /tasks/{t}):task + 来源快照 + 事件 + 版本 */
+export interface TaskDetail {
+  task: TaskSummary & {
+    owner_id?: string | null
+    acceptance?: string | null
+    effect_status?: string
+    events?: TaskEvent[]
+  }
+  source_snapshot: string | null
+  events: TaskEvent[]
+  version: number
+}
+
 /** 风险队列:规则命中候选,severity 与复核状态分开;候选不是已确认事故 */
 export interface RiskItem {
   id: string

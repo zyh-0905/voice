@@ -1,4 +1,12 @@
-import type { ApiClient } from './client'
+import {
+  ApiHttpError,
+  type ApiClient,
+  type CorrectionBody,
+  type ReviewCreateBody,
+  type TaskConfirmBody,
+  type TaskTransitionBody,
+  type TopicDetailResponse,
+} from './client'
 import type {
   AiProvenance,
   CpiResult,
@@ -6,8 +14,11 @@ import type {
   DatasetPreview,
   EvidenceContext,
   EvidenceQuoteItem,
+  ReviewRecord,
   RiskItem,
   SummaryResponse,
+  TaskEvent,
+  TaskStatus,
   TaskSummary,
   TopicRow,
   TrendPoint,
@@ -180,6 +191,274 @@ const SYNTHETIC_RISKS: RiskItem[] = [
   { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
 ]
 
+/** 演示任务状态机:与后端 W15 语义一致(草稿不能直接验收、负责人不得自验收、幂等确认)。 */
+class MockTaskStore {
+  private tasks = new Map<string, TaskSummary & { owner_id?: string | null; acceptance?: string | null; effect_status?: string; events?: TaskEvent[] }>()
+  private keys = new Set<string>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const task of SYNTHETIC_TASKS) {
+      this.tasks.set(task.id, { ...task, version: 1, events: [] } as never)
+    }
+  }
+
+  list(): TaskSummary[] {
+    this.seed()
+    return [...this.tasks.values()].map(t => ({ ...t }))
+  }
+
+  detail(taskId: string) {
+    this.seed()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new ApiHttpError(404, 'task_not_found')
+    return { task: { ...task }, source_snapshot: task.source ?? null, events: [...(task.events ?? [])], version: Number((task as never as { version: number }).version ?? 1) }
+  }
+
+  create(title: string, sourceTopicVersionId: string | null): TaskSummary {
+    this.seed()
+    const id = `task-draft-${Date.now()}`
+    const task = { id, title, status: 'DRAFT' as TaskStatus, dueAt: null, overdue: false, owner: '待分配', priority: 'MEDIUM', source: sourceTopicVersionId ?? '人工创建', version: 1, events: [] }
+    this.tasks.set(id, task as never)
+    return { ...task }
+  }
+
+  private require(taskId: string) {
+    this.seed()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new ApiHttpError(404, 'task_not_found')
+    return task
+  }
+
+  confirm(taskId: string, body: TaskConfirmBody, idempotencyKey: string) {
+    const task = this.require(taskId)
+    if (idempotencyKey && this.keys.has(`${taskId}:${idempotencyKey}`)) return { ...task }
+    if (task.status !== 'DRAFT') throw new ApiHttpError(409, 'INVALID_TRANSITION')
+    if (Number((task as never as { version: number }).version) !== body.expected_version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    if (!body.owner_id.trim()) throw new ApiHttpError(422, 'field_required')
+    if (!body.due_at.trim()) throw new ApiHttpError(422, 'field_required')
+    if (!body.acceptance.trim()) throw new ApiHttpError(422, 'field_required')
+    Object.assign(task, { status: 'OPEN', owner: body.owner_id, dueAt: body.due_at, acceptance: body.acceptance })
+    this.bump(task, 'confirm', '已派发,等待执行')
+    if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
+    return { ...task }
+  }
+
+  transition(taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
+    const task = this.require(taskId)
+    if (idempotencyKey && this.keys.has(`${taskId}:${idempotencyKey}`)) return { ...task }
+    if (Number((task as never as { version: number }).version) !== body.expected_version) {
+      throw new ApiHttpError(409, 'VERSION_CONFLICT')
+    }
+    const allowed: Record<string, Partial<Record<TaskTransitionBody['action'], TaskStatus>>> = {
+      OPEN: { start: 'IN_PROGRESS', cancel: 'CANCELLED' },
+      IN_PROGRESS: { submit: 'PENDING_REVIEW', cancel: 'CANCELLED' },
+      PENDING_REVIEW: { approve: 'CLOSED', reject: 'IN_PROGRESS', cancel: 'CANCELLED' },
+      DRAFT: { cancel: 'CANCELLED' },
+    }
+    const next = allowed[task.status]?.[body.action]
+    if (!next) throw new ApiHttpError(409, 'INVALID_TRANSITION')
+    task.status = next
+    this.bump(task, body.action, body.comment)
+    if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
+    return { ...task }
+  }
+
+  private bump(task: TaskSummary, action: string, comment: string) {
+    const record = task as never as { version: number; events: TaskEvent[]; effect_status?: string }
+    record.version = Number(record.version) + 1
+    record.events = [...(record.events ?? []), { action, actor: 'demo-user', comment, state: task.status }]
+    // 关闭任务不自动宣称经营效果改善
+    if (task.status === 'CLOSED') record.effect_status = 'NOT_EVALUATED'
+  }
+
+  reset() {
+    this.seeded = false
+    this.tasks.clear()
+    this.keys.clear()
+  }
+}
+
+const MOCK_TASK_STORE = new MockTaskStore()
+
+/** 演示复盘:与后端 W17 同口径(百分点、不可比不输出改善结论)。 */
+class MockReviewStore {
+  private reviews = new Map<string, ReviewRecord>()
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    this.reviews.set('review-001', this.build('review-001', { n_before: 168, N_before: 1000, n_after: 102, N_after: 1000 }))
+    this.reviews.set('review-002', this.build('review-002', { n_before: 100, N_before: 1000, n_after: 80, N_after: 500 }))
+    this.reviews.set('review-003', this.build('review-003', { n_before: 0, N_before: 0, n_after: 12, N_after: 400 }))
+  }
+
+  private build(id: string, counts: { n_before: number; N_before: number; n_after: number; N_after: number }): ReviewRecord {
+    const comparable = counts.N_before > 0 && counts.N_after > 0
+    const shareBefore = comparable ? (counts.n_before / counts.N_before) * 100 : null
+    const shareAfter = comparable ? (counts.n_after / counts.N_after) * 100 : null
+    const deltaPp = shareBefore !== null && shareAfter !== null ? Math.round((shareAfter - shareBefore) * 100) / 100 : null
+    const relative = deltaPp !== null && shareBefore ? Math.round((deltaPp / shareBefore) * 10000) / 10000 : null
+    return {
+      id, project_id: 'demo-project', run_id: 'run_demo_001', revision: 1,
+      topic_version_ids: ['t1'], task_id: null,
+      before: { n: counts.n_before, N: counts.N_before },
+      after: { n: counts.n_after, N: counts.N_after },
+      metrics: {
+        count_change: counts.n_after - counts.n_before,
+        share_before_pp: shareBefore === null ? null : Math.round(shareBefore * 100) / 100,
+        share_after_pp: shareAfter === null ? null : Math.round(shareAfter * 100) / 100,
+        share_delta_pp: deltaPp,
+        relative_share_change: relative,
+        comparable,
+      },
+      effect_status: comparable ? 'OBSERVED_CHANGE' : 'INSUFFICIENT_DATA',
+      limitations: comparable ? [] : ['数据不足,暂不输出变化结论'],
+    }
+  }
+
+  list(): ReviewRecord[] {
+    this.seed()
+    return [...this.reviews.values()].map(r => ({ ...r }))
+  }
+
+  find(id: string): ReviewRecord | undefined {
+    this.seed()
+    const review = this.reviews.get(id)
+    return review ? { ...review } : undefined
+  }
+
+  create(body: ReviewCreateBody): ReviewRecord {
+    this.seed()
+    const id = `review-${Date.now()}`
+    const review = this.build(id, body)
+    this.reviews.set(id, review)
+    return { ...review }
+  }
+
+  reset() {
+    this.seeded = false
+    this.reviews.clear()
+  }
+}
+
+const MOCK_REVIEW_STORE = new MockReviewStore()
+
+/** 演示主题校正:与后端 W13 一致——乐观锁 409、旧版本保留可按版本查询、新版本标待确认。 */
+class MockCorrectionStore {
+  private revision = 1
+  private history = new Map<number, { topics: Array<Record<string, unknown>>; evidence: Record<string, Array<Record<string, unknown>>> }>()
+  private topics: Array<Record<string, unknown>> = []
+  private evidence: Record<string, Array<Record<string, unknown>>> = {}
+  private seeded = false
+
+  private seed() {
+    if (this.seeded) return
+    this.seeded = true
+    for (const topic of SYNTHETIC_TOPICS.slice(0, 3)) {
+      this.topics.push({
+        topic_id: topic.id, name: topic.title, summary: topic.summary,
+        severity: 'medium', feedback_count: topic.feedbackCount, summary_revalidated: true,
+      })
+      this.evidence[topic.id] = [
+        { feedback_id: topic.quote.feedbackId, source_row: topic.quote.rowIndex ?? 0, quote: topic.quote.text.slice(0, 24), quote_start: 0, quote_end: 24 },
+      ]
+    }
+    // 待归类反馈可供 CREATE
+    this.evidence['__unassigned__'] = [
+      { feedback_id: 'fb_demo_008', source_row: 160, quote: '合成样本 DEMO-008', quote_start: 0, quote_end: 12 },
+    ]
+  }
+
+  private snapshot() {
+    return {
+      topics: this.topics.map(t => ({ ...t })),
+      evidence: Object.fromEntries(Object.entries(this.evidence).map(([k, v]) => [k, v.map(e => ({ ...e }))])),
+    }
+  }
+
+  detail(topicId: string, topicVersionId?: number) {
+    this.seed()
+    const revision = topicVersionId ?? this.revision
+    const state = revision === this.revision ? this.snapshot() : this.history.get(revision)
+    if (!state) throw new ApiHttpError(404, 'topic_not_found')
+    const topic = state.topics.find(t => t.topic_id === topicId)
+    if (!topic) throw new ApiHttpError(404, 'topic_not_found')
+    return { topic, evidence: state.evidence[topicId] ?? [], revision }
+  }
+
+  correct(topicId: string, body: CorrectionBody) {
+    this.seed()
+    if (!body.reason?.trim()) throw new ApiHttpError(422, 'reason_required')
+    if (body.expected_revision !== this.revision) throw new ApiHttpError(409, 'correction_conflict')
+    const affected: string[] = []
+    const target = this.topics.find(t => t.topic_id === topicId)
+    if (!target) throw new ApiHttpError(404, 'topic_not_found')
+
+    if (body.operation === 'RENAME') {
+      if (!body.name?.trim()) throw new ApiHttpError(422, 'name_required')
+      target.name = body.name
+      target.summary_revalidated = false
+      affected.push(topicId)
+    } else if (body.operation === 'MERGE') {
+      const sources = body.source_topic_ids ?? []
+      if (new Set(sources).size < 2) throw new ApiHttpError(422, 'merge_requires_two')
+      const merged: Array<Record<string, unknown>> = []
+      const seen = new Set<string>()
+      for (const sourceId of sources) {
+        for (const item of this.evidence[sourceId] ?? []) {
+          const key = String(item.feedback_id)
+          if (seen.has(key)) continue // MERGE 去重
+          seen.add(key)
+          merged.push(item)
+        }
+      }
+      const newId = `topic-merged-${this.revision + 1}`
+      this.topics = this.topics.filter(t => !sources.includes(String(t.topic_id)))
+      for (const sourceId of sources) delete this.evidence[sourceId]
+      this.topics.push({ topic_id: newId, name: body.name?.trim() || sources.join('/'), summary: '', severity: 'medium', feedback_count: merged.length, summary_revalidated: false })
+      this.evidence[newId] = merged
+      affected.push(...sources, newId)
+    } else if (body.operation === 'SPLIT') {
+      const ids = body.feedback_ids ?? []
+      if (!ids.length || !body.name?.trim()) throw new ApiHttpError(422, 'split_requires_targets')
+      const all = this.evidence[topicId] ?? []
+      const moved = all.filter(e => ids.includes(String(e.feedback_id)))
+      if (!moved.length) throw new ApiHttpError(422, 'no_matching_feedback')
+      this.evidence[topicId] = all.filter(e => !ids.includes(String(e.feedback_id)))
+      target.feedback_count = this.evidence[topicId].length
+      const newId = `topic-split-${this.revision + 1}`
+      this.topics.push({ topic_id: newId, name: body.name, summary: '', severity: 'medium', feedback_count: moved.length, summary_revalidated: false })
+      this.evidence[newId] = moved
+      affected.push(topicId, newId)
+    } else if (body.operation === 'CREATE') {
+      const ids = body.feedback_ids ?? []
+      if (!ids.length || !body.name?.trim()) throw new ApiHttpError(422, 'create_requires_targets')
+      const pool = this.evidence['__unassigned__'] ?? []
+      const picked = pool.filter(e => ids.includes(String(e.feedback_id)))
+      if (!picked.length) throw new ApiHttpError(422, 'foreign_feedback')
+      this.evidence['__unassigned__'] = pool.filter(e => !ids.includes(String(e.feedback_id)))
+      const newId = `topic-created-${this.revision + 1}`
+      this.topics.push({ topic_id: newId, name: body.name, summary: '', severity: 'medium', feedback_count: picked.length, summary_revalidated: false })
+      this.evidence[newId] = picked
+      affected.push(newId)
+    } else {
+      throw new ApiHttpError(422, 'unsupported_operation')
+    }
+
+    this.history.set(this.revision, this.snapshot())
+    this.revision += 1
+    return { revision: this.revision, affected_topic_ids: affected }
+  }
+}
+
+const MOCK_CORRECTION_STORE = new MockCorrectionStore()
+
 const SYNTHETIC_BATCHES: DatasetBatch[] = [
   { id: 'ds_demo_001', name: '8 月第 4 周反馈批次', rows: 1248, status: 'ready', createdAt: '2026-08-25T10:00:00+08:00' },
   { id: 'ds_demo_002', name: '8 月第 3 周反馈批次', rows: 1105, status: 'ready', createdAt: '2026-08-18T10:00:00+08:00' },
@@ -192,6 +471,20 @@ export const mockApi: ApiClient = {
   async runAnalysis() {
     await delay(500)
     return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
+  },
+  async logout() {
+    await delay(100)
+  },
+  async authConfig() {
+    await delay(100)
+    return { mode: 'local' as const }
+  },
+  async loginWithAssertion() {
+    await delay(200)
+    return {
+      access_token: 'demo-token', token_type: 'bearer', expires_in: 3600,
+      user: { id: 'demo-user', name: 'Demo Analyst', email: 'demo@voicelens.local', role: 'ANALYST' },
+    }
   },
   async login() {
     await delay(200)
@@ -221,11 +514,49 @@ export const mockApi: ApiClient = {
   },
   async taskSummaries() {
     await delay(300)
-    return SYNTHETIC_TASKS
+    return MOCK_TASK_STORE.list()
+  },
+  async getTask(_projectId: string, taskId: string) {
+    await delay(200)
+    return MOCK_TASK_STORE.detail(taskId)
+  },
+  async createTaskDraft(_projectId: string, body: { title: string; source_topic_version_id?: string | null }) {
+    await delay(200)
+    return MOCK_TASK_STORE.create(body.title, body.source_topic_version_id ?? null)
+  },
+  async confirmTask(_projectId: string, taskId: string, body: TaskConfirmBody, idempotencyKey: string) {
+    await delay(250)
+    return MOCK_TASK_STORE.confirm(taskId, body, idempotencyKey)
+  },
+  async transitionTask(_projectId: string, taskId: string, body: TaskTransitionBody, idempotencyKey: string) {
+    await delay(250)
+    return MOCK_TASK_STORE.transition(taskId, body, idempotencyKey)
   },
   async listRisks() {
     await delay(300)
     return SYNTHETIC_RISKS
+  },
+  async getTopicDetail(_projectId: string, topicId: string, topicVersionId?: number): Promise<TopicDetailResponse> {
+    await delay(200)
+    return MOCK_CORRECTION_STORE.detail(topicId, topicVersionId) as TopicDetailResponse
+  },
+  async correctTopic(_projectId: string, topicId: string, body: CorrectionBody) {
+    await delay(250)
+    return MOCK_CORRECTION_STORE.correct(topicId, body)
+  },
+  async listReviews() {
+    await delay(300)
+    return MOCK_REVIEW_STORE.list()
+  },
+  async getReview(_projectId: string, reviewId: string) {
+    await delay(200)
+    const review = MOCK_REVIEW_STORE.find(reviewId)
+    if (!review) throw new ApiHttpError(404, 'review_not_found')
+    return review
+  },
+  async createReview(_projectId: string, body: ReviewCreateBody) {
+    await delay(250)
+    return MOCK_REVIEW_STORE.create(body)
   },
   async recentBatches() {
     await delay(300)
