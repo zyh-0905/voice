@@ -475,6 +475,17 @@ export const mockApi: ApiClient = {
   async logout() {
     await delay(100)
   },
+  async authConfig() {
+    await delay(100)
+    return { mode: 'local' as const }
+  },
+  async loginWithAssertion() {
+    await delay(200)
+    return {
+      access_token: 'demo-token', token_type: 'bearer', expires_in: 3600,
+      user: { id: 'demo-user', name: 'Demo Analyst', email: 'demo@voicelens.local', role: 'ANALYST' },
+    }
+  },
   async login() {
     await delay(200)
     return {

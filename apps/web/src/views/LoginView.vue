@@ -43,6 +43,9 @@
       <p class="vl-login__divider" role="separator">或</p>
       <VlButton variant="secondary" data-testid="login-readonly" @click="enterReadonly">进入只读合成演示</VlButton>
       <p class="vl-login__hint">只读演示账号:viewer / viewer</p>
+      <p v-if="ssoIssuer" class="vl-login__sso" data-testid="login-sso">
+        当前由外部身份提供商({{ ssoIssuer }})统一登录;请在 SSO 完成后返回本页。
+      </p>
     </section>
   </div>
 </template>
@@ -50,7 +53,7 @@
 <script setup lang="ts">
 // LoginView — 风格规范第 7 节 /login:温和品牌区 + 清晰登录表单,主操作「登录」;
 // 数据用途说明、只读合成演示入口、通用错误(不泄露账号存在性)。
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { DEMO_USER, DEMO_VIEWER, useSessionStore, type User } from '../stores/session'
 import { apiClient, ApiHttpError, clearAccessToken, setAccessToken } from '../api/client'
@@ -64,6 +67,8 @@ const username = ref('')
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
+// 外部身份提供商模式:后端 /auth/config 声明,前端据此提示 SSO 入口
+const ssoIssuer = ref<string | null>(null)
 
 async function submit() {
   error.value = ''
@@ -95,6 +100,16 @@ async function submit() {
   }
   enter(match)
 }
+
+onMounted(async () => {
+  if (!isRealMode) return
+  try {
+    const config = await client.authConfig()
+    if (config.mode === 'oidc') ssoIssuer.value = config.issuer ?? '外部身份提供商'
+  } catch {
+    // 配置不可用时保持本地表单,不阻塞登录
+  }
+})
 
 function enter(user: typeof DEMO_USER | typeof DEMO_VIEWER) {
   error.value = ''
@@ -196,6 +211,14 @@ function enterReadonly() {
   margin: var(--vl-space-3) 0 0;
   font-size: var(--vl-text-xs);
   color: var(--vl-color-text-muted);
+}
+.vl-login__sso {
+  margin: var(--vl-space-4) 0 0;
+  padding: var(--vl-space-2) var(--vl-space-3);
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-info-bg);
+  color: var(--vl-color-info);
+  font-size: var(--vl-text-xs);
 }
 @media (max-width: 767px) {
   .vl-login {

@@ -19,10 +19,11 @@ from secrets import token_urlsafe
 from typing import Annotated
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+
+from .identity import DEMO_ACCOUNTS, get_identity_provider, verify_password
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
@@ -34,18 +35,6 @@ _LOGIN_FAIL_LIMIT = 5
 _LOGIN_LOCKOUT_SECONDS = 60.0
 
 _ph = PasswordHasher()
-
-# 演示账号的 Argon2id 哈希(生成后写死;生产必须替换为真实身份提供商)
-_USERS = {
-    "demo": {
-        "id": "demo-user", "email": "demo@voicelens.local", "name": "Demo Analyst", "role": "ANALYST",
-        "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$BOlNifCsXp/v/U6+6ZneqQ$tspysmF+6BheqOMNlFx7tBrK40oFQ37snMyLg/ELjiA",
-    },
-    "viewer": {
-        "id": "viewer-user", "email": "viewer@voicelens.local", "name": "Demo Viewer", "role": "VIEWER",
-        "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$ZsWn/N8qPOjqSWzrjJKYJw$EZz95/r1qEc9BFkHjVAwzre48FichTDaMhuJXhosVwk",
-    },
-}
 
 
 def _token_ttl() -> int:
@@ -250,6 +239,10 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1)
 
 
+class AssertionRequest(BaseModel):
+    assertion: str = Field(min_length=1)
+
+
 _fail_events: defaultdict[str, deque[float]] = defaultdict(deque)
 _fail_lock = threading.Lock()
 
@@ -282,11 +275,7 @@ def _projects(user: dict) -> list[dict]:
 
 
 def _verify_password(user: dict, password: str) -> bool:
-    try:
-        _ph.verify(user["password_hash"], password)
-        return True
-    except VerifyMismatchError:
-        return False
+    return verify_password(user.get("password_hash", ""), password)
 
 
 def session_token_of(http_request, credentials) -> str | None:
@@ -324,7 +313,8 @@ def require_user(
     """
     required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
     if not required and not session_token_of(http_request, credentials):
-        return _public(_USERS["demo"]) | {"demo_bypass": True, "projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
+        demo = DEMO_ACCOUNTS["demo"]
+        return _public(demo) | {"demo_bypass": True, "projects": [{"project_id": "demo-project", "role": "ANALYST", "permissions": ["read", "analyze"]}]}
     return current_user(http_request, credentials)
 
 
@@ -342,20 +332,8 @@ def csrf_token(response: Response):
     return {"csrf_token": token}
 
 
-@router.post("/login")
-def login(request: LoginRequest, http_request: Request, response: Response):
-    verify_csrf(http_request)
-    user = _USERS.get(request.username)
-    client = http_request.client.host if http_request.client else "unknown"
-    rate_key = f"{request.username}:{client}"
-    limited, retry = _login_rate_limited(rate_key)
-    if limited:
-        raise HTTPException(status_code=429, detail={"code": "rate_limited"},
-                            headers={"Retry-After": str(retry)})
-    if user is None or not _verify_password(user, request.password):
-        _record_login_failure(rate_key)
-        # 统一错误文案,不泄露账号存在性
-        raise HTTPException(status_code=401, detail={"code": "invalid_credentials"})
+def _issue_session(response: Response, user: dict) -> dict:
+    """为用户建立会话:签发令牌、写 Cookie、撤销其旧会话(单会话)。"""
     issued_at = time.time()
     ttl = _token_ttl()
     session = _public(user) | {
@@ -363,13 +341,52 @@ def login(request: LoginRequest, http_request: Request, response: Response):
         "exp": issued_at + ttl, "idle_exp": issued_at + _idle_ttl(),
     }
     store = get_token_store()
-    # 登录成功轮换/撤销该用户旧会话(单会话)
     store.revoke_user_sessions(user["id"])
     token = store.issue(session)
     set_session_cookie(response, token, max_age=ttl)
     # access_token 仍返回,供非浏览器客户端使用;浏览器以 HttpOnly Cookie 为准
     return {"access_token": token, "token_type": "bearer", "expires_in": ttl,
             "user": _public(user) | {"projects": _projects(user)}}
+
+
+@router.get("/config")
+def auth_config():
+    """前端据此选择登录方式:本地表单或跳转外部身份提供商。"""
+    return get_identity_provider().describe()
+
+
+@router.post("/token")
+def token_from_assertion(payload: AssertionRequest, response: Response):
+    """OIDC 断言登录:前端完成 SSO 后把 ID token 交回换取本平台会话。"""
+    provider = get_identity_provider()
+    verify = getattr(provider, "verify_assertion", None)
+    if verify is None:
+        raise HTTPException(status_code=400, detail={"code": "assertion_not_supported"})
+    user = verify(payload.assertion)
+    if user is None:
+        raise HTTPException(status_code=401, detail={"code": "invalid_assertion"})
+    return _issue_session(response, user)
+
+
+@router.post("/login")
+def login(request: LoginRequest, http_request: Request, response: Response):
+    verify_csrf(http_request)
+    provider = get_identity_provider()
+    client = http_request.client.host if http_request.client else "unknown"
+    rate_key = f"{request.username}:{client}"
+    limited, retry = _login_rate_limited(rate_key)
+    if limited:
+        raise HTTPException(status_code=429, detail={"code": "rate_limited"},
+                            headers={"Retry-After": str(retry)})
+    user = provider.authenticate(request.username, request.password)
+    if user is None:
+        _record_login_failure(rate_key)
+        if provider.name == "oidc":
+            # 外部身份提供商模式下不处理表单密码
+            raise HTTPException(status_code=400, detail={"code": "use_sso"})
+        # 统一错误文案,不泄露账号存在性
+        raise HTTPException(status_code=401, detail={"code": "invalid_credentials"})
+    return _issue_session(response, user)
 
 
 @router.get("/me")

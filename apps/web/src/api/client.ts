@@ -69,6 +69,13 @@ export interface LoginResponse {
   user: LoginUser
 }
 
+export interface AuthConfig {
+  mode: 'local' | 'oidc'
+  issuer?: string
+  audience?: string
+  assertion_endpoint?: string
+}
+
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
   upload(projectId: string, file: File, signal?: AbortSignal): Promise<DatasetPreview>
@@ -80,6 +87,10 @@ export interface ApiClient {
   login(username: string, password: string): Promise<LoginResponse>
   /** POST /auth/logout,服务端撤销会话并清除 Cookie */
   logout(): Promise<void>
+  /** GET /auth/config,返回当前身份提供商模式(local / oidc) */
+  authConfig(): Promise<AuthConfig>
+  /** POST /auth/token,用外部身份提供商的断言换取本平台会话 */
+  loginWithAssertion(assertion: string): Promise<LoginResponse>
   /** 工程计划 7.7:行动首页只读聚合 */
   summary(projectId: string, signal?: AbortSignal): Promise<SummaryResponse>
   topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
@@ -209,6 +220,14 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         method: 'POST',
         credentials: 'include',
         headers: { Accept: 'application/json', ...(csrf ? { [CSRF_HEADER]: csrf } : {}) },
+      })
+    },
+    authConfig() {
+      return request<AuthConfig>('/auth/config')
+    },
+    loginWithAssertion(assertion: string) {
+      return request<LoginResponse>('/auth/token', {
+        method: 'POST', body: JSON.stringify({ assertion }), headers: { 'Content-Type': 'application/json' },
       })
     },
     async exportRedactedCsv(projectId: string, signal?: AbortSignal) {
