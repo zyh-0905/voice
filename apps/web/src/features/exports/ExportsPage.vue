@@ -1,12 +1,14 @@
 <template>
   <div class="vl-page vl-exports">
-    <PageHeader title="导出" description="下载经过脱敏处理的治理结果;文件不包含原始敏感值。" />
+    <PageHeader :icon="Download" title="导出" description="下载经过脱敏处理的治理结果;文件不包含原始敏感值。" />
 
     <AsyncState
       :status="status"
       :message="error ?? undefined"
-      empty-message="暂无可导出的数据"
     >
+      <template #empty>
+        <EmptyState text="暂无可导出的数据" hint="导入数据并完成治理后即可导出脱敏结果" />
+      </template>
       <template #error>
         <p class="vl-exports__error">暂时无法获取导出数据,请稍后重试。</p>
         <VlButton variant="secondary" @click="reload()">重试</VlButton>
@@ -29,10 +31,12 @@
 // 后续接入 GET /projects/{p}/exports/redacted.csv 后端端点替代本地拼接。
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { Download } from '@element-plus/icons-vue'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlPanel from '../../components/common/VlPanel.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 import { apiClient } from '../../api/client'
 import type { DatasetPreview } from '../../types/domain'
 

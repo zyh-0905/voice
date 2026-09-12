@@ -1,6 +1,6 @@
 <template>
   <div class="vl-page">
-    <PageHeader title="风险复核" description="待复核队列与原文;候选不是已确认事故,裁决须填写理由。">
+    <PageHeader :icon="Warning" title="风险复核" description="待复核队列与原文;候选不是已确认事故,裁决须填写理由。">
       <template #actions>
         <VlButton variant="ghost" data-testid="view-pending" @click="filterPending = !filterPending">
           {{ filterPending ? '查看全部风险' : '只看待复核' }}
@@ -12,9 +12,18 @@
       当前为真实 API 模式:裁决需等服务端状态机端点,列表来自 GET /risks。
     </p>
 
-    <AsyncState :status="status" :message="error ?? undefined" empty-message="当前筛选下没有风险候选。">
+    <AsyncState :status="status" :message="error ?? undefined">
+      <template #empty>
+        <EmptyState text="当前筛选下没有风险候选" hint="风险候选来自规则扫描,不是已确认事故" />
+      </template>
+
+      <!-- 严重度构成:取自当前列表,不新增口径 -->
+      <VlPanel v-if="items.length" title="严重度构成" :description="`共 ${items.length} 条候选`" class="vl-risks__dist">
+        <DistributionBar :segments="severitySegments" label="风险严重度分布" />
+      </VlPanel>
+
       <div class="vl-table-scroll">
-        <table class="vl-risk-table" data-testid="risk-table">
+        <table class="vl-table vl-risk-table" data-testid="risk-table">
           <thead>
             <tr>
               <th scope="col">风险候选</th>
@@ -90,12 +99,15 @@
 // 真实模式:列表来自 GET /risks,裁决待服务端状态机端点。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { Warning } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
 import { apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import DistributionBar, { type DistributionSegment } from '../../components/common/DistributionBar.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 import type { RiskItem } from '../../types/domain'
 
 const session = useSessionStore()
@@ -126,6 +138,24 @@ onMounted(async () => {
 const visible = computed(() => {
   const list = filterPending.value ? items.value.filter(r => r.reviewState === 'pending') : items.value
   return [...list].sort((a, b) => Number(b.severity === 'CRITICAL') - Number(a.severity === 'CRITICAL'))
+})
+
+// 严重度构成:按当前列表聚合,颜色表达升级关系(规范 3.1:红色仅用于高严重度)
+const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'NONE'] as const
+const SEVERITY_LABEL: Record<string, string> = { CRITICAL: '严重', HIGH: '高', MEDIUM: '中', LOW: '低', NONE: '无' }
+const SEVERITY_COLOR: Record<string, string> = {
+  CRITICAL: 'var(--vl-color-danger)',
+  HIGH: 'var(--vl-color-brand-vivid)',
+  MEDIUM: 'var(--vl-chart-6)',
+  LOW: 'var(--vl-chart-2)',
+  NONE: 'var(--vl-color-border-control)',
+}
+const severitySegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const risk of items.value) counts.set(risk.severity, (counts.get(risk.severity) ?? 0) + 1)
+  return SEVERITY_ORDER.filter(s => counts.has(s)).map(s => ({
+    label: SEVERITY_LABEL[s] ?? s, value: counts.get(s) ?? 0, color: SEVERITY_COLOR[s] ?? 'var(--vl-color-border-control)',
+  }))
 })
 
 const reviewOpen = ref(false)
@@ -167,22 +197,8 @@ function decide(next: 'confirmed' | 'excluded') {
   color: var(--vl-color-info);
   font-size: var(--vl-text-xs);
 }
-.vl-risk-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-.vl-risk-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-risk-table tbody th,
-.vl-risk-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
+.vl-risks__dist {
+  margin-bottom: var(--vl-space-4);
 }
 .vl-risk-table__title {
   font-weight: 600;

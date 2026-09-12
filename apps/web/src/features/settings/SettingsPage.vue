@@ -1,6 +1,6 @@
 <template>
   <div class="vl-page vl-settings">
-    <PageHeader title="设置" description="项目治理策略与运行模式;删除等危险操作置于页面底部并需二次确认。" />
+    <PageHeader :icon="Setting" title="设置" description="项目治理策略与运行模式;删除等危险操作置于页面底部并需二次确认。" />
 
     <VlPanel class="vl-settings__section" title="时间策略">
       <div class="vl-field">
@@ -54,6 +54,7 @@
 // SettingsPage — 工程计划 9.1/规范第 7 节:分组表单,危险区置底;
 // 删除影响说明与二次确认;只读成员不写入。不再使用浏览器 confirm 阻断流程。
 import { computed, ref } from 'vue'
+import { Setting } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlPanel from '../../components/common/VlPanel.vue'

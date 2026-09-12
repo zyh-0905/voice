@@ -1,6 +1,6 @@
 <template>
   <div class="vl-page">
-    <PageHeader title="整改任务" description="状态/负责人/逾期筛选;草稿→派发→执行→提交→验收分离,不可自验收。">
+    <PageHeader :icon="Finished" title="整改任务" description="状态/负责人/逾期筛选;草稿→派发→执行→提交→验收分离,不可自验收。">
       <template #actions>
         <VlButton v-if="canAct" variant="primary" data-testid="create-task-draft" @click="createDraft">
           创建任务
@@ -9,7 +9,15 @@
     </PageHeader>
 
 
-    <AsyncState :status="status" :message="error ?? undefined" empty-message="当前筛选下没有任务。">
+    <AsyncState :status="status" :message="error ?? undefined">
+      <template #empty>
+        <EmptyState text="当前筛选下没有任务" hint="草稿经确认派发后才进入执行流程" />
+      </template>
+
+      <VlPanel v-if="items.length" title="状态构成" :description="`共 ${items.length} 条任务`" class="vl-tasks__dist">
+        <DistributionBar :segments="stateSegments" label="任务状态分布" />
+      </VlPanel>
+
       <div class="vl-tasks__filters">
         <div class="vl-field">
           <label class="vl-tasks__label" for="vl-tasks-state">状态</label>
@@ -34,7 +42,7 @@
       </div>
 
       <div class="vl-table-scroll">
-        <table class="vl-task-table" data-testid="task-table">
+        <table class="vl-table vl-task-table" data-testid="task-table">
           <thead>
             <tr>
               <th scope="col">任务</th>
@@ -75,12 +83,17 @@
 // 真实模式:列表来自 GET /tasks,推进/创建待服务端状态机端点,不做误导性乐观更新。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Finished } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
 import { apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
+import VlPanel from '../../components/common/VlPanel.vue'
+import DistributionBar, { type DistributionSegment } from '../../components/common/DistributionBar.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
+import { taskStatusLabel } from '../../lib/ui-status'
 import type { TaskStatus, TaskSummary } from '../../types/domain'
 
 const session = useSessionStore()
@@ -108,6 +121,24 @@ async function loadTasks() {
   }
 }
 onMounted(loadTasks)
+
+// 状态构成:按当前列表聚合,颜色沿用状态语义
+const STATE_ORDER: TaskStatus[] = ['OPEN', 'IN_PROGRESS', 'PENDING_REVIEW', 'DRAFT', 'CLOSED', 'CANCELLED']
+const STATE_COLOR: Record<string, string> = {
+  OPEN: 'var(--vl-chart-2)',
+  IN_PROGRESS: 'var(--vl-color-brand-vivid)',
+  PENDING_REVIEW: 'var(--vl-color-warning)',
+  DRAFT: 'var(--vl-color-border-control)',
+  CLOSED: 'var(--vl-color-success)',
+  CANCELLED: 'var(--vl-color-text-muted)',
+}
+const stateSegments = computed<DistributionSegment[]>(() => {
+  const counts = new Map<string, number>()
+  for (const task of items.value) counts.set(task.status, (counts.get(task.status) ?? 0) + 1)
+  return STATE_ORDER.filter(s => counts.has(s)).map(s => ({
+    label: taskStatusLabel(s), value: counts.get(s) ?? 0, color: STATE_COLOR[s] ?? 'var(--vl-color-border-control)',
+  }))
+})
 
 const visible = computed(() => {
   let list = items.value
@@ -141,6 +172,9 @@ async function createDraft() {
 </script>
 
 <style scoped>
+.vl-tasks__dist {
+  margin-bottom: var(--vl-space-4);
+}
 .vl-tasks__filters {
   display: flex;
   gap: var(--vl-space-4);
@@ -162,18 +196,6 @@ async function createDraft() {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-}
-.vl-task-table thead th {
-  padding: var(--vl-space-3);
-  background: var(--vl-color-subtle);
-  font-size: var(--vl-text-sm);
-  font-weight: 600;
-}
-.vl-task-table tbody th,
-.vl-task-table tbody td {
-  padding: var(--vl-space-3);
-  border-bottom: 1px solid var(--vl-color-border);
-  vertical-align: top;
 }
 .vl-task-table__title {
   font-weight: 600;
