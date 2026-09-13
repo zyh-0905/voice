@@ -2,10 +2,10 @@ from collections.abc import MutableMapping
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from .db import Base, SessionLocal
-from .models import (AnalysisRevision, AnalysisRun, Dataset, DeletionJob, ExportJob,
-                     Feedback, IdempotencyKey, Membership, OutboxEvent, Project, Review,
-                     Risk, RiskAudit, RunFeedback, Segment, Task, Topic, TopicCorrection,
-                     TopicEvidence, TopicVersion)
+from .models import (AnalysisRevision, AnalysisRun, AnalysisStage, Dataset, DeletionJob,
+                     ExportJob, Feedback, IdempotencyKey, Membership, ModelCall, OutboxEvent,
+                     Project, Review, RiskAudit, RiskFinding, RunFeedback, Segment, Task,
+                     Topic, TopicCorrection, TopicEvidence, TopicVersion)
 from .repository import MAX_PUBLISH_ATTEMPTS, same_event
 
 # 模型列与 plan 行的字段名不完全一致(claims/limitations 在库里带 _json 后缀),
@@ -117,7 +117,7 @@ class SQLAlchemyRepository:
                 Base.metadata.create_all(session.get_bind())
         self.datasets = _EntityMap(self, 'datasets')
         self.analyses = _EntityMap(self, 'analyses')
-        self._domain = {'risks': Risk, 'tasks': Task, 'reviews': Review, 'audits': RiskAudit, 'deletions': DeletionJob, 'exports': ExportJob}
+        self._domain = {'tasks': Task, 'reviews': Review, 'audits': RiskAudit, 'deletions': DeletionJob, 'exports': ExportJob}
 
     def _project_dict(self, obj):
         return {'id': obj.id, 'name': obj.name, 'description': 'Project', 'status': 'active',
@@ -427,6 +427,166 @@ class SQLAlchemyRepository:
                 .group_by(TopicVersion.topic_id)).all()
             highest = {topic_id: int(version or 0) for topic_id, version in rows}
             return {topic_id: highest.get(topic_id, 0) + 1 for topic_id in topic_ids}
+
+    # —— §5.2 分析阶段 / 风险候选 / 模型调用 ——
+    @staticmethod
+    def _stage_dict(obj):
+        return {'id': obj.id, 'project_id': obj.project_id, 'run_id': obj.run_id,
+                'stage': obj.stage, 'config_hash': obj.config_hash, 'attempt': obj.attempt,
+                'state': obj.state, 'output_file_id': obj.output_file_id,
+                'output_hash': obj.output_hash,
+                'started_at': obj.started_at.isoformat() if obj.started_at else None,
+                'finished_at': obj.finished_at.isoformat() if obj.finished_at else None,
+                'lease_epoch': obj.lease_epoch}
+
+    @staticmethod
+    def _finding_dict(obj):
+        return {'id': obj.id, 'project_id': obj.project_id, 'run_id': obj.run_id,
+                'feedback_id': obj.feedback_id, 'source_row': obj.source_row,
+                'rule_id': obj.rule_id, 'policy_version': obj.policy_version,
+                'severity': obj.severity, 'reason': obj.reason,
+                'evidence_offsets': dict(obj.evidence_offsets or {}) or None,
+                'review_state': obj.review_state, 'status': obj.status,
+                'version': obj.version, 'reviewer_id': obj.reviewer_id,
+                'review_reason': obj.review_reason, 'reviewed_at': obj.reviewed_at}
+
+    def save_stages(self, project_id, run_id, stages):
+        """写阶段记录;`(run_id, stage, config_hash)` 已存在则推进 attempt 与状态。"""
+        with self.session() as s, s.begin():
+            for stage in stages:
+                key = (run_id, stage['stage'], stage.get('config_hash') or '')
+                config_hash = stage.get('config_hash') or ''
+                row = s.scalars(select(AnalysisStage).where(
+                    AnalysisStage.run_id == run_id, AnalysisStage.stage == stage['stage'],
+                    # 括号不能省:`A == x or ''` 会被解析成 `(A == x) or ''`,
+                    # 而 SQLAlchemy 子句转 bool 直接抛异常——整条流水线在 SQL 模式下
+                    # 会以 status='error' 结束,内存模式却完全正常。
+                    AnalysisStage.config_hash == config_hash)).first()
+                if row is None:
+                    s.add(AnalysisStage(
+                        id=stage.get('id') or f'stg_{run_id}_{stage["stage"]}_{key[2]}',
+                        project_id=project_id, run_id=run_id, stage=stage['stage'],
+                        config_hash=stage.get('config_hash') or '',
+                        attempt=int(stage.get('attempt') or 1),
+                        state=stage.get('state') or 'PENDING',
+                        output_file_id=stage.get('output_file_id'),
+                        output_hash=stage.get('output_hash'),
+                        started_at=stage.get('started_at'), finished_at=stage.get('finished_at'),
+                        lease_epoch=int(stage.get('lease_epoch') or 0)))
+                else:
+                    row.attempt = int(stage.get('attempt') or row.attempt)
+                    row.state = stage.get('state') or row.state
+                    for name in ('output_file_id', 'output_hash', 'started_at', 'finished_at'):
+                        if stage.get(name) is not None:
+                            setattr(row, name, stage[name])
+            s.flush()
+            return len(stages)
+
+    def list_stages(self, project_id, run_id):
+        with self.session() as s:
+            rows = s.scalars(select(AnalysisStage).where(
+                AnalysisStage.project_id == project_id,
+                AnalysisStage.run_id == run_id).order_by(AnalysisStage.stage)).all()
+            return [self._stage_dict(o) for o in rows]
+
+    def save_risk_findings(self, project_id, run_id, findings):
+        """按 (feedback_id, rule_id, policy_version) 写入或刷新;人工裁决优先。"""
+        created = refreshed = human_decided = 0
+        with self.session() as s, s.begin():
+            for finding in findings:
+                prior = s.get(RiskFinding, finding['id'])
+                if prior is None:
+                    s.add(RiskFinding(
+                        id=finding['id'], project_id=project_id, run_id=run_id,
+                        feedback_id=finding.get('feedback_id'), source_row=finding.get('source_row'),
+                        rule_id=finding['rule_id'], policy_version=finding['policy_version'],
+                        severity=finding.get('severity') or 'MEDIUM',
+                        reason=str(finding.get('reason') or ''),
+                        evidence_offsets=finding.get('evidence_offsets'),
+                        review_state='pending', status='OPEN', version=1))
+                    created += 1
+                    continue
+                if str(prior.review_state or 'pending').lower() != 'pending':
+                    human_decided += 1
+                    continue
+                prior.severity = finding.get('severity') or prior.severity
+                prior.reason = str(finding.get('reason') or prior.reason)
+                prior.evidence_offsets = finding.get('evidence_offsets')
+                prior.source_row = finding.get('source_row')
+                prior.run_id = run_id
+                refreshed += 1
+            s.flush()
+        return {'created': created, 'refreshed': refreshed, 'human_decided': human_decided}
+
+    def list_risk_findings(self, project_id):
+        with self.session() as s:
+            rows = s.scalars(select(RiskFinding).where(
+                RiskFinding.project_id == project_id
+            ).order_by(RiskFinding.severity, RiskFinding.id)).all()
+            return [self._finding_dict(o) for o in rows]
+
+    def get_risk_finding(self, project_id, finding_id):
+        with self.session() as s:
+            obj = s.get(RiskFinding, finding_id)
+            if obj is None or obj.project_id != project_id:
+                return None
+            return self._finding_dict(obj)
+
+    def update_risk_finding(self, project_id, finding_id, changes):
+        with self.session() as s, s.begin():
+            obj = s.get(RiskFinding, finding_id)
+            if obj is None or obj.project_id != project_id:
+                raise KeyError(finding_id)
+            for key, value in changes.items():
+                if hasattr(obj, key) and key != 'id':
+                    setattr(obj, key, value)
+            s.flush()
+            return self._finding_dict(obj)
+
+    def delete_risk_findings_for_project(self, project_id):
+        with self.session() as s, s.begin():
+            return s.query(RiskFinding).filter(RiskFinding.project_id == project_id).delete()
+
+    def delete_risk_findings_for_feedback(self, project_id, feedback_ids):
+        """候选挂在 feedback 上(复合外键),删反馈前必须先删它们。"""
+        ids = [str(item) for item in feedback_ids]
+        if not ids:
+            return 0
+        with self.session() as s, s.begin():
+            return s.query(RiskFinding).filter(
+                RiskFinding.project_id == project_id,
+                RiskFinding.feedback_id.in_(ids)).delete(synchronize_session=False)
+
+    def save_model_call(self, project_id, record):
+        with self.session() as s, s.begin():
+            s.add(ModelCall(project_id=project_id, **{
+                key: record.get(key) for key in (
+                    'id', 'run_id', 'purpose', 'request_hash', 'provider', 'model', 'state',
+                    'tokens_in', 'tokens_out', 'cost_estimated', 'cost_actual',
+                    'provider_request_id', 'response_file_id')}))
+            s.flush()
+        return record
+
+    def list_model_calls(self, project_id, run_id=None):
+        with self.session() as s:
+            query = select(ModelCall).where(ModelCall.project_id == project_id)
+            if run_id is not None:
+                query = query.where(ModelCall.run_id == run_id)
+            rows = s.scalars(query.order_by(ModelCall.created_at)).all()
+            return [{'id': o.id, 'project_id': o.project_id, 'run_id': o.run_id,
+                     'purpose': o.purpose, 'provider': o.provider, 'model': o.model,
+                     'state': o.state, 'tokens_in': o.tokens_in, 'tokens_out': o.tokens_out,
+                     'cost_estimated': float(o.cost_estimated) if o.cost_estimated is not None else None,
+                     'cost_actual': float(o.cost_actual) if o.cost_actual is not None else None,
+                     'provider_request_id': o.provider_request_id,
+                     'response_file_id': o.response_file_id} for o in rows]
+
+    def delete_run_data_for_project(self, project_id):
+        """项目级:阶段与模型调用一同清理。"""
+        with self.session() as s, s.begin():
+            removed = s.query(AnalysisStage).filter(AnalysisStage.project_id == project_id).delete()
+            s.query(ModelCall).filter(ModelCall.project_id == project_id).delete()
+            return removed
 
     def count_topics_for_run(self, project_id, run_id):
         """删除与隔离核验用:某个 run 自己有多少个主题行。"""

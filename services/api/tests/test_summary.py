@@ -22,6 +22,8 @@ def _run(project_id='p', run_id='run-1', revision=1, rows=None, topics=2, findin
             'topics': [{'topic_id': f't{i}', 'name': f'主题{i}', 'feedback_count': 1} for i in range(topics)],
             'evidence_by_topic': {}, 'unassigned_count': 0,
         },
+        # 用例的输入声明:真实 run 上没有这个键(5.2 之后候选只存 risk_findings 表),
+        # 由 _summary 写进表里——聚合读的也是表,两边走同一条路径
         'risk_findings': findings or [],
     }
 
@@ -31,10 +33,11 @@ def _task(state, due_at=None, project_id='p'):
 
 
 def _summary(analysis_runs, tasks, project_id='p', **kwargs):
-    """播种 feedback 行后再聚合。
+    """播种 feedback 行与风险候选后再聚合。
 
-    工程计划 5.2 之后正文取自 `feedback` 表,run 里内嵌的行只是样例;
-    直接调用 build_summary 会测到一条生产上不存在的取数路径。
+    工程计划 5.2 之后正文取自 `feedback` 表、候选取自 `risk_findings` 表,run 里
+    内嵌的行只是用例的输入声明;直接调用 build_summary 会测到一条生产上不存在的
+    取数路径。
     """
     repository = new_repository()
     for run in analysis_runs:
@@ -42,6 +45,11 @@ def _summary(analysis_runs, tasks, project_id='p', **kwargs):
         # 主题与证据现在落在实体表里,读模型按 manifest 现算(5.2):
         # 不物化的话「主题数是 0」,而那看起来像「这次分析没有主题」
         publish_revision_rows(repository, run)
+        # 候选也必须真的落表:只在用例里摆着的话「待复核风险数」是 0,而那看起来
+        # 像「本项目没有待复核风险」——正是这条链路哑掉时的样子
+        findings = run.pop('risk_findings', None) or []
+        if findings:
+            repository.save_risk_findings(project_id, run['id'], findings)
     return build_summary(analysis_runs, tasks, project_id, repository=repository, **kwargs)
 
 
@@ -63,11 +71,17 @@ def test_topic_count_from_published_revision():
 
 
 def test_pending_risk_counts_distinct_feedback_all_severities():
+    # 行形状即 risk_findings 表(5.2)的列:id 与 (feedback_id, rule_id, policy_version)
+    # 唯一键都要在,否则写进表的候选不幂等,计数也会随着重跑漂移
     findings = [
-        {'feedback_id': 'fb1', 'rule_id': 'r1', 'severity': 'HIGH', 'review_state': 'PENDING'},
-        {'feedback_id': 'fb1', 'rule_id': 'r2', 'severity': 'CRITICAL', 'review_state': 'PENDING'},
-        {'feedback_id': 'fb2', 'rule_id': 'r1', 'severity': 'LOW', 'review_state': 'PENDING'},
-        {'feedback_id': 'fb3', 'rule_id': 'r1', 'severity': 'HIGH', 'review_state': 'CONFIRMED'},
+        {'id': 'rf-1', 'feedback_id': 'fb1', 'rule_id': 'r1', 'policy_version': 'v1',
+         'severity': 'HIGH', 'review_state': 'PENDING'},
+        {'id': 'rf-2', 'feedback_id': 'fb1', 'rule_id': 'r2', 'policy_version': 'v1',
+         'severity': 'CRITICAL', 'review_state': 'PENDING'},
+        {'id': 'rf-3', 'feedback_id': 'fb2', 'rule_id': 'r1', 'policy_version': 'v1',
+         'severity': 'LOW', 'review_state': 'PENDING'},
+        {'id': 'rf-4', 'feedback_id': 'fb3', 'rule_id': 'r1', 'policy_version': 'v1',
+         'severity': 'HIGH', 'review_state': 'CONFIRMED'},
     ]
     summary = _summary([_run(findings=findings)], [], 'p', now=AS_OF)
     # 同一反馈命中两条规则只计 1;已确认的不计入
@@ -118,7 +132,7 @@ def test_closed_states_excluded_from_active():
 
 def test_no_published_run_returns_null_insight_but_readable_tasks():
     run = {'id': 'run-q', 'project_id': 'p', 'status': 'queued', 'datasets': [],
-           'result': {}, 'risk_findings': []}
+           'result': {}}
     summary = _summary([run], [_task('OPEN')], 'p', now=AS_OF)
     assert summary['run_id'] is None and summary['revision'] is None
     assert summary['insight_metrics']['valid_feedback_count'] is None

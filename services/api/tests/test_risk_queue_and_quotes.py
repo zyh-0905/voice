@@ -1,7 +1,8 @@
 """风险候选入队(计划 5.2 risk_findings / 8.1)与证据引文(计划 8.5 / 9.5)。
 
 两条链路的共同毛病是「看起来有、实际不连通」:
-- 扫描产物只写进 run 的 risk_findings,而复核队列读的是 risks 实体表,真实风险进不了队列;
+- 扫描产物曾写进 run 的 JSON,而复核队列读的是另一张实体表,真实风险进不了队列;
+  5.2 之后两边就是 `risk_findings` 一张表,所以这里直接查表来证明候选真的到了队列;
 - 证据引文是 text[:24] 的固定前缀,与它要支撑的结论无关,却照样能通过发布校验。
 """
 from uuid import uuid4
@@ -54,7 +55,8 @@ def _run(project_id: str, rows: list[dict]) -> dict:
 
 
 def _queued(project_id: str) -> dict[str, dict]:
-    return {item['rule_id']: item for item in repository.list_entities('risks', project_id)}
+    # 复核队列就是 risk_findings 实体表(计划 5.2),不是 run 上的 JSON 副本
+    return {item['rule_id']: item for item in repository.list_risk_findings(project_id)}
 
 
 # —— 风险候选入队 ——
@@ -77,6 +79,10 @@ def test_scan_findings_enter_the_risk_queue():
     # 单条严重投诉即使不成簇也要入队(计划 8.1),这里它确实没进任何主题。
     # 候选指向 feedback 表里的真实行(用例里的 fb_a/fb_b/fb_c 只是逻辑编号)
     assert queued['safety_fire']['feedback_id'] == run['run_feedback_ids'][1]
+    # 命中位置同样要到队列:旧 risks 表没有 evidence_offsets 这一列,写入时被静默
+    # 丢掉,于是真实部署里复核人看不到候选命中在正文的哪一段
+    offsets = queued['safety_fire']['evidence_offsets']
+    assert offsets['start'] is not None and offsets['end'] is not None
     # 候选不是既成事实:入队恒为待复核
     assert {item['review_state'] for item in queued.values()} == {'pending'}
     assert run['run_feedback_ids'][2] not in {item.get('feedback_id') for item in queued.values()}
@@ -91,7 +97,8 @@ def test_rescan_is_idempotent():
         run = _run(project_id, rows)
         pipeline.run_analysis_pipeline(_Store(run), run['id'], repository)
 
-    assert len(repository.list_entities('risks', project_id)) == 1
+    # 队列就是 risk_findings 表(5.2):重跑不得在表里留下第二份候选
+    assert len(repository.list_risk_findings(project_id)) == 1
 
 
 def test_rescan_does_not_overwrite_human_decision():
@@ -102,16 +109,17 @@ def test_rescan_does_not_overwrite_human_decision():
     run = _run(project_id, rows)
     pipeline.run_analysis_pipeline(_Store(run), run['id'], repository)
     risk_id = risk_entity_id(project_id, run['run_feedback_ids'][0], 'safety_fire', 'ecommerce-v1')
-    repository.update_entity('risks', risk_id, {
-        'review_state': 'confirmed', 'reviewed_by': 'u_analyst', 'review_reason': '已核实为个例',
+    # 裁决字段在 5.2 表里是 reviewer_id(旧 risks 表叫 reviewed_by)
+    repository.update_risk_finding(project_id, risk_id, {
+        'review_state': 'confirmed', 'reviewer_id': 'u_analyst', 'review_reason': '已核实为个例',
     })
 
     run2 = _run(project_id, rows)
     pipeline.run_analysis_pipeline(_Store(run2), run2['id'], repository)
 
-    kept = next(item for item in repository.list_entities('risks', project_id) if item['id'] == risk_id)
+    kept = next(item for item in repository.list_risk_findings(project_id) if item['id'] == risk_id)
     assert kept['review_state'] == 'confirmed', '重跑扫描把人工裁决冲掉了'
-    assert kept['reviewed_by'] == 'u_analyst'
+    assert kept['reviewer_id'] == 'u_analyst'
 
 
 def test_run_analysis_pipeline_refuses_to_run_without_repository():
@@ -125,8 +133,10 @@ def test_run_analysis_pipeline_refuses_to_run_without_repository():
     run = _run(project_id, [{'feedback_id': 'fb_b', 'text': '充电时冒烟起火。'}])
     with pytest.raises(ValueError, match='repository'):
         pipeline.run_analysis_pipeline(_Store(run), run['id'])
-    assert repository.list_entities('risks', project_id) == [], '拒绝执行时不得产生副作用'
-    assert not run.get('risk_findings'), '拒绝执行时不得写入扫描产物'
+    assert repository.list_risk_findings(project_id) == [], '拒绝执行时不得产生副作用'
+    # run 上不再有 risk_findings 副本(5.2),「没写扫描产物」只能查表证明
+    assert not [row for row in repository.list_risk_findings(project_id)
+                if row.get('run_id') == run['id']], '拒绝执行时不得写入扫描产物'
 
 
 # —— 证据引文 ——

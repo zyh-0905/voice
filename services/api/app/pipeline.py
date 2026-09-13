@@ -100,9 +100,11 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
             limit=3,
         )
         representative_rows = [row for row in member_rows if row['feedback_id'] in representatives]
-        candidate = namer.name_topic(
-            [{'evidence_id': row['feedback_id'], 'text': row['text']} for row in representative_rows],
-        )
+        evidence_for_naming = [{'evidence_id': row['feedback_id'], 'text': row['text']}
+                               for row in representative_rows]
+        candidate = namer.name_topic(evidence_for_naming)
+        record_model_call(repository, run.get('project_id'), run.get('id'), candidate,
+                          evidence_for_naming)
         # 命名阶段返回的 claims 是「引用了哪条证据」的权威来源,按证据 id 取用
         claimed = {claim.evidence_id: claim.quote for claim in candidate.claims}
         evidence = []
@@ -170,6 +172,50 @@ def persist_segments(repository, project_id: str, rows: list[dict]) -> int:
     return written
 
 
+def record_model_call(repository, project_id: str, run_id: str | None, candidate,
+                      evidence: list[dict]) -> None:
+    """记一次命名调用的模型账(5.2 model_calls / 10.5 预算与可观测性)。
+
+    这个表此前不存在、`model_calls` 全仓库零引用,于是「每日预算」「调用前预留、
+    收到 usage 后结算」「没有可靠价格配置时禁用付费模式」全都没有落脚点。
+
+    **费用留 NULL 不填 0**:0 会让「免费」和「不知道多少钱」看起来一样,而预算判断
+    依赖这个区别(10.5:没有可靠价格配置时禁用付费模式,而不是默认为免费)。
+    tokens 同理——mock 与规则降级不产生用量,填 0 会伪装成「调用过一次且没花钱」。
+    """
+    import hashlib
+    from uuid import uuid4
+    origin = str(getattr(candidate, 'origin', 'provider') or 'provider')
+    payload = '\x1f'.join(sorted(str(item.get('evidence_id')) for item in evidence))
+    repository.save_model_call(project_id, {
+        # 只记请求指纹,不记完整请求(5.2:不记录完整敏感请求)
+        'id': f'mc_{uuid4().hex[:10]}', 'run_id': run_id, 'purpose': 'naming',
+        'request_hash': hashlib.sha256(payload.encode('utf-8')).hexdigest(),
+        'provider': origin,
+        'model': None,
+        'state': 'SUCCESS' if origin in ('provider', 'mock') else 'FALLBACK',
+        'tokens_in': None, 'tokens_out': None,
+        'cost_estimated': None, 'cost_actual': None,
+        'provider_request_id': None, 'response_file_id': None,
+    })
+
+
+def record_stage(repository, project_id: str, run_id: str, stage: str, *, state: str = 'DONE',
+                 started_at=None, output_hash: str | None = None) -> None:
+    """记一条阶段行(5.2 analysis_stages)。
+
+    此前「跑到哪一步」只体现为 run 上的一个 stage 字符串:重试了几次、那一步的产物
+    哈希是什么,都无从追溯——而 6.2 的恢复策略要靠这两样判断某一步是否成功过。
+    """
+    from datetime import datetime, timezone
+    repository.save_stages(project_id, run_id, [{
+        'stage': stage, 'state': state,
+        'started_at': started_at,
+        'finished_at': datetime.now(timezone.utc),
+        'output_hash': output_hash,
+    }])
+
+
 def run_analysis_pipeline(store, analysis_id: str, repository=None) -> dict:
     """完整流水线:风险扫描 → 分块/向量/聚类/命名 → 发布 revision。
 
@@ -182,15 +228,38 @@ def run_analysis_pipeline(store, analysis_id: str, repository=None) -> dict:
     run = store.get_analysis(analysis_id)
     if run is None:
         raise ValueError(f'analysis not found: {analysis_id}')
-    rows, sources, total = _flatten_rows(run, repository)
-    persist_segments(repository, run.get('project_id'), rows)
-    drafts = build_topics_from_run(run, repository)
-    unassigned = total - sum(len(d.evidence) for d in drafts)
-    snapshot = publish_revision(store, analysis_id, drafts, sources, unassigned, repository)
-    findings = scan_run_risks(run, repository)
-    store.update_analysis(analysis_id, {'risk_findings': findings})
-    # 扫描独立于聚类,所以候选在主题发布之后单独入队(计划 8.1:1 条严重投诉即使
-    # 不成簇也要进复核队列)
+    import time
+    from datetime import datetime, timezone
+
     from .risk_service import persist_findings
-    persist_findings(repository, run.get('project_id'), findings)
+
+    project_id = run.get('project_id')
+
+    def _stage(name, started):
+        record_stage(repository, project_id, analysis_id, name,
+                     started_at=datetime.fromtimestamp(started, tz=timezone.utc))
+
+    started = time.monotonic()
+    rows, sources, total = _flatten_rows(run, repository)
+    _stage('govern', started)
+
+    started = time.monotonic()
+    persist_segments(repository, project_id, rows)
+    _stage('segment', started)
+
+    started = time.monotonic()
+    drafts = build_topics_from_run(run, repository)
+    _stage('cluster', started)
+
+    unassigned = total - sum(len(d.evidence) for d in drafts)
+    started = time.monotonic()
+    snapshot = publish_revision(store, analysis_id, drafts, sources, unassigned, repository)
+    _stage('publish', started)
+
+    # 扫描独立于聚类(计划 8.1:1 条严重投诉即使不成簇也要进复核队列),
+    # 产物直接落 risk_findings 实体——复核队列就是这张表,不再有第二份副本。
+    started = time.monotonic()
+    findings = scan_run_risks(run, repository)
+    persist_findings(repository, project_id, analysis_id, findings)
+    _stage('scan', started)
     return snapshot

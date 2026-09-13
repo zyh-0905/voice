@@ -416,10 +416,18 @@ for seed in (
 reviews = {}
 # 演示种子:severity/review_state/task 状态使用规范枚举;两种仓储均为「空则注入」。
 # SQL 模式下非模型列的富字段(rule/due_at 等)由仓储按列过滤,基础演示不受影响。
-if not repository.list_entities('risks', 'demo-project'):
-    repository.create_entity('risks', {'id':'risk-001','project_id':'demo-project','title':'退款率异常','rule':'R-204 · 近30天','severity':'HIGH','review_state':'pending','status':'OPEN'})
-    repository.create_entity('risks', {'id':'risk-002','project_id':'demo-project','title':'支付失败率突增','rule':'R-302 · 近24小时','severity':'CRITICAL','review_state':'pending','status':'OPEN'})
-    repository.create_entity('risks', {'id':'risk-003','project_id':'demo-project','title':'订单金额缺失','rule':'R-101 · 完整性','severity':'MEDIUM','review_state':'confirmed','status':'IN_PROGRESS'})
+if not repository.list_risk_findings('demo-project'):
+    # 演示种子:没有可回溯的 feedback 行,所以 feedback_id 留空(复合外键在任一列
+    # 为 NULL 时不校验)。真实扫描出的候选一律带 feedback_id 并受外键约束。
+    for seed in (
+        {'id': 'risk-001', 'rule_id': 'R-204', 'policy_version': '近30天', 'severity': 'HIGH',
+         'reason': '退款率异常', 'review_state': 'pending', 'status': 'OPEN'},
+        {'id': 'risk-002', 'rule_id': 'R-302', 'policy_version': '近24小时', 'severity': 'CRITICAL',
+         'reason': '支付失败率突增', 'review_state': 'pending', 'status': 'OPEN'},
+        {'id': 'risk-003', 'rule_id': 'R-101', 'policy_version': '完整性', 'severity': 'MEDIUM',
+         'reason': '订单金额缺失', 'review_state': 'confirmed', 'status': 'IN_PROGRESS'},
+    ):
+        repository.save_risk_findings('demo-project', None, [seed])
 if not repository.list_entities('tasks', 'demo-project'):
     for seed in (
         {'id':'task-001','title':'退款率异常整改','owner':'数据团队','owner_id':'owner-1','state':'IN_PROGRESS','priority':'HIGH','source':'关联风险 R-204','due_at':'2026-09-08T18:00:00+08:00','acceptance':'退款率回落并复核一周','effect_status':'NOT_EVALUATED'},
@@ -741,26 +749,35 @@ def list_trend(project_id: str, user: dict = Depends(require_project_access)):
         {'date': '09-01', 'value': 155},
     ]
     return {'items': points, 'total': len(points)}
-def _risk_view(risk: dict) -> dict:
-    """风险的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。"""
+def _risk_view(finding: dict) -> dict:
+    """风险候选的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。
+
+    取数来自 `risk_findings` 实体(5.2)。`title` 由 reason 投影而来——表里存的是
+    规则给出的诊断理由,那才是可判断的信息;`feedbackId` 与 `evidenceOffsets` 现在
+    是真的列,此前它们在写入时就被静默丢掉了。
+    """
+    rule_id = str(finding.get('rule_id') or '')
+    policy_version = str(finding.get('policy_version') or '')
     return {
-        'id': risk.get('id'),
-        'title': risk.get('title', ''),
-        'rule': risk.get('rule', ''),
-        'severity': str(risk.get('severity', 'MEDIUM')).upper(),
-        'reviewState': risk.get('review_state', 'pending'),
-        'status': str(risk.get('status', 'OPEN')).upper(),
-        'version': int(risk.get('version') or 1),
-        'reviewedBy': risk.get('reviewed_by'),
-        'reviewReason': risk.get('review_reason'),
-        'reviewedAt': risk.get('reviewed_at'),
+        'id': finding.get('id'),
+        'title': finding.get('reason') or rule_id,
+        'rule': f'{rule_id} · {policy_version}' if policy_version else rule_id,
+        'severity': str(finding.get('severity', 'MEDIUM')).upper(),
+        'reviewState': finding.get('review_state', 'pending'),
+        'status': str(finding.get('status', 'OPEN')).upper(),
+        'version': int(finding.get('version') or 1),
+        'reviewedBy': finding.get('reviewer_id'),
+        'reviewReason': finding.get('review_reason'),
+        'reviewedAt': finding.get('reviewed_at'),
+        'feedbackId': finding.get('feedback_id'),
+        'evidenceOffsets': finding.get('evidence_offsets'),
     }
 
 
 @app.get('/api/v1/projects/{project_id}/risks')
 def list_risks(project_id: str, user: dict = Depends(require_project_access)):
     """风险队列(前端契约):severity 与 review_state 分开,候选不是已确认事故。"""
-    mapped = [_risk_view(r) for r in repository.list_entities('risks', project_id)]
+    mapped = [_risk_view(r) for r in repository.list_risk_findings(project_id)]
     return {'items': mapped, 'total': len(mapped)}
 class RiskReviewRequest(BaseModel):
     decision: str          # confirmed | excluded | reopened
@@ -783,17 +800,17 @@ def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dic
         raise HTTPException(422, detail={'code': 'invalid_decision', 'allowed': ['confirmed', 'excluded', 'reopened']})
     if not req.reason.strip():
         raise HTTPException(422, detail={'code': 'reason_required'})
-    risk = next((r for r in repository.list_entities('risks', project_id) if r.get('id') == risk_id), None)
-    if risk is None:
+    finding = repository.get_risk_finding(project_id, risk_id)
+    if finding is None:
         raise HTTPException(404, detail={'code': 'risk_not_found'})
-    version = int(risk.get('version') or 1)
+    version = int(finding.get('version') or 1)
     if req.expected_version is not None and int(req.expected_version) != version:
         raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
-    updated = repository.update_entity('risks', risk_id, {
+    updated = repository.update_risk_finding(project_id, risk_id, {
         'review_state': decision,
-        'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else risk.get('status', 'OPEN'),
+        'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else finding.get('status', 'OPEN'),
         'version': version + 1,
-        'reviewed_by': user.get('id', 'demo-user'),
+        'reviewer_id': user.get('id', 'demo-user'),
         'review_reason': req.reason.strip(),
         'reviewed_at': datetime.now(timezone.utc).isoformat(),
     })

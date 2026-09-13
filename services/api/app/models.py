@@ -126,22 +126,6 @@ class RiskAudit(Base):
     detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[str | None] = mapped_column(String(64))
 
-class Risk(Base):
-    __tablename__ = 'risks'
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    severity: Mapped[str] = mapped_column(String(32), default='medium', nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default='open', nullable=False)
-    evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    # W14:候选来源规则与复核状态与 severity 分开
-    rule: Mapped[str | None] = mapped_column(String(128))
-    review_state: Mapped[str] = mapped_column(String(32), default='pending', nullable=False)
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    reviewed_by: Mapped[str | None] = mapped_column(String(64))
-    review_reason: Mapped[str | None] = mapped_column(Text)
-    reviewed_at: Mapped[str | None] = mapped_column(String(64))
-
 class Task(Base):
     __tablename__ = 'tasks'
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -229,6 +213,106 @@ class Feedback(Base):
         Index('ix_feedback_project_occurred', 'project_id', 'occurred_at'),
         Index('ix_feedback_project_channel', 'project_id', 'channel'),
         Index('ix_feedback_project_product', 'project_id', 'product'),
+    )
+
+
+class AnalysisStage(Base):
+    """工程计划 5.2 分析阶段:`(run_id, stage, config_hash)` 业务唯一,attempt 为重试计数。
+
+    一张表回答「这次分析跑到哪一步、重试了几次、那一步的产物哈希是什么」——
+    此前这些只体现为 run 上的一个 `stage` 字符串,重试与产物哈希无从追溯
+    (6.2 的恢复策略要靠它判断某一步是否已经成功过)。
+    """
+
+    __tablename__ = 'analysis_stages'
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False, default='')
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default='PENDING')
+    output_file_id: Mapped[str | None] = mapped_column(String(96))
+    output_hash: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('run_id', 'stage', 'config_hash', name='uq_analysis_stages_run_stage_config'),
+        Index('ix_analysis_stages_project_run', 'project_id', 'run_id'),
+    )
+
+
+class RiskFinding(Base):
+    """工程计划 5.2 风险候选:`(feedback_id, rule_id, policy_version)` 唯一。
+
+    这就是复核队列本身——此前它叫 `risks`,而那不在 5.2 的表清单里,且**少了
+    feedback_id / rule_id / policy_version / evidence_offsets 四列**。
+    `findings_to_entities` 一直在设这几个字段,SQL 仓储按列过滤时把它们静默丢掉
+    (内存仓储照收),于是「命中位置」在真实部署里根本没落库,两个模式还各说各话。
+    """
+
+    __tablename__ = 'risk_findings'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    # 产生这条候选的 run;策略变更后同一对允许再有一条,所以它不是唯一键的一部分
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # 可空 + 复合外键:真实候选一定填 feedback_id 并因此受外键约束;存量行与演示
+    # 种子填不出来(旧表把这一列静默丢掉了,而 id 是四元组的哈希、不可逆),
+    # NULL 表示「这条候选没有可回溯的反馈行」——不编一个 id 去占位。
+    feedback_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_row: Mapped[int | None] = mapped_column(Integer)
+    rule_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default='MEDIUM')
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    evidence_offsets: Mapped[dict | None] = mapped_column(JSON)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False, default='pending')
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default='OPEN')
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    reviewer_id: Mapped[str | None] = mapped_column(String(64))
+    review_reason: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('feedback_id', 'rule_id', 'policy_version',
+                         name='uq_risk_findings_feedback_rule_policy'),
+        ForeignKeyConstraint(['project_id', 'feedback_id'], ['feedback.project_id', 'feedback.id'],
+                             name='fk_risk_findings_feedback_same_project'),
+        Index('ix_risk_findings_project_review_severity', 'project_id', 'review_state', 'severity'),
+    )
+
+
+class ModelCall(Base):
+    """工程计划 5.2 模型调用:预算、成本与 UNKNOWN 调用的唯一凭据(10.5)。
+
+    此前这个表不存在,`model_calls` 全仓库零引用——于是「每日预算」「调用前预留、
+    收到 usage 后结算」「没有可靠价格配置时禁用付费模式」全都没有落脚点。
+
+    费用用定点数(5.1:金额不用 float)。没有可靠价格时留 NULL 而不是填 0:
+    0 会让「免费」和「不知道多少钱」看起来一样,而预算判断依赖这个区别。
+    """
+
+    __tablename__ = 'model_calls'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False, default='naming')
+    # 请求指纹:不记录完整敏感请求,但同一个请求重放要能认出来
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False, default='')
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default='SUCCESS')
+    tokens_in: Mapped[int | None] = mapped_column(Integer)
+    tokens_out: Mapped[int | None] = mapped_column(Integer)
+    cost_estimated: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    cost_actual: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    provider_request_id: Mapped[str | None] = mapped_column(String(128))
+    response_file_id: Mapped[str | None] = mapped_column(String(96))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        Index('ix_model_calls_project_created', 'project_id', 'created_at'),
     )
 
 

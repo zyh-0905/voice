@@ -90,14 +90,21 @@ def test_task_events_and_idempotency_keys_persist(repo):
 
 
 def test_risk_review_state_persists(repo):
-    repo.create_entity('risks', {
-        'id': 'r1', 'project_id': 'p', 'title': '候选', 'severity': 'CRITICAL',
-        'review_state': 'pending', 'status': 'OPEN', 'rule': 'R-302',
-    })
-    stored = repo.list_entities('risks', 'p')[0]
+    """候选落 `risk_findings` 表(5.2):旧 `risks` 表少的那几列必须真的往返。
+
+    旧表把 feedback_id / rule_id / policy_version / evidence_offsets 静默丢掉,
+    SQL 仓储按列过滤时两个模式各说各话——这里正是钉住这一点的用例。
+    """
+    repo.save_risk_findings('p', 'run-1', [{
+        'id': 'r1', 'rule_id': 'R-302', 'policy_version': 'ecommerce-v1',
+        'severity': 'CRITICAL', 'reason': '候选', 'evidence_offsets': {'start': 1, 'end': 4},
+    }])
+    stored = repo.list_risk_findings('p')[0]
     assert stored['severity'] == 'CRITICAL'
     assert stored['review_state'] == 'pending'
-    assert stored['rule'] == 'R-302'
+    assert stored['rule_id'] == 'R-302'
+    assert stored['policy_version'] == 'ecommerce-v1'
+    assert stored['evidence_offsets'] == {'start': 1, 'end': 4}
 
 
 def test_review_metrics_persist(repo):

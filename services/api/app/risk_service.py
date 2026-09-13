@@ -3,8 +3,11 @@
 未开始主题分析时即可查看风险——扫描独立于向量与聚类;
 同 (feedback_id, rule_id) 只保留一条。
 
-扫描结果此前只写进 run 的 `risk_findings`,而 `GET /risks` 读的是 risks 实体表
-(仅由演示种子填充),于是真实扫出的风险进不了复核队列。`persist_findings` 补上这一步。
+扫描产物落在 `risk_findings` 实体表(5.2),复核队列**就是**这张表——
+此前它叫 `risks`,不在 5.2 的表清单里,而且少了 feedback_id / rule_id /
+policy_version / evidence_offsets 四列:`findings_to_entities` 一直在设这几个字段,
+SQL 仓储按列过滤时把它们静默丢掉,内存仓储照收。于是「这条候选命中在正文的哪一段」
+在真实部署里根本没落库,而两个模式各说各话。
 """
 from __future__ import annotations
 
@@ -60,7 +63,7 @@ def dedupe(records: Iterable[RiskRecord]) -> list[RiskRecord]:
     return result
 
 
-# —— 入队:扫描候选 → 项目风险队列实体(工程计划 5.2 risk_findings) ——
+# —— 入队:扫描候选 → risk_findings 实体(工程计划 5.2) ——
 
 def risk_entity_id(project_id: str, feedback_id: str, rule_id: str, policy_version: str) -> str:
     """按 (project, feedback_id, rule_id, policy_version) 派生稳定 id。
@@ -75,55 +78,36 @@ def risk_entity_id(project_id: str, feedback_id: str, rule_id: str, policy_versi
 
 
 def findings_to_entities(project_id: str, findings: Iterable[Mapping]) -> list[dict]:
-    """扫描产物 → risks 实体。缺 feedback_id / rule_id / policy_version 的条目跳过。"""
-    entities: list[dict] = []
+    """扫描产物 → risk_findings 行。缺 feedback_id / rule_id / policy_version 的条目跳过。"""
+    rows: list[dict] = []
     for finding in findings:
         feedback_id = str(finding.get('feedback_id') or '')
         rule_id = str(finding.get('rule_id') or '')
         policy_version = str(finding.get('policy_version') or '')
         if not (feedback_id and rule_id and policy_version):
             continue
-        entities.append({
+        rows.append({
             'id': risk_entity_id(project_id, feedback_id, rule_id, policy_version),
-            'project_id': project_id,
             'feedback_id': feedback_id,
             'source_row': finding.get('source_row'),
             'rule_id': rule_id,
             'policy_version': policy_version,
-            # title 用规则给出的理由(诊断文案),不写"某规则命中"这类无信息量的占位
-            'title': str(finding.get('reason') or rule_id),
-            'rule': f'{rule_id} · {policy_version}',
+            # reason 用规则给出的理由(诊断文案),不写"某规则命中"这类无信息量的占位
+            'reason': str(finding.get('reason') or rule_id),
             'severity': str(finding.get('severity', 'medium')).upper(),
-            'review_state': 'pending',
-            'status': 'OPEN',
-            'version': 1,
+            # 命中位置此前被静默丢弃:表里没有这一列。现在它是真列。
             'evidence_offsets': {'start': finding.get('start'), 'end': finding.get('end')},
         })
-    return entities
+    return rows
 
 
-def persist_findings(repository, project_id: str, findings: Iterable[Mapping]) -> dict:
-    """把扫描候选写入项目风险队列;返回 {'created', 'refreshed', 'human_decided'} 计数。
+def persist_findings(repository, project_id: str, run_id: str | None,
+                     findings: Iterable[Mapping]) -> dict:
+    """把扫描候选写入 `risk_findings`;返回 {'created', 'refreshed', 'human_decided'}。
 
-    **人工裁决优先**:已存在的候选若已被确认或排除,只保留——不把 review_state 退回
-    pending。否则每跑一次分析就会把人的判断冲掉(计划 6.4:裁决必须记录人员、理由、
-    时间与版本,重新审查要留下新增复核事件)。
+    **人工裁决优先**:已确认/已排除的候选只保留,不退回 pending——否则每跑一次分析
+    就把人的判断冲掉(6.4:裁决必须记录人员、理由、时间与版本,重新审查要留下新增
+    复核事件)。这条规则实现在仓储层,内存与 SQL 两个模式共用同一份判定。
     """
-    existing_by_id = {item.get('id'): item for item in repository.list_entities('risks', project_id)}
-    created = refreshed = human_decided = 0
-    for entity in findings_to_entities(project_id, findings):
-        existing = existing_by_id.get(entity['id'])
-        if existing is None:
-            repository.create_entity('risks', entity)
-            created += 1
-            continue
-        if str(existing.get('review_state', 'pending')).lower() != 'pending':
-            human_decided += 1
-            continue
-        # 仍待复核:刷新策略可能已变的字段(严重度、理由、命中位置)
-        repository.update_entity('risks', entity['id'], {
-            'title': entity['title'], 'rule': entity['rule'], 'severity': entity['severity'],
-            'evidence_offsets': entity['evidence_offsets'], 'source_row': entity['source_row'],
-        })
-        refreshed += 1
-    return {'created': created, 'refreshed': refreshed, 'human_decided': human_decided}
+    return repository.save_risk_findings(project_id, run_id,
+                                         findings_to_entities(project_id, findings))

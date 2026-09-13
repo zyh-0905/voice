@@ -49,7 +49,7 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'topics': sum(_topic_count(repository, run) for run in runs),
             'tasks': len(repository.list_entities('tasks', project_id)),
             'reviews': len(repository.list_entities('reviews', project_id)),
-            'risks': len(repository.list_entities('risks', project_id)),
+            'risks': len(repository.list_risk_findings(project_id)),
             # 删除项目同时撤销访问,成员数属于影响范围
             'memberships': len(repository.list_members(project_id)),
             # 10.4 要求先展示影响范围:反馈条数是用户最直接关心的那个数
@@ -61,13 +61,18 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             raise DeletionError('dataset_not_found')
         affected = [run for run in _runs_of(repository, project_id)
                     if target_id in (run.get('dataset_ids') or [])]
+        # 这批次的候选会被一并清掉(它们挂在 feedback 上),所以要如实计入影响范围——
+        # 报 0 会让用户在确认前以为删批次不影响风险队列。
+        feedback_ids = {row['id'] for row in repository.list_feedback(project_id, [target_id])}
         return {
             'target_type': 'dataset', 'target_id': target_id,
             'target_name': dataset.get('name', target_id),
             'datasets': 1,
             'runs': len(affected),
             'topics': sum(_topic_count(repository, run) for run in affected),
-            'tasks': 0, 'reviews': 0, 'risks': 0, 'memberships': 0,
+            'tasks': 0, 'reviews': 0, 'memberships': 0,
+            'risks': sum(1 for item in repository.list_risk_findings(project_id)
+                         if item.get('feedback_id') in feedback_ids),
             'feedback': len(repository.list_feedback(project_id, [target_id])),
             # 确认前必须说明:删除批次会让引用它的分析、主题结果与证据失效
             'invalidates_reports': len(affected) > 0,
@@ -143,6 +148,9 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 先捕获这批次的 feedback_id:反馈行一删就没法再按 dataset_id 反查分块,
         # 核验会退化成「整个项目还有没有分块」而永远不为零
         affected_feedback = [row['id'] for row in repository.list_feedback(project_id, [target_id])]
+        # 顺序由外键决定:risk_findings 也引用 feedback(project_id, id),
+        # 先删候选再删反馈,否则 PostgreSQL 会直接拒绝删除
+        findings = repository.delete_risk_findings_for_feedback(project_id, affected_feedback)
         segments = repository.delete_segments_for_dataset(project_id, target_id)
         feedback = repository.delete_feedback_for_dataset(project_id, target_id)
     else:
@@ -151,10 +159,11 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 这里兜住「有清单但没有 run」的残留)
         repository.delete_run_feedbacks_for_project(project_id)
         repository.delete_topics_for_project(project_id)
+        findings = repository.delete_risk_findings_for_project(project_id)
         segments = repository.delete_segments_for_project(project_id)
         feedback = repository.delete_feedback_for_project(project_id)
     steps.append({'name': 'purge_feedback', 'status': 'done',
-                  'feedback': feedback, 'segments': segments})
+                  'feedback': feedback, 'segments': segments, 'findings': findings})
 
     # 4) 清理数据集(原文件与导出)
     dataset_ids = [target_id] if target_type == 'dataset' else [d['id'] for d in _datasets_of(repository, project_id)]
@@ -164,7 +173,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
 
     # 5) 项目级:清理任务、复盘、风险与项目本身
     if target_type == 'project':
-        for kind in ('tasks', 'reviews', 'risks'):
+        for kind in ('tasks', 'reviews'):
             for item in repository.list_entities(kind, project_id):
                 _safe_delete(repository, lambda key, _kind=kind: repository.delete_entity(_kind, key), item['id'])
             steps.append({'name': f'purge_{kind}', 'status': 'done'})
@@ -173,6 +182,9 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 指向已删分析的响应。
         steps.append({'name': 'purge_idempotency', 'status': 'done',
                       'keys': repository.delete_idempotency_for_project(project_id)})
+        # 5.2 的阶段与模型调用。候选已在 purge_feedback 前删掉(它们引用 feedback)
+        steps.append({'name': 'purge_run_data', 'status': 'done',
+                      'stages': repository.delete_run_data_for_project(project_id)})
         repository.delete_memberships(project_id)
         steps.append({'name': 'purge_memberships', 'status': 'done'})
         repository.delete_project(project_id)
@@ -185,7 +197,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             'runs': len(_runs_of(repository, project_id)),
             'tasks': len(repository.list_entities('tasks', project_id)),
             'reviews': len(repository.list_entities('reviews', project_id)),
-            'risks': len(repository.list_entities('risks', project_id)),
+            'risks': len(repository.list_risk_findings(project_id)),
             'memberships': len(repository.list_members(project_id)),
             'feedback': len(repository.list_feedback(project_id)),
             'segments': repository.count_segments(project_id),

@@ -98,13 +98,16 @@ def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | 
     return _latest_published_run(analysis_values, project_id, repository)
 
 
-def pending_risk_feedback_count(run: Mapping) -> int:
-    """本次 run 输入集合内、至少有一个 PENDING 风险 finding 的 distinct 反馈数(全 severity)。"""
-    findings = run.get('risk_findings') or []
+def pending_risk_feedback_count(project_id: str, repository) -> int:
+    """本项目至少有一条 PENDING 候选的 distinct 反馈数(全 severity,4.6 口径)。
+
+    取数来自 `risk_findings` 实体(5.2)。不再按 run 过滤:候选挂在反馈上,而
+    同一反馈的候选不因重跑分析而增加——按 run 过滤会让数字随分析次数变化。
+    """
     return len({
-        str(item.get('feedback_id'))
-        for item in findings
-        if str(item.get('review_state', 'PENDING')).upper() == 'PENDING' and item.get('feedback_id')
+        str(item['feedback_id'])
+        for item in repository.list_risk_findings(project_id)
+        if str(item.get('review_state', 'pending')).lower() == 'pending' and item.get('feedback_id')
     })
 
 
@@ -176,6 +179,6 @@ def build_summary(
     payload['insight_metrics'].update({
         'valid_feedback_count': len(rows),
         'topic_count': len(snapshot.get('topics') or []),
-        'pending_risk_feedback_count': pending_risk_feedback_count(run),
+        'pending_risk_feedback_count': pending_risk_feedback_count(project_id, repository),
     })
     return payload

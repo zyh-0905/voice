@@ -78,6 +78,18 @@ class Repository(Protocol):
     def count_topics_for_run(self, project_id: str, run_id: str) -> int: ...
     def delete_topics_for_run(self, project_id: str, run_id: str) -> int: ...
     def delete_topics_for_project(self, project_id: str) -> int: ...
+    # —— §5.2 分析阶段 / 风险候选 / 模型调用 ——
+    def save_stages(self, project_id: str, run_id: str, stages: list[dict]) -> int: ...
+    def list_stages(self, project_id: str, run_id: str) -> list[dict]: ...
+    def save_risk_findings(self, project_id: str, run_id: str, findings: list[dict]) -> dict: ...
+    def list_risk_findings(self, project_id: str) -> list[dict]: ...
+    def get_risk_finding(self, project_id: str, finding_id: str) -> dict | None: ...
+    def update_risk_finding(self, project_id: str, finding_id: str, changes: dict) -> dict: ...
+    def delete_risk_findings_for_project(self, project_id: str) -> int: ...
+    def delete_risk_findings_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
+    def save_model_call(self, project_id: str, record: dict) -> dict: ...
+    def list_model_calls(self, project_id: str, run_id: str | None = None) -> list[dict]: ...
+    def delete_run_data_for_project(self, project_id: str) -> int: ...
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
     def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
@@ -105,6 +117,9 @@ class InMemoryRepository:
         self.topic_evidence = {}
         self.analysis_revisions = {}
         self.topic_corrections = []
+        self.analysis_stages = {}
+        self.risk_findings = {}
+        self.model_calls = []
 
     def _create(self, collection, value):
         key = value['id']
@@ -288,6 +303,104 @@ class InMemoryRepository:
     def count_topics_for_run(self, project_id, run_id):
         """删除与隔离核验用:某个 run 自己有多少个主题行。"""
         return sum(1 for (pid, rid, _row) in self.topics if pid == project_id and rid == run_id)
+
+    # —— §5.2 分析阶段:键 (project_id, run_id, stage, config_hash),重试只推进 attempt ——
+    def save_stages(self, project_id, run_id, stages):
+        for stage in stages:
+            key = (project_id, run_id, stage['stage'], stage.get('config_hash') or '')
+            current = self.analysis_stages.get(key)
+            row = {**(current or {}), **deepcopy(stage), 'project_id': project_id, 'run_id': run_id}
+            row.setdefault('attempt', 1)
+            row.setdefault('state', 'PENDING')
+            self.analysis_stages[key] = row
+        return len(stages)
+
+    def list_stages(self, project_id, run_id):
+        return [deepcopy(row) for key, row in sorted(self.analysis_stages.items())
+                if key[0] == project_id and key[1] == run_id]
+
+    # —— §5.2 风险候选 ——
+    def save_risk_findings(self, project_id, run_id, findings):
+        """按 `(feedback_id, rule_id, policy_version)` 写入或刷新候选。
+
+        **人工裁决优先**:已确认/已排除的候选只保留,不把 review_state 退回 pending。
+        否则每跑一次分析就会把人的判断冲掉(6.4 要求重新审查留下新增复核事件)。
+        """
+        created = refreshed = human_decided = 0
+        for finding in findings:
+            value = deepcopy(finding)
+            value['project_id'] = project_id
+            value['run_id'] = run_id
+            key = (project_id, value['id'])
+            prior = self.risk_findings.get(key)
+            if prior is None:
+                value.setdefault('review_state', 'pending')
+                value.setdefault('status', 'OPEN')
+                value.setdefault('version', 1)
+                self.risk_findings[key] = value
+                created += 1
+                continue
+            if str(prior.get('review_state', 'pending')).lower() != 'pending':
+                human_decided += 1
+                continue
+            # 仍待复核:刷新策略可能已变的字段,人的判断字段一律不动
+            self.risk_findings[key] = {**prior, **{name: value[name] for name in
+                                                   ('severity', 'reason', 'evidence_offsets',
+                                                    'source_row', 'run_id') if name in value}}
+            refreshed += 1
+        return {'created': created, 'refreshed': refreshed, 'human_decided': human_decided}
+
+    def list_risk_findings(self, project_id):
+        rows = [deepcopy(row) for (pid, _rid), row in self.risk_findings.items() if pid == project_id]
+        rows.sort(key=lambda row: (str(row.get('severity', '')), str(row.get('id', ''))))
+        return rows
+
+    def get_risk_finding(self, project_id, finding_id):
+        row = self.risk_findings.get((project_id, finding_id))
+        return None if row is None else deepcopy(row)
+
+    def update_risk_finding(self, project_id, finding_id, changes):
+        row = self.risk_findings.get((project_id, finding_id))
+        if row is None:
+            raise KeyError(finding_id)
+        row.update(deepcopy(changes))
+        return deepcopy(row)
+
+    def delete_risk_findings_for_project(self, project_id):
+        keys = [key for key in self.risk_findings if key[0] == project_id]
+        for key in keys:
+            del self.risk_findings[key]
+        return len(keys)
+
+    def delete_risk_findings_for_feedback(self, project_id, feedback_ids):
+        """候选挂在 feedback 上(复合外键),删反馈前必须先删它们。"""
+        wanted = {str(item) for item in feedback_ids}
+        keys = [key for key, row in self.risk_findings.items()
+                if key[0] == project_id and str(row.get('feedback_id') or '') in wanted]
+        for key in keys:
+            del self.risk_findings[key]
+        return len(keys)
+
+    # —— §5.2 模型调用:预算与成本的凭据(10.5) ——
+    def save_model_call(self, project_id, record):
+        value = deepcopy(record)
+        value['project_id'] = project_id
+        self.model_calls.append(value)
+        return value
+
+    def list_model_calls(self, project_id, run_id=None):
+        return [deepcopy(item) for item in self.model_calls
+                if item['project_id'] == project_id
+                and (run_id is None or item.get('run_id') == run_id)]
+
+    def delete_run_data_for_project(self, project_id):
+        """项目级:阶段与模型调用一同清理。"""
+        removed = 0
+        for key in [k for k in self.analysis_stages if k[0] == project_id]:
+            del self.analysis_stages[key]
+            removed += 1
+        self.model_calls = [item for item in self.model_calls if item['project_id'] != project_id]
+        return removed
 
     def delete_topics_for_run(self, project_id, run_id):
         """删 run 的主题与修订:版本与证据随主题走,不留孤儿行。"""

@@ -17,11 +17,16 @@ from conftest import TEST_DB_PREFIX, assert_test_database_name
 # —— 迁移后的 schema ——
 
 def test_migrated_tables_exist(schema_connection):
-    """空库执行 alembic upgrade head 后,业务表与记账表都在(计划 W02 示例)。"""
+    """空库执行 alembic upgrade head 后,业务表与记账表都在(计划 W02 示例)。
+
+    5.2 的 0017 用 `risk_findings` 取代了 `risks`(旧表不在 5.2 清单里,且少的
+    几列让 SQL 与内存两个模式各说各话),并补上 analysis_stages / model_calls。
+    """
     tables = set(sa.inspect(schema_connection).get_table_names())
     assert {
         'projects', 'memberships', 'datasets', 'analysis_runs', 'reviews',
-        'risks', 'tasks', 'idempotency_keys', 'outbox_events', 'export_jobs',
+        'risk_findings', 'analysis_stages', 'model_calls',
+        'tasks', 'idempotency_keys', 'outbox_events', 'export_jobs',
     } <= tables
     assert 'alembic_version' in tables
 
