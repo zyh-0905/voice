@@ -83,10 +83,25 @@ jobs:
         run: npm run test:unit -- --run
       - working-directory: apps/web
         run: npm run build
-      - working-directory: apps/web
-        run: npx playwright install --with-deps chromium
-      - working-directory: apps/web
-        run: npm run test:e2e -- --project=chromium --workers=1
+      # E2E(含视觉基线)**在 Playwright 官方镜像里跑**。
+      #
+      # 基线是渲染环境的函数,不只是平台的:同一份 linux 基线,官方镜像里页面高
+      # 2037px,ubuntu-latest runner 上是 2073px——36px 的字体度量差异,足以让
+      # 视觉用例全红(实测:ratio 0.03 像素不同)。
+      #
+      # 所以生成与校验必须用同一个环境。镜像 tag 从 package-lock 里取,不写死,
+      # 免得 playwright 升级后镜像与浏览器版本对不上。
+      - name: Resolve Playwright version
+        id: pw
+        working-directory: apps/web
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: E2E in the Playwright image
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -v /work/apps/web/node_modules \
+            -w /work/apps/web \
+            mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-jammy \
+            sh -c "npm ci --no-audit --no-fund && npx playwright test --project=chromium --workers=1"
 
 
   # 真实 API 闭环(工程计划 14.3):前端不用 mock,直连 uvicorn 上的真实 FastAPI。

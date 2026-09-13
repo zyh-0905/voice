@@ -14,8 +14,13 @@ import { test, expect } from './ui-fixtures'
 // #f2f2f2(单通道约 3.5%)不会让它失败。逐像素颜色由 design-tokens.spec.ts 锁死、
 // 硬编码颜色由 lint:style 拦截,这里不重复;但它**不能**被当作颜色回归的保障。
 //
-// 换平台/换渲染环境时必须重新生成,且人工核准后提交:
-//   docker run --rm -v "$PWD:/work" -w /work/apps/web \
+// **基线是渲染环境的函数,不只是平台的。** 同一份 linux 基线,官方 Playwright 镜像里
+// 页面高 2037px,ubuntu-latest runner 上是 2073px——36px 的字体度量差异,足以让三条
+// 视觉用例全红(实测 ratio 0.03 像素不同)。所以生成与校验必须在同一个镜像里跑,
+// CI 也是这么做的(见 .github/workflows/ci.yml 的 frontend 任务)。
+//
+// 换渲染环境时必须重新生成,人工核准后提交:
+//   docker run --rm -v "$PWD:/work" -v /work/apps/web/node_modules -w /work/apps/web \
 //     mcr.microsoft.com/playwright:v<与 @playwright/test 同版本>-jammy \
 //     sh -c "npm ci && npx playwright test visual --update-snapshots"
 // 不要为了让它变绿就放宽断言,也不要用 --update-snapshots 自动覆盖既有基线。
