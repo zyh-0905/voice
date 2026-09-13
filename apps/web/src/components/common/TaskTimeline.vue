@@ -5,9 +5,13 @@
       <div class="vl-timeline__body">
         <p class="vl-timeline__head">
           <span class="vl-timeline__action">{{ actionLabel(event.action) }}</span>
-          <StatusBadge kind="task" :state="event.state" />
+          <!-- 5.2:事件记的是 from → to。只显示目标状态的话,时间线看着能猜改之前
+               是什么,但猜不出——而那正是时间线的价值。 -->
+          <StatusBadge kind="task" :state="event.from_state" />
+          <span class="vl-timeline__arrow" aria-label="变为">→</span>
+          <StatusBadge kind="task" :state="event.to_state" />
         </p>
-        <p class="vl-timeline__meta">{{ event.actor || '系统' }}<template v-if="event.comment"> · {{ event.comment }}</template></p>
+        <p class="vl-timeline__meta">{{ event.actor_id || '系统' }}<template v-if="event.comment_redacted"> · {{ event.comment_redacted }}</template></p>
       </div>
     </li>
   </ol>

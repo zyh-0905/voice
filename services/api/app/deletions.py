@@ -151,6 +151,8 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 顺序由外键决定:risk_findings 也引用 feedback(project_id, id),
         # 先删候选再删反馈,否则 PostgreSQL 会直接拒绝删除
         findings = repository.delete_risk_findings_for_feedback(project_id, affected_feedback)
+        # 10.4:任务证据是源数据的快照,删源数据要连它一起清——留着就是留着内容
+        task_evidence = repository.delete_task_evidence_for_feedback(project_id, affected_feedback)
         segments = repository.delete_segments_for_dataset(project_id, target_id)
         feedback = repository.delete_feedback_for_dataset(project_id, target_id)
     else:
@@ -160,10 +162,13 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         repository.delete_run_feedbacks_for_project(project_id)
         repository.delete_topics_for_project(project_id)
         findings = repository.delete_risk_findings_for_project(project_id)
+        task_evidence = repository.delete_task_evidence_for_feedback(
+            project_id, [row['id'] for row in repository.list_feedback(project_id)])
         segments = repository.delete_segments_for_project(project_id)
         feedback = repository.delete_feedback_for_project(project_id)
     steps.append({'name': 'purge_feedback', 'status': 'done',
-                  'feedback': feedback, 'segments': segments, 'findings': findings})
+                  'feedback': feedback, 'segments': segments, 'findings': findings,
+                  'task_evidence': task_evidence})
 
     # 4) 清理数据集(原文件与导出)
     dataset_ids = [target_id] if target_type == 'dataset' else [d['id'] for d in _datasets_of(repository, project_id)]
@@ -185,6 +190,9 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 5.2 的阶段与模型调用。候选已在 purge_feedback 前删掉(它们引用 feedback)
         steps.append({'name': 'purge_run_data', 'status': 'done',
                       'stages': repository.delete_run_data_for_project(project_id)})
+        # 任务事件是时间线:任务本身已被删,事件留着就指向不存在的任务
+        steps.append({'name': 'purge_task_events', 'status': 'done',
+                      'events': repository.delete_task_data_for_project(project_id)})
         repository.delete_memberships(project_id)
         steps.append({'name': 'purge_memberships', 'status': 'done'})
         repository.delete_project(project_id)

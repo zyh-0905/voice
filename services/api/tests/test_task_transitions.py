@@ -15,7 +15,7 @@ from app.tasks import (
 
 def _task(state=DRAFT, version=1):
     return {'id': 't', 'project_id': 'p', 'title': '任务', 'state': state, 'version': version,
-            'owner_id': None, 'due_at': None, 'acceptance': None, 'events': [], 'effect_status': EFFECT_NOT_EVALUATED}
+            'owner_id': None, 'due_at': None, 'acceptance': None, 'effect_status': EFFECT_NOT_EVALUATED}
 
 
 def test_draft_cannot_approve():
@@ -40,13 +40,21 @@ def test_full_lifecycle_transitions():
     assert can_transition(CLOSED, 'start', 'ANALYST', False) is False  # 终态不可再流转
 
 
-def test_transition_appends_event_and_bumps_version():
+def test_transition_returns_the_event_to_record_and_bumps_version():
+    """事件不再是 task 里的 JSON 数组(5.2 要求独立表)。
+
+    `transition_task` 返回 (task, event),由调用方与状态**在同一次仓储调用里**写入
+    ——分开写会留下「状态变了但没有对应事件」的任务,而时间线正是用来回答
+    「这个状态是谁改的」。
+    """
     task = _task(DRAFT)
-    transition_task(task, 'confirm', 1, 'owner', 'ANALYST', False, '确认')
+    _task_out, event = transition_task(task, 'confirm', 1, 'owner', 'ANALYST', False, '确认')
     assert task['state'] == OPEN
     assert task['version'] == 2
-    assert len(task['events']) == 1
-    assert task['events'][0]['action'] == 'confirm'
+    assert event['action'] == 'confirm'
+    assert event['from_state'] == DRAFT
+    assert event['to_state'] == OPEN
+    assert event['actor_id'] == 'owner'
 
 
 def test_version_conflict_rejected():

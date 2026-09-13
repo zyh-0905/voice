@@ -5,7 +5,8 @@ from .db import Base, SessionLocal
 from .models import (AnalysisRevision, AnalysisRun, AnalysisStage, Dataset, DeletionJob,
                      ExportJob, Feedback, IdempotencyKey, Membership, ModelCall, OutboxEvent,
                      Project, Review, RiskAudit, RiskFinding, RunFeedback, Segment, Task,
-                     Topic, TopicCorrection, TopicEvidence, TopicVersion)
+                     TaskEvent, TaskEvidence, Topic, TopicCorrection, TopicEvidence,
+                     TopicVersion)
 from .repository import MAX_PUBLISH_ATTEMPTS, same_event
 
 # 模型列与 plan 行的字段名不完全一致(claims/limitations 在库里带 _json 后缀),
@@ -28,6 +29,21 @@ def _version_kwargs(version: dict) -> dict:
 
 def _evidence_kwargs(evidence: dict) -> dict:
     return {key: evidence.get(key) for key in _EVIDENCE_FIELDS}
+
+
+def _task_event_kwargs(project_id: str, task_id: str, event: dict) -> dict:
+    """事件行的列映射;`material_refs_json` 缺省为空列表而不是 None——
+    计划要求它是「材料引用」,首版没有材料,空列表表示「没有引用」,
+    而 None 会让人分不清「没有」还是「没记」。"""
+    return {
+        'id': event['id'], 'project_id': project_id, 'task_id': task_id,
+        'action': str(event.get('action') or ''),
+        'from_state': str(event.get('from_state') or ''),
+        'to_state': str(event.get('to_state') or ''),
+        'actor_id': event.get('actor_id'),
+        'comment_redacted': str(event.get('comment_redacted') or ''),
+        'material_refs_json': list(event.get('material_refs_json') or []),
+    }
 
 
 class _EntityMap(MutableMapping):
@@ -581,6 +597,89 @@ class SQLAlchemyRepository:
                      'provider_request_id': o.provider_request_id,
                      'response_file_id': o.response_file_id,
                      'created_at': o.created_at.isoformat() if o.created_at else None} for o in rows]
+
+    # —— §5.2 任务事件:与任务状态更新同一事务 ——
+    @staticmethod
+    def _task_event_dict(obj):
+        return {'id': obj.id, 'project_id': obj.project_id, 'task_id': obj.task_id,
+                'action': obj.action, 'from_state': obj.from_state, 'to_state': obj.to_state,
+                'actor_id': obj.actor_id, 'comment_redacted': obj.comment_redacted,
+                'material_refs_json': list(obj.material_refs_json or []),
+                'created_at': obj.created_at.isoformat() if obj.created_at else None}
+
+    def save_task_transition(self, project_id, task_id, changes, event):
+        """更新任务并追加事件,**同一事务**。
+
+        分成两步的话,中间失败会留下一个状态变了但没有对应事件的任务,而时间线
+        正好是用来回答「这个状态是谁改的」。
+        """
+        with self.session() as s, s.begin():
+            task = s.get(Task, task_id)
+            if task is None or task.project_id != project_id:
+                raise KeyError(task_id)
+            for key, value in changes.items():
+                if key != 'events' and hasattr(task, key):
+                    setattr(task, key, value)
+            s.add(TaskEvent(**_task_event_kwargs(project_id, task_id, event)))
+            s.flush()
+            return {column.name: getattr(task, column.name) for column in Task.__table__.columns}
+
+    def append_task_event(self, project_id, task_id, event):
+        with self.session() as s, s.begin():
+            s.add(TaskEvent(**_task_event_kwargs(project_id, task_id, event)))
+            s.flush()
+            return event
+
+    def list_task_events(self, project_id, task_id):
+        with self.session() as s:
+            rows = s.scalars(select(TaskEvent).where(
+                TaskEvent.project_id == project_id,
+                TaskEvent.task_id == task_id).order_by(TaskEvent.created_at, TaskEvent.id)).all()
+            return [self._task_event_dict(o) for o in rows]
+
+    def save_task_evidence(self, project_id, task_id, rows):
+        """写入来源快照;已存在的 (task, feedback, version) 不重复写。"""
+        added = 0
+        with self.session() as s, s.begin():
+            for row in rows:
+                existing = s.scalars(select(TaskEvidence).where(
+                    TaskEvidence.task_id == task_id,
+                    TaskEvidence.feedback_id == row['feedback_id'],
+                    TaskEvidence.topic_version_id == row.get('topic_version_id'))).first()
+                if existing is not None:
+                    continue
+                s.add(TaskEvidence(
+                    id=row['id'], project_id=project_id, task_id=task_id,
+                    feedback_id=row['feedback_id'], topic_version_id=row.get('topic_version_id'),
+                    quote_redacted=str(row.get('quote_redacted') or '')))
+                added += 1
+            s.flush()
+        return added
+
+    def list_task_evidence(self, project_id, task_id):
+        with self.session() as s:
+            rows = s.scalars(select(TaskEvidence).where(
+                TaskEvidence.project_id == project_id,
+                TaskEvidence.task_id == task_id).order_by(TaskEvidence.id)).all()
+            return [{'id': o.id, 'project_id': o.project_id, 'task_id': o.task_id,
+                     'feedback_id': o.feedback_id, 'topic_version_id': o.topic_version_id,
+                     'quote_redacted': o.quote_redacted} for o in rows]
+
+    def delete_task_evidence_for_feedback(self, project_id, feedback_ids):
+        """10.4:删源数据要连任务证据一起清——它是源数据的快照,留着就是留着内容。"""
+        ids = [str(item) for item in feedback_ids]
+        if not ids:
+            return 0
+        with self.session() as s, s.begin():
+            return s.query(TaskEvidence).filter(
+                TaskEvidence.project_id == project_id,
+                TaskEvidence.feedback_id.in_(ids)).delete(synchronize_session=False)
+
+    def delete_task_data_for_project(self, project_id):
+        with self.session() as s, s.begin():
+            removed = s.query(TaskEvent).filter(TaskEvent.project_id == project_id).delete()
+            s.query(TaskEvidence).filter(TaskEvidence.project_id == project_id).delete()
+            return removed
 
     def delete_run_data_for_project(self, project_id):
         """项目级:阶段与模型调用一同清理。"""

@@ -89,6 +89,15 @@ class Repository(Protocol):
     def delete_risk_findings_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
     def save_model_call(self, project_id: str, record: dict) -> dict: ...
     def list_model_calls(self, project_id: str, run_id: str | None = None) -> list[dict]: ...
+    # —— §5.2 任务事件与任务证据 ——
+    def save_task_transition(self, project_id: str, task_id: str, changes: dict,
+                             event: dict) -> dict: ...
+    def list_task_events(self, project_id: str, task_id: str) -> list[dict]: ...
+    def append_task_event(self, project_id: str, task_id: str, event: dict) -> dict: ...
+    def save_task_evidence(self, project_id: str, task_id: str, rows: list[dict]) -> int: ...
+    def list_task_evidence(self, project_id: str, task_id: str) -> list[dict]: ...
+    def delete_task_evidence_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
+    def delete_task_data_for_project(self, project_id: str) -> int: ...
     def delete_run_data_for_project(self, project_id: str) -> int: ...
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
@@ -120,6 +129,8 @@ class InMemoryRepository:
         self.analysis_stages = {}
         self.risk_findings = {}
         self.model_calls = []
+        self.task_events = []
+        self.task_evidence = {}
 
     def _create(self, collection, value):
         key = value['id']
@@ -396,6 +407,71 @@ class InMemoryRepository:
         return [deepcopy(item) for item in self.model_calls
                 if item['project_id'] == project_id
                 and (run_id is None or item.get('run_id') == run_id)]
+
+    # —— §5.2 任务事件:与任务状态更新同一事务 ——
+    def save_task_transition(self, project_id, task_id, changes, event):
+        """更新任务并追加事件。
+
+        两个仓储都把它做成**一次调用**:分成「改任务」和「记事件」两步的话,中间
+        失败会留下一个状态变了但没有对应事件的任务,而时间线正好是用来回答
+        「这个状态是谁改的」的。
+        """
+        task = self.tasks.get(task_id)
+        if task is None or task.get('project_id') != project_id:
+            raise KeyError(task_id)
+        task.update(deepcopy(changes))
+        self.append_task_event(project_id, task_id, event)
+        return deepcopy(task)
+
+    def append_task_event(self, project_id, task_id, event):
+        value = {**deepcopy(event), 'project_id': project_id, 'task_id': task_id}
+        value.setdefault('material_refs_json', [])
+        self.task_events.append(value)
+        return deepcopy(value)
+
+    def list_task_events(self, project_id, task_id):
+        """按写入顺序返回:时间线的顺序就是它被记录的顺序。"""
+        return [deepcopy(item) for item in self.task_events
+                if item['project_id'] == project_id and item['task_id'] == task_id]
+
+    def save_task_evidence(self, project_id, task_id, rows):
+        """整批替换该任务的来源快照;已存在的 (task, feedback, version) 不重复写。"""
+        existing = self.task_evidence.setdefault((project_id, task_id), [])
+        seen = {(item['feedback_id'], item.get('topic_version_id')) for item in existing}
+        added = 0
+        for row in rows:
+            key = (row['feedback_id'], row.get('topic_version_id'))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append({**deepcopy(row), 'project_id': project_id, 'task_id': task_id})
+            added += 1
+        return added
+
+    def list_task_evidence(self, project_id, task_id):
+        return deepcopy(self.task_evidence.get((project_id, task_id), []))
+
+    def delete_task_evidence_for_feedback(self, project_id, feedback_ids):
+        """10.4:删源数据要连任务证据一起清——它是源数据的快照,留着就是留着内容。"""
+        wanted = {str(item) for item in feedback_ids}
+        removed = 0
+        for key, rows in list(self.task_evidence.items()):
+            if key[0] != project_id:
+                continue
+            keep = [row for row in rows if str(row.get('feedback_id')) not in wanted]
+            removed += len(rows) - len(keep)
+            if keep:
+                self.task_evidence[key] = keep
+            else:
+                del self.task_evidence[key]
+        return removed
+
+    def delete_task_data_for_project(self, project_id):
+        removed = sum(1 for item in self.task_events if item['project_id'] == project_id)
+        self.task_events = [item for item in self.task_events if item['project_id'] != project_id]
+        for key in [k for k in self.task_evidence if k[0] == project_id]:
+            del self.task_evidence[key]
+        return removed
 
     def delete_run_data_for_project(self, project_id):
         """项目级:阶段与模型调用一同清理。"""

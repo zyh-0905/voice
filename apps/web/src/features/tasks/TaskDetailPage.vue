@@ -51,7 +51,19 @@
             <dt>优先级</dt>
             <dd><StatusBadge kind="severity" :state="task.priority ?? 'MEDIUM'" /></dd>
             <dt>来源</dt>
-            <dd>{{ detail?.source_snapshot ?? task.source ?? '—' }}</dd>
+            <dd>{{ detail?.source ?? task.source ?? '—' }}</dd>
+            <dt>来源证据</dt>
+            <dd data-testid="task-evidence">
+              <template v-if="detail?.evidence_snapshot?.length">
+                <ul class="vl-task-detail__evidence">
+                  <li v-for="item in detail.evidence_snapshot" :key="item.feedback_id">
+                    <EvidenceQuote :quote="toQuote(item)" />
+                  </li>
+                </ul>
+                <span class="vl-task-detail__hint">创建任务时的固定快照,不随源数据变化</span>
+              </template>
+              <span v-else class="vl-task-detail__hint">无来源证据(手工创建)</span>
+            </dd>
             <dt>验收标准</dt>
             <dd data-testid="task-acceptance">{{ task.acceptance ?? '—' }}</dd>
             <dt>效果状态</dt>
@@ -152,11 +164,31 @@ import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
 import TaskTimeline from '../../components/common/TaskTimeline.vue'
+import EvidenceQuote from '../../components/common/EvidenceQuote.vue'
 import HumanReviewDialog from '../../components/common/HumanReviewDialog.vue'
 import { ApiHttpError, apiClient, type ProjectMember, type TaskTransitionBody } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import { effectStatusLabel } from '../../lib/ui-status'
-import type { TaskDetail } from '../../types/domain'
+import type { EvidenceQuoteItem, TaskDetail, TaskEvidenceSnapshot } from '../../types/domain'
+
+/** 把来源快照映射成引文契约。
+ *
+ * 快照存的是**那一句原文**,不再有 offset——offset 会随源正文变化而失效,而快照的
+ * 意义正是「不随源数据变化」。所以整句高亮:start=0、end=字符数。
+ * 字符数按 Array.from 计,与 EvidenceQuote 内的处理一致(不能拿 UTF-16 长度当字符数)。
+ */
+function toQuote(item: TaskEvidenceSnapshot): EvidenceQuoteItem {
+  const chars = Array.from(item.quote_redacted ?? '')
+  return {
+    text: item.quote_redacted ?? '',
+    start: 0,
+    end: chars.length,
+    feedbackId: item.feedback_id,
+    rowIndex: null,
+    channel: null,
+    occurredAt: null,
+  }
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -283,7 +315,7 @@ function openDialog(spec: ActionSpec) {
     fields: spec.kind === 'confirm'
       ? [
           { label: '任务', value: task.value?.title ?? '' },
-          { label: '来源', value: String(detail.value?.source_snapshot ?? task.value?.source ?? '—') },
+          { label: '来源', value: String(detail.value?.source ?? task.value?.source ?? '—') },
         ]
       : [
           { label: '任务', value: task.value?.title ?? '' },

@@ -434,7 +434,7 @@ if not repository.list_entities('tasks', 'demo-project'):
         {'id':'task-002','title':'支付失败率复盘','owner':'运营团队','owner_id':'owner-2','state':'OPEN','priority':'CRITICAL','source':'关联风险 R-302','due_at':'2026-09-15T18:00:00+08:00','acceptance':'失败率恢复正常区间','effect_status':'NOT_EVALUATED'},
         {'id':'task-003','title':'字段治理复核','owner':'运营团队','owner_id':'owner-3','state':'PENDING_REVIEW','priority':'MEDIUM','source':'关联风险 R-101','due_at':'2026-09-20T18:00:00+08:00','acceptance':'时间字段缺失率低于 1%','effect_status':'NOT_EVALUATED'},
     ):
-        repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'events':[], 'idempotency_keys':[]})
+        repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'idempotency_keys':[]})
 if not repository.list_entities('reviews', 'demo-project'):
     # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条
     repository.create_entity('reviews', {
@@ -963,15 +963,42 @@ def _find_task(project_id: str, task_id: str) -> dict | None:
 
 @app.post('/api/v1/projects/{project_id}/tasks/drafts', status_code=201)
 def create_task_draft(project_id: str, req: TaskDraftRequest, user: dict = Depends(require_project_analyst)):
-    """草稿:来源为已保存主题版本/规则模板,响应不等待外部 LLM。"""
+    """草稿:来源为已保存主题版本/规则模板,响应不等待外部 LLM。
+
+    创建时把来源主题版本的证据**快照**进 `task_evidence`(5.2):任务因此不随源数据
+    变化而变,而删源数据时也能被 §10.4 的清理找到——只有一个 `source` 字符串的话,
+    源被删之后它指向不存在的东西,却没有任何东西知道该清理它。
+    """
+    task_id = 'task_' + uuid4().hex[:8]
     task = {
-        'id': 'task_' + uuid4().hex[:8], 'project_id': project_id, 'title': req.title,
+        'id': task_id, 'project_id': project_id, 'title': req.title,
         'source': req.source_topic_version_id or 'manual', 'owner_id': None, 'due_at': None,
         'acceptance': None, 'state': 'DRAFT', 'version': 1, 'priority': 'MEDIUM',
-        'events': [], 'effect_status': 'NOT_EVALUATED', 'idempotency_keys': [],
+        'effect_status': 'NOT_EVALUATED', 'idempotency_keys': [],
     }
     repository.create_entity('tasks', task)
+    if req.source_topic_version_id:
+        snapshot_task_evidence(project_id, task_id, req.source_topic_version_id)
     return task
+
+
+def snapshot_task_evidence(project_id: str, task_id: str, topic_version_id: str) -> int:
+    """把某个主题版本的证据复制成任务的固定来源快照。
+
+    复制的是**那一条具体证据的 feedback_id 与引文**,不是「按主题 id 去查」——
+    后者会随主题的新版本而变化,那就不是快照了。
+    """
+    rows = []
+    for index, item in enumerate(repository.list_topic_evidence(project_id, topic_version_id)):
+        if not item.get('feedback_id'):
+            continue
+        rows.append({
+            'id': f'tve_{task_id}_{index}',
+            'feedback_id': str(item['feedback_id']),
+            'topic_version_id': topic_version_id,
+            'quote_redacted': redact_text(str(item.get('quote') or ''))['text'],
+        })
+    return repository.save_task_evidence(project_id, task_id, rows)
 
 @app.post('/api/v1/projects/{project_id}/tasks/{task_id}/confirm')
 def confirm_task(project_id: str, task_id: str, req: TaskConfirmRequest, idempotency_key: str | None = Header(None), user: dict = Depends(require_project_analyst)):
@@ -983,7 +1010,8 @@ def confirm_task(project_id: str, task_id: str, req: TaskConfirmRequest, idempot
         return task
     try:
         from .tasks import FieldValidationError, InvalidTransition, VersionConflict, confirm_draft
-        confirm_draft(task, req.expected_version, req.owner_id, req.due_at, req.acceptance, user.get('id', 'demo-user'))
+        task, event = confirm_draft(task, req.expected_version, req.owner_id, req.due_at,
+                                    req.acceptance, user.get('id', 'demo-user'))
     except VersionConflict:
         raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
     except InvalidTransition:
@@ -992,9 +1020,8 @@ def confirm_task(project_id: str, task_id: str, req: TaskConfirmRequest, idempot
         raise HTTPException(422, detail={'code': 'field_required', 'message': str(exc)})
     if idempotency_key:
         task.setdefault('idempotency_keys', []).append(idempotency_key)
-    # list_entities 返回快照副本,状态与事件必须显式写回仓储(同一次更新)
-    repository.update_entity('tasks', task_id, task)
-    return task
+    # 状态与事件**同一次仓储调用**:分开写会留下「状态变了但没有对应事件」的任务
+    return repository.save_task_transition(project_id, task_id, task, event)
 
 @app.post('/api/v1/projects/{project_id}/tasks/{task_id}/transition')
 def transition_task_route(project_id: str, task_id: str, req: TaskTransitionRequest, idempotency_key: str | None = Header(None), user: dict = Depends(require_project_analyst)):
@@ -1007,17 +1034,17 @@ def transition_task_route(project_id: str, task_id: str, req: TaskTransitionRequ
     is_assignee = bool(task.get('owner_id')) and task.get('owner_id') == user.get('id')
     try:
         from .tasks import InvalidTransition, VersionConflict, transition_task
-        transition_task(task, req.action, req.expected_version, user.get('id', 'demo-user'),
-                        user.get('role', 'ANALYST'), is_assignee, req.comment)
+        task, event = transition_task(task, req.action, req.expected_version,
+                                      user.get('id', 'demo-user'),
+                                      user.get('role', 'ANALYST'), is_assignee, req.comment)
     except VersionConflict:
         raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
     except InvalidTransition:
         raise HTTPException(409, detail={'code': 'INVALID_TRANSITION'})
     if idempotency_key:
         task.setdefault('idempotency_keys', []).append(idempotency_key)
-    # list_entities 返回快照副本,状态与事件必须显式写回仓储(同一次更新)
-    repository.update_entity('tasks', task_id, task)
-    return task
+    # 状态与事件**同一次仓储调用**(计划 5.2:与任务状态更新同一事务)
+    return repository.save_task_transition(project_id, task_id, task, event)
 
 class TaskPatchRequest(BaseModel):
     expected_version: int
@@ -1080,7 +1107,13 @@ def get_task(project_id: str, task_id: str, user: dict = Depends(require_project
     task = _find_task(project_id, task_id)
     if task is None:
         raise HTTPException(404, detail={'code': 'task_not_found'})
-    return {'task': task, 'source_snapshot': task.get('source'), 'events': task.get('events', []),
+    return {'task': task,
+            # `source` 是**指针**(主题版本 id 或 'manual');`evidence_snapshot` 才是
+            # 快照(5.2 的 task_evidence)。此前两者共用一个叫 source_snapshot 的字段,
+            # 而里面装的是指针——名字骗人,前端也就只能把它当字符串显示。
+            'source': task.get('source'),
+            'evidence_snapshot': repository.list_task_evidence(project_id, task_id),
+            'events': repository.list_task_events(project_id, task_id),
             'version': task.get('version', 1)}
 
 # —— W17 复盘路由 ——

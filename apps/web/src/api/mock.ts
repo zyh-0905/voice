@@ -268,7 +268,14 @@ class MockTaskStore {
     this.seed()
     const task = this.tasks.get(taskId)
     if (!task) throw new ApiHttpError(404, 'task_not_found')
-    return { task: { ...task }, source_snapshot: task.source ?? null, events: [...(task.events ?? [])], version: Number((task as never as { version: number }).version ?? 1) }
+    // 与真实端点同形状:source 是指针,evidence_snapshot 才是快照(5.2)
+    return {
+      task: { ...task },
+      source: task.source ?? null,
+      evidence_snapshot: [],
+      events: [...(task.events ?? [])],
+      version: Number((task as never as { version: number }).version ?? 1),
+    }
   }
 
   create(title: string, sourceTopicVersionId: string | null): TaskSummary {
@@ -296,8 +303,10 @@ class MockTaskStore {
     if (!body.owner_id.trim()) throw new ApiHttpError(422, 'field_required')
     if (!body.due_at.trim()) throw new ApiHttpError(422, 'field_required')
     if (!body.acceptance.trim()) throw new ApiHttpError(422, 'field_required')
+    // 改之前的状态要先记下:改完再取就是新状态,而事件里的 from_state 会是错的
+    const confirmFrom = task.status
     Object.assign(task, { status: 'OPEN', owner: body.owner_id, dueAt: body.due_at, acceptance: body.acceptance })
-    this.bump(task, 'confirm', '已派发,等待执行')
+    this.bump(task, 'confirm', '已派发,等待执行', confirmFrom)
     if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
     return { ...task }
   }
@@ -336,16 +345,20 @@ class MockTaskStore {
     }
     const next = allowed[task.status]?.[body.action]
     if (!next) throw new ApiHttpError(409, 'INVALID_TRANSITION')
+    const transitionFrom = task.status
     task.status = next
-    this.bump(task, body.action, body.comment)
+    this.bump(task, body.action, body.comment, transitionFrom)
     if (idempotencyKey) this.keys.add(`${taskId}:${idempotencyKey}`)
     return { ...task }
   }
 
-  private bump(task: TaskSummary, action: string, comment: string) {
+  private bump(task: TaskSummary, action: string, comment: string, previousState: TaskStatus) {
     const record = task as never as { version: number; events: TaskEvent[]; effect_status?: string }
     record.version = Number(record.version) + 1
-    record.events = [...(record.events ?? []), { action, actor: 'demo-user', comment, state: task.status }]
+    record.events = [...(record.events ?? []), {
+      action, actor_id: 'demo-user', comment_redacted: comment,
+      from_state: previousState, to_state: task.status,
+    }]
     // 关闭任务不自动宣称经营效果改善
     if (task.status === 'CLOSED') record.effect_status = 'NOT_EVALUATED'
   }

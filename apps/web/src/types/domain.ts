@@ -186,12 +186,18 @@ export interface ReviewRecord {
   limitations: string[]
 }
 
-/** 任务事件(状态机流转记录,W15 契约) */
+/** 任务事件(状态机流转记录,W15 契约;5.2 起落在 task_events 表里)。
+ *
+ * `from_state` 是 5.2 新增的:JSON 版本只记目标状态,时间线看着能猜改之前是什么,
+ * 但猜不出——而那正是时间线的价值所在。
+ */
 export interface TaskEvent {
   action: string
-  actor: string
-  comment: string
-  state: TaskStatus
+  from_state: TaskStatus
+  to_state: TaskStatus
+  actor_id?: string | null
+  comment_redacted?: string | null
+  created_at?: string | null
 }
 
 /** 任务详情(GET /tasks/{t}):task + 来源快照 + 事件 + 版本 */
@@ -202,7 +208,10 @@ export interface TaskDetail {
     effect_status?: string
     events?: TaskEvent[]
   }
-  source_snapshot: string | null
+  /** 来源**指针**:主题版本 id 或 'manual'。不是快照——指针在源数据被删后就悬空了。 */
+  source: string | null
+  /** 固定的来源证据快照(5.2 的 task_evidence):创建任务时复制,不随源数据变化 */
+  evidence_snapshot: TaskEvidenceSnapshot[]
   events: TaskEvent[]
   version: number
 }
@@ -223,4 +232,11 @@ export interface DatasetBatch {
   rows: number
   status: string
   createdAt: string
+}
+
+/** 任务的固定来源证据快照;删源数据时会被一并清理(10.4)。 */
+export interface TaskEvidenceSnapshot {
+  feedback_id: string
+  topic_version_id: string | null
+  quote_redacted: string
 }

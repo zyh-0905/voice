@@ -142,8 +142,64 @@ class Task(Base):
     acceptance: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(255))
     effect_status: Mapped[str] = mapped_column(String(32), default='NOT_EVALUATED', nullable=False)
-    events: Mapped[list | None] = mapped_column(JSON, default=list)
+    # 事件已移到 task_events 表(5.2);幂等键仍留在这里——它是「这一次确认只生效一次」
+    # 的短列表,按任务读取,没有独立查询需求
     idempotency_keys: Mapped[list | None] = mapped_column(JSON, default=list)
+
+class TaskEvent(Base):
+    """工程计划 5.2 任务事件:与任务状态更新**同一事务**,构成完整时间线。
+
+    此前事件是 `tasks.events` 里的一个 JSON 数组——同一类偏离:它不可按时间线查询,
+    也与任务状态挤在同一行里,拿不到「谁在什么时候把哪个状态改成了哪个状态」这个
+    可查询的事实。`from_state` 是这里的关键:JSON 里只记了目标状态,谁都能看着
+    时间线猜,但猜不出改之前是什么。
+    """
+
+    __tablename__ = 'task_events'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    task_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    from_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    # 只存脱敏正文(10.4):审计与时间线都不带原文
+    comment_redacted: Mapped[str | None] = mapped_column(Text)
+    # 预留:材料引用。首版没有材料概念,一律为空列表而不是编一个引用出来。
+    material_refs_json: Mapped[list | None] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        Index('ix_task_events_project_task', 'project_id', 'task_id', 'created_at'),
+    )
+
+
+class TaskEvidence(Base):
+    """工程计划 5.2 任务证据:**固定来源快照**,删源数据时一并清理。
+
+    此前任务只有一个 `source` 字符串(主题版本 id 或 'manual')——那不是快照,是
+    一个指针:源数据被删之后它仍然指向一个不存在的东西,而 §10.4 要求「数据集删除
+    会使引用该批次的分析、主题结果、复盘和**任务证据**失效/被清理」。
+    没有这张表,那条要求没有可执行的对象。
+
+    `quote_redacted` 是把任务与源反馈绑定在一起的那一句;源正文改不动它,这正是
+    「固定快照」的意义。
+    """
+
+    __tablename__ = 'task_evidence'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    task_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    feedback_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    topic_version_id: Mapped[str | None] = mapped_column(String(200))
+    quote_redacted: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('task_id', 'feedback_id', 'topic_version_id',
+                         name='uq_task_evidence_task_feedback_version'),
+        ForeignKeyConstraint(['project_id', 'feedback_id'], ['feedback.project_id', 'feedback.id'],
+                             name='fk_task_evidence_feedback_same_project'),
+    )
+
 
 class Review(Base):
     __tablename__ = 'reviews'
