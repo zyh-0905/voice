@@ -14,28 +14,40 @@
 
       <template v-if="record">
         <VlPanel title="对照结果" :description="`run ${record.run_id} · revision ${record.revision}`">
-          <WindowCompare :before="record.before" :after="record.after" />
+          <WindowCompare :before="record.before" :after="record.after" :comparability="record.comparability" />
         </VlPanel>
 
         <VlPanel title="统计明细" description="百分点用于占比变化,相对变化单独标注「相对」">
           <dl class="vl-review-detail__metrics">
-            <dt>命中数变化</dt>
-            <dd class="vl-number" data-testid="review-count-change">{{ signed(record.metrics.count_change) }}</dd>
-            <dt>复盘前占比</dt>
-            <dd class="vl-number" data-testid="review-before-pp">{{ percent(record.metrics.share_before_pp) }}</dd>
-            <dt>复盘后占比</dt>
-            <dd class="vl-number" data-testid="review-after-pp">{{ percent(record.metrics.share_after_pp) }}</dd>
-            <dt>占比变化</dt>
-            <dd class="vl-number" data-testid="review-delta-pp">
-              {{ record.metrics.share_delta_pp === null ? '—' : `${record.metrics.share_delta_pp} 个百分点` }}
-            </dd>
-            <dt>相对变化</dt>
-            <dd class="vl-number" data-testid="review-relative">
-              {{ record.metrics.relative_share_change === null ? '—' : `相对 ${(record.metrics.relative_share_change * 100).toFixed(1)}%` }}
-            </dd>
+            <template v-if="metricsVisible">
+              <dt>命中数变化</dt>
+              <dd class="vl-number" data-testid="review-count-change">{{ signed(record.metrics!.count_change) }}</dd>
+              <dt>复盘前占比</dt>
+              <dd class="vl-number" data-testid="review-before-pp">{{ percent(record.metrics!.share_before_pp) }}</dd>
+              <dt>复盘后占比</dt>
+              <dd class="vl-number" data-testid="review-after-pp">{{ percent(record.metrics!.share_after_pp) }}</dd>
+              <dt>占比变化</dt>
+              <dd class="vl-number" data-testid="review-delta-pp">
+                {{ record.metrics!.share_delta_pp === null ? '—' : `${record.metrics!.share_delta_pp} 个百分点` }}
+              </dd>
+              <dt>相对变化</dt>
+              <dd class="vl-number" data-testid="review-relative">
+                {{ record.metrics!.relative_share_change === null ? '—' : `相对 ${(record.metrics!.relative_share_change * 100).toFixed(1)}%` }}
+              </dd>
+            </template>
             <dt>结论状态</dt>
-            <dd data-testid="review-effect">{{ effectStatusLabel(record.effect_status) }}</dd>
+            <dd data-testid="review-effect">{{ conclusionLabel }}</dd>
           </dl>
+          <!-- low_sample 保留原始数量,但不得宣称任何变化结论 -->
+          <p v-if="record.comparability === 'low_sample'" class="vl-review-detail__warning" data-testid="review-low-sample-note">
+            样本量不足(N&lt;50),仅展示原始数量与分母,不输出变化结论。
+          </p>
+        </VlPanel>
+
+        <VlPanel v-if="record.comparability !== 'ok' && record.reasons.length" title="不可比原因">
+          <ul class="vl-review-detail__limits" data-testid="review-reasons">
+            <li v-for="(reason, index) in record.reasons" :key="index">{{ reason }}</li>
+          </ul>
         </VlPanel>
 
         <VlPanel title="限制说明">
@@ -59,7 +71,7 @@ import VlButton from '../../components/common/VlButton.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
 import WindowCompare from '../../components/common/WindowCompare.vue'
 import { ApiHttpError, apiClient } from '../../api/client'
-import { effectStatusLabel } from '../../lib/ui-status'
+import { comparabilityLabel, effectStatusLabel } from '../../lib/ui-status'
 import type { ReviewRecord } from '../../types/domain'
 
 const route = useRoute()
@@ -89,11 +101,24 @@ async function load() {
 }
 onMounted(load)
 
+/** metrics 仅在 ok / low_sample 时非空;只有 ok 允许展示变化数字 */
+const metricsVisible = computed(() => record.value?.comparability === 'ok' && record.value.metrics !== null)
+
+const conclusionLabel = computed(() => {
+  if (!record.value) return '—'
+  if (record.value.comparability === 'ok') return effectStatusLabel(record.value.effect_status)
+  return record.value.comparability === 'low_sample' ? '样本量不足,不输出结论' : comparabilityLabel(record.value.comparability)
+})
+
 const limitations = computed(() => {
   if (!record.value) return []
   const base = [...record.value.limitations]
-  if (record.value.metrics.comparable) {
+  if (record.value.comparability === 'ok') {
     base.push('观察到反馈占比变化;仅为描述性比较,不能据此证明因果关系。')
+  } else if (record.value.comparability === 'low_sample') {
+    base.push('样本量不足(N<50),不输出变化结论。')
+  } else {
+    base.push('数据不足或口径不可比,不输出变化结论。')
   }
   base.push('复盘结果生成后不再变化;改变筛选条件请新建复盘。')
   return base
@@ -137,5 +162,13 @@ function goBack() {
 }
 .vl-review-detail__error {
   color: var(--vl-color-danger);
+}
+.vl-review-detail__warning {
+  margin: var(--vl-space-4) 0 0;
+  padding: var(--vl-space-2) var(--vl-space-3);
+  border-radius: var(--vl-radius-sm);
+  background: var(--vl-color-warning-bg);
+  color: var(--vl-color-warning);
+  font-size: var(--vl-text-xs);
 }
 </style>

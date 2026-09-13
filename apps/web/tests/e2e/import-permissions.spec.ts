@@ -14,6 +14,13 @@ test('demo user can complete import mapping and see governance report', async ({
   await page.getByTestId('consent-checkbox').check()
   await page.getByTestId('upload-button').click()
   await expect(page.getByTestId('field-mapping')).toBeVisible()
+
+  // 映射步骤**真的在映射**:此前这一屏渲染的是写死的三列,点「下一步」不带任何
+  // 数据,于是它点得过去、也看不出问题。现在列来自上传响应,且正文必填(4.2)——
+  // 不选一个正文列会被服务端以 invalid_mapping 拒绝,所以这里必须真选。
+  const contentSelect = page.locator('select[name="transcript"]')
+  await expect(contentSelect).toBeVisible()
+  await contentSelect.selectOption('content')
   await page.getByTestId('mapping-next').click()
   await expect(page.getByTestId('import-health')).toBeVisible()
 })

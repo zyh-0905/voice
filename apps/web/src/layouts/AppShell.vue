@@ -94,7 +94,7 @@
 // AppShell — 风格规范 5.1:桌面 224px 左侧导航 + 64px 顶部栏 + 自适应内容区;
 // 顶栏放项目切换、当前位置、合成演示/只读提示和用户菜单;页内主操作不放顶栏。
 // 断点:≥1024 常驻侧栏;768-1023 菜单按钮打开模态导航;<768 菜单按钮。
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { DataLine, Finished, Menu, Odometer, Setting, TrendCharts, Upload, Warning } from '@element-plus/icons-vue'
 import ProjectSwitcher from '../components/common/ProjectSwitcher.vue'
@@ -124,6 +124,9 @@ const navItems = [
   { label: '整改任务', path: '/tasks', icon: Finished },
   { label: '效果复盘', path: '/reviews', icon: TrendCharts },
 ]
+
+// 顶栏切换器依赖项目列表:深链直接进入 /p/{p}/... 时也要拉取,否则下拉框只剩当前项的兜底显示
+onMounted(() => { void project.loadProjects() })
 
 const navOpen = ref(false)
 const onKey = (event: KeyboardEvent) => {

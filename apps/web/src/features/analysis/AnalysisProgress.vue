@@ -48,7 +48,9 @@ async function start() {
   run.value = { id: 'pending', status: 'running' }
   sessionStorage.setItem(storageKey.value, JSON.stringify(run.value))
   try {
-    run.value = await client.runAnalysis(datasetId.value)
+    // 必须显式传项目 id:单参重载会把项目硬编码成 demo-project,
+    // 在别的项目里点「开始分析」会把作业建到 demo-project 上。
+    run.value = await client.runAnalysis(projectId.value, datasetId.value)
     sessionStorage.setItem(storageKey.value, JSON.stringify(run.value))
   } catch {
     run.value = { id: 'pending', status: 'error' }

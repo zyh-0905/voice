@@ -10,6 +10,7 @@ DuplicateColumn,而开发库因为先 create_all 再打标完全无感。
   2. upgrade 出来的 schema 与 create_all 出来的 schema 一致(防双向漂移)。
 """
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,19 @@ def _upgrade_to_head(url: str) -> subprocess.CompletedProcess:
 def _schema(engine) -> dict[str, set[str]]:
     inspector = sa.inspect(engine)
     return {table: {column['name'] for column in inspector.get_columns(table)}
+            for table in inspector.get_table_names() if table != 'alembic_version'}
+
+
+def _nullability(engine) -> dict[str, dict[str, bool]]:
+    """每个表每一列是否可空。
+
+    只比列名会漏掉**可空性差异**,而那是会真实炸掉的一类:0003 的
+    `nullable=(c in ('id','project_id','title','finding'))` 把语义写反,导致
+    `tasks.owner` 在迁移里是 NOT NULL 而模型允许为空——真实 PostgreSQL 上不带
+    owner 建任务直接 NotNullViolation,内存仓储完全看不见。
+    """
+    inspector = sa.inspect(engine)
+    return {table: {column['name']: bool(column['nullable']) for column in inspector.get_columns(table)}
             for table in inspector.get_table_names() if table != 'alembic_version'}
 
 
@@ -79,3 +93,59 @@ def test_migrated_schema_matches_models(tmp_path):
             f'{table} 列不一致\n迁移多出: {sorted(migrated[table] - modelled[table])}\n'
             f'模型多出: {sorted(modelled[table] - migrated[table])}'
         )
+
+    # 可空性:两个方向都要对。迁移比模型严 → 真实写入会炸;比模型松 → 真实库
+    # 接受模型说不存在的行。两个方向都不会被「列名一致」发现。
+    migrated_nullable = _nullability(sa.create_engine(url))
+    modelled_nullable = _nullability(model_engine)
+    for table in sorted(migrated_nullable):
+        for column, nullable in sorted(migrated_nullable[table].items()):
+            other = modelled_nullable.get(table, {}).get(column)
+            assert nullable == other, (
+                f'{table}.{column} 可空性不一致:'
+                f'迁移={"可空" if nullable else "NOT NULL"}, '
+                f'模型={"可空" if other else "NOT NULL"}'
+            )
+
+
+def test_migrated_schema_accepts_application_writes(tmp_path):
+    """迁移产出的 schema 必须能承受应用的真实写入。
+
+    只比对列名是不够的:`create_all` 按**当前模型**建表,而迁移产出的 schema 可能
+    带着历史约束。`reviews.finding` 曾是 NOT NULL(旧「效果复查」设计的遗留列,
+    计划 5.2 里根本没有它),而入内存仓储不校验列约束——于是一直到真实部署
+    PostgreSQL 上才炸成 500,整套测试全绿。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.sql_repository import SQLAlchemyRepository
+
+    url = _fresh_url(tmp_path, 'writable.db')
+    result = _upgrade_to_head(url)
+    assert result.returncode == 0, result.stderr
+    repo = SQLAlchemyRepository(session_factory=sessionmaker(bind=sa.create_engine(url)))
+
+    # 复盘写入:字段与路由构造的 review 字典一致
+    repo.create_entity('reviews', {
+        'id': 'rv_1', 'project_id': 'p', 'run_id': 'run_1', 'revision': 1,
+        'topic_version_ids': ['t1'], 'task_id': None,
+        'before': {'n': 1, 'N': 2}, 'after': {'n': 1, 'N': 2},
+        'metrics': None, 'effect_status': 'INSUFFICIENT_DATA', 'limitations': [],
+    })
+    assert [item['id'] for item in repo.list_entities('reviews', 'p')] == ['rv_1']
+
+
+def test_revision_ids_fit_in_the_version_column():
+    """`alembic_version.version_num` 是 varchar(32)。
+
+    写超了会在升级到该版本的**最后一刻**炸(版本号写不进去),而那时前面的 DDL
+    都已经执行——排查起来像是迁移内容有问题,实际只是名字太长。
+    """
+    from pathlib import Path as _Path
+
+    versions = _Path(__file__).resolve().parents[1] / 'migrations' / 'versions'
+    too_long = [(path.name, match.group(1), len(match.group(1)))
+                for path in sorted(versions.glob('*.py'))
+                for match in [re.search(r"^revision = '([^']+)'", path.read_text(encoding='utf-8'), re.M)]
+                if match and len(match.group(1)) > 32]
+    assert not too_long, f'revision id 超过 32 字符: {too_long}'

@@ -4,6 +4,30 @@ export interface DatasetPreview {
   rows: number
   status: string
   hasTime: boolean
+  /** 来源列名(脱敏预览的表头)。向导据此渲染映射步骤——此前那一屏是写死的三列。 */
+  headers: string[]
+  /** 上传时的脱敏预览行(最多 20 行,4.3) */
+  rows_preview: DatasetRow[]
+  /** XLSX 的全部工作表名;单表或非 XLSX 时为空 */
+  sheetNames: string[]
+  /** 当前选中的工作表(4.3) */
+  sheetName: string | null
+}
+
+/** 工程计划 4.2 的标准反馈字段:映射目标只能是它们 */
+export type StandardField = 'feedback_id' | 'content' | 'created_at' | 'channel'
+  | 'product' | 'rating' | 'order_id' | 'order_ref' | 'status'
+
+export type DatasetRow = Record<string, string>
+
+/** 治理请求:§4.3 的映射、工作表、时区与时间策略都要送到服务端。
+ *
+ * 此前向导发的是空对象,于是四个选项在真实与 mock 两种模式下都不生效。 */
+export interface ValidateBody {
+  mapping?: Record<string, string>
+  sheet_name?: string
+  time_policy?: 'strict' | 'static'
+  timezone?: string
 }
 export interface ImportHealth {
   completeness: number
@@ -154,7 +178,20 @@ export interface ReviewMetrics {
   comparable: boolean
 }
 
-/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 限制 */
+/** 复盘可比性(计划 7.5):ok 可比;insufficient 不可比;low_sample 保留数量但不给结论 */
+export type ReviewComparability = 'ok' | 'insufficient' | 'low_sample'
+
+/** 复盘的单个窗口:边界 + 服务端推导的 n/N + 无法确定发生时间的行数;半开区间 [start, end) */
+export interface ReviewWindow {
+  start: string
+  end: string
+  n: number
+  N: number
+  untimed: number
+}
+
+/** 复盘记录(GET /reviews/{r}):固定统计结果 + 分母 + 版本 + 可比性与原因;
+ *  不可比时 metrics 为 null,不得回退展示任何变化数字。 */
 export interface ReviewRecord {
   id: string
   project_id: string
@@ -162,19 +199,29 @@ export interface ReviewRecord {
   revision: number
   topic_version_ids: string[]
   task_id: string | null
-  before: { n: number; N: number }
-  after: { n: number; N: number }
-  metrics: ReviewMetrics
-  effect_status: 'NOT_EVALUATED' | 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
+  before: ReviewWindow
+  after: ReviewWindow
+  filters: Record<string, string | null>
+  alignment_confirmed: boolean
+  metrics: ReviewMetrics | null
+  comparability: ReviewComparability
+  reasons: string[]
+  effect_status: 'INSUFFICIENT_DATA' | 'OBSERVED_CHANGE'
   limitations: string[]
 }
 
-/** 任务事件(状态机流转记录,W15 契约) */
+/** 任务事件(状态机流转记录,W15 契约;5.2 起落在 task_events 表里)。
+ *
+ * `from_state` 是 5.2 新增的:JSON 版本只记目标状态,时间线看着能猜改之前是什么,
+ * 但猜不出——而那正是时间线的价值所在。
+ */
 export interface TaskEvent {
   action: string
-  actor: string
-  comment: string
-  state: TaskStatus
+  from_state: TaskStatus
+  to_state: TaskStatus
+  actor_id?: string | null
+  comment_redacted?: string | null
+  created_at?: string | null
 }
 
 /** 任务详情(GET /tasks/{t}):task + 来源快照 + 事件 + 版本 */
@@ -185,7 +232,10 @@ export interface TaskDetail {
     effect_status?: string
     events?: TaskEvent[]
   }
-  source_snapshot: string | null
+  /** 来源**指针**:主题版本 id 或 'manual'。不是快照——指针在源数据被删后就悬空了。 */
+  source: string | null
+  /** 固定的来源证据快照(5.2 的 task_evidence):创建任务时复制,不随源数据变化 */
+  evidence_snapshot: TaskEvidenceSnapshot[]
   events: TaskEvent[]
   version: number
 }
@@ -206,4 +256,11 @@ export interface DatasetBatch {
   rows: number
   status: string
   createdAt: string
+}
+
+/** 任务的固定来源证据快照;删源数据时会被一并清理(10.4)。 */
+export interface TaskEvidenceSnapshot {
+  feedback_id: string
+  topic_version_id: string | null
+  quote_redacted: string
 }

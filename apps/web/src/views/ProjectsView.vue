@@ -1,35 +1,52 @@
 <template>
   <div class="vl-page">
     <PageHeader title="选择项目" description="选择一个项目进入工作台。仅展示你有权限访问的项目。" />
-    <ul class="vl-projects">
-      <li v-for="project in projects.projects" :key="project.id" class="vl-projects__item">
-        <button type="button" class="vl-project-card" data-testid="project-card" @click="enter(project.id)">
-          <span class="vl-project-card__name">{{ project.name }}</span>
-          <span v-if="project.description" class="vl-project-card__desc">{{ project.description }}</span>
-          <span class="vl-project-card__meta">
-            <span class="vl-project-card__role">角色:{{ roleLabel }}</span>
-            <DemoNotice source-kind="synthetic" />
-          </span>
-        </button>
-      </li>
-    </ul>
+
+    <AsyncState :status="projects.projectsStatus" :message="projects.projectsError || undefined">
+      <template #empty>
+        <EmptyState text="暂无可访问的项目" hint="当前账号还没有被加入任何项目,请联系管理员" />
+      </template>
+      <template #error>
+        <p class="vl-projects__error">暂时无法获取项目列表,请稍后重试。</p>
+        <VlButton variant="secondary" @click="projects.loadProjects()">重试</VlButton>
+      </template>
+
+      <ul class="vl-projects">
+        <li v-for="project in projects.projects" :key="project.id" class="vl-projects__item">
+          <button type="button" class="vl-project-card" data-testid="project-card" @click="enter(project.id)">
+            <span class="vl-project-card__name">{{ project.name }}</span>
+            <span v-if="project.description" class="vl-project-card__desc">{{ project.description }}</span>
+            <span class="vl-project-card__meta">
+              <span class="vl-project-card__role">角色:{{ roleLabel }}</span>
+              <DemoNotice source-kind="synthetic" />
+            </span>
+          </button>
+        </li>
+      </ul>
+    </AsyncState>
   </div>
 </template>
 
 <script setup lang="ts">
 // ProjectsView — 风格规范第 7 节 /projects:简洁项目列表/小卡片,显示角色、项目名、真实/演示身份。
-import { computed } from 'vue'
+// 列表来自 store 的 loadProjects()(GET /projects);加载/空/错误按 AsyncState 单状态渲染。
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useSessionStore } from '../stores/session'
 import PageHeader from '../components/common/PageHeader.vue'
 import DemoNotice from '../components/common/DemoNotice.vue'
+import AsyncState from '../components/common/AsyncState.vue'
+import EmptyState from '../components/common/EmptyState.vue'
+import VlButton from '../components/common/VlButton.vue'
 
 const router = useRouter()
 const projects = useProjectStore()
 const session = useSessionStore()
 
 const roleLabel = computed(() => (session.user?.role === 'VIEWER' ? '只读' : '可分析'))
+
+onMounted(() => { void projects.loadProjects() })
 
 function enter(projectId: string) {
   projects.selectProject(projectId)
@@ -45,6 +62,9 @@ function enter(projectId: string) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
   gap: var(--vl-space-4);
+}
+.vl-projects__error {
+  color: var(--vl-color-danger);
 }
 .vl-project-card {
   width: 100%;

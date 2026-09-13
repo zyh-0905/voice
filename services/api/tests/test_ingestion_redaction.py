@@ -14,6 +14,7 @@ from app.ingestion import parse_csv_text, redact_text
 from app.main import repository
 from app.pipeline import _flatten_rows
 from support.client import make_client
+from support.feedback import run_with_feedback, seed_run_feedback
 
 client = make_client()
 
@@ -81,11 +82,18 @@ def test_validation_preview_never_exposes_raw_pii():
 
 
 def test_pipeline_and_feedback_see_the_same_redacted_body():
-    """证据引文与 GET /feedback 的正文同源,offset 才能在正文里定位(计划 8.2/744)。"""
+    """证据引文与 GET /feedback 的正文同源,offset 才能在正文里定位(计划 8.2/744)。
+
+    5.2 之后两条路径都从 `feedback` 表取数:把批次的手工行经生产的派生函数
+    播种进去(而不是塞进 run 的 JSON 副本),才证明的是真实取数路径的一致。
+    """
     project_id = _project()
     dataset = _upload(project_id).json()
 
-    rows, sources, _ = _flatten_rows({'datasets': [dataset]})
+    run = {'id': 'run_redact', 'project_id': project_id,
+           'dataset_ids': [dataset['id']], 'datasets': [dataset]}
+    seed_run_feedback(repository, run)
+    rows, sources, _ = _flatten_rows(run, repository)
     assert rows, '流水线应至少展开出一条反馈'
     for row in rows:
         for raw in _RAW_VALUES:
@@ -210,3 +218,24 @@ def test_reupload_dedupe_echo_is_redacted():
     blob = json.dumps(echoed.json(), ensure_ascii=False)
     for raw in ('person@example.com', '13812345678'):
         assert raw not in blob, f'重传回显泄漏了 {raw}'
+
+
+def test_identity_field_is_not_part_of_the_feedback_body():
+    """标识字段不属于反馈正文。
+
+    把它拼进正文会让 ID 进入向量、主题引语与证据摘录——用户会在「原文与来源」
+    里读到以 "fb_xxx" 开头的引文。流水线与证据源端点共用同一份口径。
+    """
+    from app.ingestion import row_text
+
+    body = row_text({'feedback_id': 'fb_7', 'id': 'fb_7', 'note': '物流很慢', 'channel': '在线客服'})
+    assert 'fb_7' not in body, '标识不得并入正文'
+    assert '物流很慢' in body and '在线客服' in body, '业务字段仍要保留'
+    # 与流水线取数保持一致(两处对不上会让引文 offset 无法定位)。
+    # 正文与 id 来自 feedback 表,所以先从表里取真实 id,再比对正文
+    from app.pipeline import _flatten_rows
+    repository, run = run_with_feedback({'id': 'run_identity', 'datasets': [
+        {'id': 'ds', 'preview': {'rows': [{'feedback_id': 'fb_7', 'note': '物流很慢'}]}},
+    ]}, project_id='p')
+    rows, sources, _ = _flatten_rows(run, repository)
+    assert sources[run['run_feedback_ids'][0]] == '物流很慢'

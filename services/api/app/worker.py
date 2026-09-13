@@ -33,8 +33,10 @@ class _AnalysisStoreAdapter:
 
 
 class AnalysisWorker:
-    def __init__(self, analyses: MutableMapping[str, dict]):
+    def __init__(self, analyses: MutableMapping[str, dict], repository=None):
         self.analyses = analyses
+        # 传仓储时,风险候选会写进项目复核队列;不传则只算不写
+        self.repository = repository
         self.store = _AnalysisStoreAdapter(analyses)
         self.lease_owner = f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
@@ -48,7 +50,7 @@ class AnalysisWorker:
         try:
             # W11:分析阶段执行完整流水线(风险扫描 → 分块/向量/聚类/命名 → 发布 revision)
             from .pipeline import run_analysis_pipeline
-            run_analysis_pipeline(self.store, analysis_id)
+            run_analysis_pipeline(self.store, analysis_id, self.repository)
             run = self.analyses[analysis_id]
             run.update(status="done", stage="completed", progress=int(run.get("total") or 0),
                        lease_owner=None, lease_expires_at=None)

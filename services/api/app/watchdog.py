@@ -15,7 +15,7 @@ class RunWatchdog:
     def __init__(self, analyses: MutableMapping[str, dict], publisher: Callable[..., Any] | None = None):
         self.analyses = analyses
         if publisher is None:
-            from .tasks import run_analysis_task
+            from .celery_tasks import run_analysis_task
             publisher = run_analysis_task
         self.publisher = publisher
 

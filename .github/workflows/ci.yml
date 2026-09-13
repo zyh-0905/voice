@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -83,8 +83,66 @@ jobs:
         run: npm run test:unit -- --run
       - working-directory: apps/web
         run: npm run build
+      # E2E(含视觉基线)**在 Playwright 官方镜像里跑**。
+      #
+      # 基线是渲染环境的函数,不只是平台的:同一份 linux 基线,官方镜像里页面高
+      # 2037px,ubuntu-latest runner 上是 2073px——36px 的字体度量差异,足以让
+      # 视觉用例全红(实测:ratio 0.03 像素不同)。
+      #
+      # 所以生成与校验必须用同一个环境。镜像 tag 从 package-lock 里取,不写死,
+      # 免得 playwright 升级后镜像与浏览器版本对不上。
+      - name: Resolve Playwright version
+        id: pw
+        working-directory: apps/web
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: E2E in the Playwright image
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -v /work/apps/web/node_modules \
+            -w /work/apps/web \
+            mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-jammy \
+            sh -c "npm ci --no-audit --no-fund && npx playwright test --project=chromium --workers=1"
+
+
+  # 真实 API 闭环(工程计划 14.3):前端不用 mock,直连 uvicorn 上的真实 FastAPI。
+  # 与 frontend 任务分开,因为它同时需要 Python 与 Node;而 frontend 任务跑的是
+  # mock 套件——那一套只能证明前端自洽,证明不了前后端契约一致。
+  real-api:
+    runs-on: ubuntu-latest
+    # 后端连**真实 PostgreSQL**。此前跑在内存仓储上,于是「真实」只到 HTTP 层为止
+    # ——而内存仓储不校验列约束也不校验外键,`save_stages` 的运算符优先级、
+    # `tasks.owner` 的可空性、删除顺序这三类缺陷它一个都看不见。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: voicelens
+          POSTGRES_PASSWORD: voicelens
+          POSTGRES_DB: voicelens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voicelens -d voicelens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # 后端跑在容器里;host 网络让它直接看到 runner 上的 postgres 与端口
+      REAL_API_DOCKER_NETWORK: host
+      REAL_API_DATABASE_URL: postgresql+psycopg://voicelens:voicelens@localhost:5432/voicelens
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Build the API image
+        run: docker build -f services/api/Dockerfile -t voice-api:latest .
+      - working-directory: apps/web
+        run: npm ci
       - working-directory: apps/web
         run: npx playwright install --with-deps chromium
-      - working-directory: apps/web
-        run: npm run test:e2e -- --project=chromium --workers=1
-
+      - name: Playwright against the real API
+        working-directory: apps/web
+        run: npm run test:e2e:real

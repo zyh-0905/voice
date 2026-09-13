@@ -116,3 +116,94 @@ describe('http client project members & settings', () => {
     expect((failure as ApiHttpError).status).toBe(409)
   })
 })
+
+
+describe('apiErrorMessage:把服务端错误体折成可读文案', () => {
+  // FastAPI 的 detail 多数是 {'code': ...} 结构化对象;直接塞进 Error.message 会显示成
+  // '[object Object]',真正的错误码被丢掉
+  function stubError(body: unknown, status: number) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      String(url).includes('/auth/csrf')
+        ? jsonResponse({ csrf_token: CSRF_TOKEN })
+        : jsonResponse(body, status)))
+    return fetchHttpClient('/api')
+  }
+
+  it('结构化 detail 不再显示 [object Object]', async () => {
+    const err = await stubError({ detail: { code: 'VERSION_CONFLICT' } }, 409)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect(err).toBeInstanceOf(ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('VERSION_CONFLICT')
+  })
+
+  it('带 message 的结构化 detail 同时保留错误码与说明', async () => {
+    const err = await stubError({ detail: { code: 'invalid_file', message: 'CSV 表头缺失' } }, 422)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('invalid_file: CSV 表头缺失')
+  })
+
+  it('字符串 detail 保持原样', async () => {
+    const err = await stubError({ detail: 'plain reason' }, 400)
+      .getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('plain reason')
+  })
+
+  it('无 detail 时回落到状态码文案', async () => {
+    const err = await stubError({}, 503).getSettings('p').catch((e: unknown) => e as ApiHttpError)
+    expect((err as ApiHttpError).message).toBe('Request failed (503)')
+  })
+})
+
+describe('治理请求必须带上 §4.3 的选项', () => {
+  beforeEach(() => { sessionStorage.clear(); vi.restoreAllMocks() })
+
+  it('映射、工作表与时间策略真的送到 /validate', async () => {
+    // 此前这里发的是 body: '{}' —— 四个选项在真实模式下一个都不生效,
+    // 而向导照常前进、报告照常生成,看不出任何异常。
+    const { calls } = stubFetch()
+    await fetchHttpClient('/api').health('demo-project', 'ds-1', {
+      mapping: { msg: 'content', fid: 'feedback_id' },
+      sheet_name: '二月',
+      time_policy: 'strict',
+    })
+
+    const validate = calls.find(c => c.url.includes('/validate'))
+    expect(validate).toBeDefined()
+    const sent = JSON.parse(String(validate?.init.body))
+    expect(sent).toEqual({
+      mapping: { msg: 'content', fid: 'feedback_id' },
+      sheet_name: '二月',
+      time_policy: 'strict',
+    })
+  })
+
+  it('没有选项时仍然发一个合法对象,而不是空串', async () => {
+    const { calls } = stubFetch()
+    await fetchHttpClient('/api').health('demo-project', 'ds-1')
+
+    const validate = calls.find(c => c.url.includes('/validate'))
+    expect(JSON.parse(String(validate?.init.body))).toEqual({})
+  })
+
+  it('上传结果带回真实列名与工作表清单', async () => {
+    // 映射步骤此前渲染的是写死的三列,因为 DatasetPreview 里根本没有列名
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url, init })
+      if (String(url).includes('/auth/csrf')) return jsonResponse({ csrf_token: CSRF_TOKEN })
+      return jsonResponse({
+        id: 'ds-1', name: 'm.xlsx', rows: 2, status: 'uploaded', hasTime: false,
+        preview: { headers: ['msg', 'ts'], rows: [{ msg: '甲', ts: '' }],
+                   sheet_name: '一月', sheet_names: ['一月', '二月'] },
+      })
+    }))
+
+    const file = new File(['x'], 'm.xlsx')
+    const preview = await fetchHttpClient('/api').upload('demo-project', file)
+
+    expect(preview.headers).toEqual(['msg', 'ts'])
+    expect(preview.sheetNames).toEqual(['一月', '二月'])
+    expect(preview.sheetName).toBe('一月')
+    expect(preview.rows_preview).toEqual([{ msg: '甲', ts: '' }])
+  })
+})

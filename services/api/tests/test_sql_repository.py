@@ -23,7 +23,8 @@ def test_explicit_writes_survive_new_sessions(repo):
 
 def test_worker_states_are_committed(repo):
     repo.analyses['run'] = {'id': 'run', 'project_id': 'p', 'dataset_ids': ['ds'], 'status': 'queued', 'total': 2}
-    worker = AnalysisWorker(repo.analyses)
+    # 流水线需要仓储:反馈正文取自 feedback 实体表,风险候选也要写进项目队列
+    worker = AnalysisWorker(repo.analyses, repo)
     worker.cancel('run')
     assert repo.analyses['run']['status'] == 'cancelled'
     worker.retry('run')
@@ -38,7 +39,7 @@ def test_api_validation_and_inline_run_persist(repo, monkeypatch):
     monkeypatch.setattr(main, 'repository', repo)
     monkeypatch.setattr(main, 'datasets', repo.datasets)
     monkeypatch.setattr(main, 'analyses', repo.analyses)
-    monkeypatch.setattr(main, 'worker', AnalysisWorker(repo.analyses))
+    monkeypatch.setattr(main, 'worker', AnalysisWorker(repo.analyses, repo))
     monkeypatch.setenv('RUN_WORKER_INLINE', 'true')
     client = TestClient(main.app)
     uploaded = client.post('/api/v1/projects/p/datasets', files={'file': ('a.csv', b'text\nhello\n')}, data={'consent': 'true'})
@@ -59,44 +60,63 @@ def test_task_state_machine_columns_round_trip(repo):
     from app.tasks import confirm_draft, transition_task
     repo.create_entity('tasks', {
         'id': 't1', 'project_id': 'p', 'title': '整改草稿', 'state': 'DRAFT',
-        'version': 1, 'events': [], 'idempotency_keys': [], 'effect_status': 'NOT_EVALUATED',
+        'version': 1, 'idempotency_keys': [], 'effect_status': 'NOT_EVALUATED',
     })
     task = repo.list_entities('tasks', 'p')[0]
-    confirm_draft(task, 1, 'owner-1', '2026-09-20T18:00:00+08:00', '验收标准', 'demo-user')
-    repo.update_entity('tasks', 't1', task)
+    task, event = confirm_draft(task, 1, 'owner-1', '2026-09-20T18:00:00+08:00', '验收标准', 'demo-user')
+    # 状态与事件同一次仓储调用(5.2:与任务状态更新同一事务)
+    repo.save_task_transition('p', 't1', task, event)
 
     stored = repo.list_entities('tasks', 'p')[0]
     assert stored['state'] == 'OPEN'
     assert stored['version'] == 2
     assert stored['owner_id'] == 'owner-1'
     assert stored['acceptance'] == '验收标准'
-    assert len(stored['events']) == 1
+    events = repo.list_task_events('p', 't1')
+    assert len(events) == 1 and events[0]['from_state'] == 'DRAFT'
+    assert events[0]['to_state'] == 'OPEN'
 
-    transition_task(stored, 'start', 2, 'demo-user', 'ANALYST', True, '')
-    repo.update_entity('tasks', 't1', stored)
+    stored, event = transition_task(stored, 'start', 2, 'demo-user', 'ANALYST', True, '')
+    repo.save_task_transition('p', 't1', stored, event)
     assert repo.list_entities('tasks', 'p')[0]['state'] == 'IN_PROGRESS'
+    assert len(repo.list_task_events('p', 't1')) == 2
 
 
 def test_task_events_and_idempotency_keys_persist(repo):
+    """事件走 task_events 表;幂等键仍留在任务行上(短列表,按任务读)。"""
     repo.create_entity('tasks', {
         'id': 't2', 'project_id': 'p', 'title': '任务', 'state': 'DRAFT', 'version': 1,
-        'events': [{'action': 'confirm', 'actor': 'u', 'comment': 'c', 'state': 'OPEN'}],
         'idempotency_keys': ['key-1'], 'effect_status': 'NOT_EVALUATED',
     })
+    repo.append_task_event('p', 't2', {
+        'id': 'e1', 'action': 'confirm', 'from_state': 'DRAFT', 'to_state': 'OPEN',
+        'actor_id': 'u', 'comment_redacted': 'c', 'material_refs_json': [],
+    })
+
     stored = repo.list_entities('tasks', 'p')[0]
-    assert stored['events'][0]['action'] == 'confirm'
     assert stored['idempotency_keys'] == ['key-1']
+    events = repo.list_task_events('p', 't2')
+    assert len(events) == 1
+    assert events[0]['action'] == 'confirm'
+    assert events[0]['from_state'] == 'DRAFT' and events[0]['to_state'] == 'OPEN'
 
 
 def test_risk_review_state_persists(repo):
-    repo.create_entity('risks', {
-        'id': 'r1', 'project_id': 'p', 'title': '候选', 'severity': 'CRITICAL',
-        'review_state': 'pending', 'status': 'OPEN', 'rule': 'R-302',
-    })
-    stored = repo.list_entities('risks', 'p')[0]
+    """候选落 `risk_findings` 表(5.2):旧 `risks` 表少的那几列必须真的往返。
+
+    旧表把 feedback_id / rule_id / policy_version / evidence_offsets 静默丢掉,
+    SQL 仓储按列过滤时两个模式各说各话——这里正是钉住这一点的用例。
+    """
+    repo.save_risk_findings('p', 'run-1', [{
+        'id': 'r1', 'rule_id': 'R-302', 'policy_version': 'ecommerce-v1',
+        'severity': 'CRITICAL', 'reason': '候选', 'evidence_offsets': {'start': 1, 'end': 4},
+    }])
+    stored = repo.list_risk_findings('p')[0]
     assert stored['severity'] == 'CRITICAL'
     assert stored['review_state'] == 'pending'
-    assert stored['rule'] == 'R-302'
+    assert stored['rule_id'] == 'R-302'
+    assert stored['policy_version'] == 'ecommerce-v1'
+    assert stored['evidence_offsets'] == {'start': 1, 'end': 4}
 
 
 def test_review_metrics_persist(repo):

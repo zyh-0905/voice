@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol
 
+from .revisions import plan_revision
+
 
 class PublishValidationError(ValueError):
     """引用不存在、quote 与原文不一致或计数不符;发布整体拒绝。"""
@@ -96,12 +98,28 @@ def publish_revision(
     drafts: list[TopicDraft],
     sources: Mapping[str, str],
     unassigned_count: int,
+    repository,
 ) -> dict:
-    """单写原子发布:校验→构建快照→一次 update_analysis。"""
+    """单写原子发布:校验→构建快照→把快照展开成实体行,一次事务写入。
+
+    发布落的**不是 JSON 快照**而是实体行(工程计划 5.2):主题、主题版本、
+    证据与 revision 记录各归各表。快照改为读取时按 manifest 现算——存下来就又
+    变成两份会分叉的副本,而那正是 5.2 明文要移除的东西。
+
+    版本号取自 `analysis_revisions` 而不是 run 里残留的标量:人工校正推进的是
+    revision 序列,从表里取才不会在「校正与重跑并发」时把同一个 revision 写两次。
+    """
     run = store.get_analysis(analysis_id)
     if run is None:
         raise PublishValidationError(f'analysis not found: {analysis_id}')
-    revision = int(run.get('revision') or 0) + 1
+    project_id = run.get('project_id')
+    revision = int(repository.latest_revision(project_id, analysis_id) or 0) + 1
     snapshot = build_revision_snapshot(drafts, sources, unassigned_count, revision)
-    store.update_analysis(analysis_id, {'result': snapshot, 'status': 'done'})
+    # 版本号**必须接着往下编**。不传 next_versions 的话 plan_revision 会对每个主题
+    # 从 1 重新编号,第二次发布的版本 id 与第一次相同——于是新证据被追加到旧版本行上,
+    # 「不可原地更新」当场失效,而且旧 revision 读出来会看到新证据。
+    plan = plan_revision(project_id, analysis_id, snapshot,
+                         next_versions=repository.next_versions_for_run(project_id, analysis_id))
+    repository.save_revision(project_id, analysis_id, plan)
+    store.update_analysis(analysis_id, {'status': 'done'})
     return snapshot

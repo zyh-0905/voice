@@ -33,12 +33,10 @@
                 <span class="vl-review-table__meta">run {{ record.run_id }} · revision {{ record.revision }}</span>
               </th>
               <td class="vl-number">{{ record.before.n }} / {{ record.before.N }} → {{ record.after.n }} / {{ record.after.N }}</td>
-              <td class="vl-review-table__num vl-number">
-                {{ record.metrics.share_delta_pp === null ? '—' : `${record.metrics.share_delta_pp} 个百分点` }}
-              </td>
+              <td class="vl-review-table__num vl-number">{{ deltaLabel(record) }}</td>
               <td>
                 <span class="vl-review-table__status" :class="`vl-review-table__status--${statusKind(record)}`">
-                  {{ effectLabel(record) }}
+                  {{ conclusionLabel(record) }}
                 </span>
               </td>
               <td>
@@ -50,7 +48,7 @@
       </div>
     </AsyncState>
 
-    <!-- W18 创建向导:选择数据/主题/窗口 → 确认映射 → 生成固定口径结果 -->
+    <!-- W18 创建向导:选 run/主题 → 选两个等长不重叠的时间窗 → 人工确认映射 → 服务端推导 n/N -->
     <el-dialog v-model="wizardOpen" title="创建复盘" width="560px" :close-on-click-modal="false" append-to-body>
       <div v-if="wizardStep === 1" class="vl-wizard">
         <div class="vl-field vl-wizard__field">
@@ -70,26 +68,31 @@
           <fieldset class="vl-wizard__window">
             <legend>复盘前窗口</legend>
             <div class="vl-field">
-              <label :for="`wizard-before-n`">命中数 n</label>
-              <input :id="`wizard-before-n`" v-model.number="wizard.nBefore" type="number" min="0" class="vl-wizard__input" data-testid="wizard-before-n" />
+              <label for="wizard-before-start">窗口开始</label>
+              <input id="wizard-before-start" v-model="wizard.beforeStart" type="date" class="vl-wizard__input" data-testid="wizard-before-start" />
             </div>
             <div class="vl-field">
-              <label :for="`wizard-before-N`">分母 N</label>
-              <input :id="`wizard-before-N`" v-model.number="wizard.NBefore" type="number" min="0" class="vl-wizard__input" data-testid="wizard-before-N" />
+              <label for="wizard-before-end">窗口结束</label>
+              <input id="wizard-before-end" v-model="wizard.beforeEnd" type="date" class="vl-wizard__input" data-testid="wizard-before-end" />
             </div>
           </fieldset>
           <fieldset class="vl-wizard__window">
             <legend>复盘后窗口</legend>
             <div class="vl-field">
-              <label :for="`wizard-after-n`">命中数 n</label>
-              <input :id="`wizard-after-n`" v-model.number="wizard.nAfter" type="number" min="0" class="vl-wizard__input" data-testid="wizard-after-n" />
+              <label for="wizard-after-start">窗口开始</label>
+              <input id="wizard-after-start" v-model="wizard.afterStart" type="date" class="vl-wizard__input" data-testid="wizard-after-start" />
             </div>
             <div class="vl-field">
-              <label :for="`wizard-after-N`">分母 N</label>
-              <input :id="`wizard-after-N`" v-model.number="wizard.NAfter" type="number" min="0" class="vl-wizard__input" data-testid="wizard-after-N" />
+              <label for="wizard-after-end">窗口结束</label>
+              <input id="wizard-after-end" v-model="wizard.afterEnd" type="date" class="vl-wizard__input" data-testid="wizard-after-end" />
             </div>
           </fieldset>
         </div>
+        <label class="vl-wizard__confirm">
+          <input v-model="wizard.alignmentConfirmed" type="checkbox" data-testid="wizard-alignment" />
+          <span>目标映射与原任务问题相符(人工确认后才输出变化结论)</span>
+        </label>
+        <p class="vl-wizard__hint">命中数 n 与分母 N 由服务端按 run 与窗口推导,不需要手工填写。</p>
         <p v-if="wizardError" class="vl-wizard__error" data-testid="wizard-error" role="alert">{{ wizardError }}</p>
       </div>
 
@@ -98,11 +101,18 @@
         <dl class="vl-wizard__summary">
           <dt>分析</dt><dd>{{ wizard.runId }} · revision {{ wizard.revision }}</dd>
           <dt>主题</dt><dd>{{ selectedTopicTitle }}</dd>
-          <dt>复盘前</dt><dd class="vl-number">{{ wizard.nBefore }} / {{ wizard.NBefore }}</dd>
-          <dt>复盘后</dt><dd class="vl-number">{{ wizard.nAfter }} / {{ wizard.NAfter }}</dd>
+          <dt>复盘前</dt><dd class="vl-number">{{ wizard.beforeStart }} → {{ wizard.beforeEnd }}</dd>
+          <dt>复盘后</dt><dd class="vl-number">{{ wizard.afterStart }} → {{ wizard.afterEnd }}</dd>
+          <dt>目标映射</dt><dd>{{ wizard.alignmentConfirmed ? '已确认与原任务问题相符' : '未确认' }}</dd>
         </dl>
-        <p v-if="!wizardComparable" class="vl-wizard__warning" data-testid="wizard-insufficient">
-          当前分母为 0,结果将标记为「数据不足」,不会输出变化结论。
+        <p v-if="!wizard.alignmentConfirmed" class="vl-wizard__warning" data-testid="wizard-insufficient">
+          未人工确认目标映射,结果将标记为「无法比较」,不会输出变化结论。
+        </p>
+        <p v-else-if="windowIssues.length" class="vl-wizard__warning" data-testid="wizard-window-warning">
+          {{ windowIssues.join(';') }},结果将标记为「无法比较」,不会输出变化结论。
+        </p>
+        <p v-else class="vl-wizard__hint" data-testid="wizard-windows-ok">
+          两窗等长且不重叠;生成后 n/N 由服务端从 run 推导。
         </p>
       </div>
 
@@ -126,7 +136,8 @@
 
 <script setup lang="ts">
 // ReviewsPage — 工程计划 W18:记录表 + 创建向导;复盘结果不可变;
-// 不可比数据不显示改善结论;n/N、占比、百分点、相对变化始终可见。
+// 向导只收两个等长不重叠的时间窗与人工映射确认,n/N 由服务端从 run 推导;
+// 不可比不显示任何变化数字,low_sample 只展示数量不给结论。
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TrendCharts } from '@element-plus/icons-vue'
@@ -134,9 +145,9 @@ import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import AsyncState from '../../components/common/AsyncState.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
-import { apiClient } from '../../api/client'
+import { ApiHttpError, apiClient } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
-import { effectStatusLabel } from '../../lib/ui-status'
+import { comparabilityLabel, effectStatusLabel } from '../../lib/ui-status'
 import type { ReviewRecord } from '../../types/domain'
 
 const route = useRoute()
@@ -176,14 +187,49 @@ const wizardOpen = ref(false)
 const wizardStep = ref(1)
 const wizardError = ref('')
 const creating = ref(false)
-const wizard = ref({ runId: runOptions.value[0]?.id ?? 'run_demo_001', revision: 1, topicId: 'delivery', nBefore: 168, NBefore: 1000, nAfter: 102, NAfter: 1000 })
+// 默认两窗等长且不重叠([08-01,08-31) 与 [09-01,10-01)),映射需人工勾选确认
+const wizard = ref({
+  runId: runOptions.value[0]?.id ?? 'run_demo_001',
+  revision: 1,
+  topicId: 'delivery',
+  beforeStart: '2026-08-01',
+  beforeEnd: '2026-08-31',
+  afterStart: '2026-09-01',
+  afterEnd: '2026-10-01',
+  alignmentConfirmed: false,
+})
 
 const selectedTopicTitle = computed(() => topicOptions.find(t => t.id === wizard.value.topicId)?.title ?? '—')
-const wizardComparable = computed(() => Number(wizard.value.NBefore) > 0 && Number(wizard.value.NAfter) > 0)
+
+/** date 输入只到日:按 UTC 零点解释,避免本地时区把窗口端点移出等长 */
+function toIso(date: string): string {
+  return `${date}T00:00:00+00:00`
+}
+function windowDays(start: string, end: string): number {
+  return (Date.parse(toIso(end)) - Date.parse(toIso(start))) / 86_400_000
+}
+
+/** 两窗的明显口径问题;是否可比最终由服务端判定,这里只用于确认页提示 */
+const windowIssues = computed(() => {
+  const w = wizard.value
+  if (!w.beforeStart || !w.beforeEnd || !w.afterStart || !w.afterEnd) return ['请完整选择两个窗口的起止日期']
+  const issues: string[] = []
+  if (w.beforeStart >= w.beforeEnd || w.afterStart >= w.afterEnd) issues.push('窗口起点必须早于终点')
+  else {
+    if (windowDays(w.beforeStart, w.beforeEnd) !== windowDays(w.afterStart, w.afterEnd)) issues.push('前后窗口时长不等')
+    if (w.beforeStart < w.afterEnd && w.afterStart < w.beforeEnd) issues.push('前后窗口重叠')
+  }
+  return issues
+})
 
 function goConfirm() {
-  if (Number(wizard.value.nBefore) < 0 || Number(wizard.value.NBefore) < 0 || Number(wizard.value.nAfter) < 0 || Number(wizard.value.NAfter) < 0) {
-    wizardError.value = '数量与分母不能为负数'
+  const w = wizard.value
+  if (!w.beforeStart || !w.beforeEnd || !w.afterStart || !w.afterEnd) {
+    wizardError.value = '请完整选择两个窗口的起止日期'
+    return
+  }
+  if (w.beforeStart >= w.beforeEnd || w.afterStart >= w.afterEnd) {
+    wizardError.value = '窗口起点必须早于终点'
     return
   }
   wizardError.value = ''
@@ -197,17 +243,19 @@ async function submitReview() {
       run_id: wizard.value.runId,
       revision: wizard.value.revision,
       topic_version_ids: [wizard.value.topicId],
-      n_before: Number(wizard.value.nBefore),
-      N_before: Number(wizard.value.NBefore),
-      n_after: Number(wizard.value.nAfter),
-      N_after: Number(wizard.value.NAfter),
+      before: { start: toIso(wizard.value.beforeStart), end: toIso(wizard.value.beforeEnd) },
+      after: { start: toIso(wizard.value.afterStart), end: toIso(wizard.value.afterEnd) },
+      alignment_confirmed: wizard.value.alignmentConfirmed,
     })
     wizardOpen.value = false
     wizardStep.value = 1
     await load()
     void router.push(`/p/${projectId.value}/reviews/${created.id}`)
   } catch (err) {
-    wizardError.value = err instanceof Error ? err.message : '创建失败,请稍后重试'
+    // 404 analysis_not_found:run 不存在或不属于本项目,提示重新选择而不是重试原请求
+    wizardError.value = err instanceof ApiHttpError && err.status === 404
+      ? '分析 run 不存在或不属于当前项目,请重新选择。'
+      : err instanceof Error ? err.message : '创建失败,请稍后重试'
   } finally {
     creating.value = false
   }
@@ -221,12 +269,17 @@ function topicLabel(record: ReviewRecord): string {
   const id = record.topic_version_ids[0]
   return topicOptions.find(t => t.id === id)?.title ?? '复盘主题'
 }
-function effectLabel(record: ReviewRecord): string {
-  return effectStatusLabel(record.effect_status)
+/** 只有 ok 才允许出现变化数字:low_sample 保留数量但不给结论,insufficient 一律 '—' */
+function deltaLabel(record: ReviewRecord): string {
+  if (record.comparability !== 'ok' || !record.metrics || record.metrics.share_delta_pp === null) return '—'
+  return `${record.metrics.share_delta_pp} 个百分点`
+}
+function conclusionLabel(record: ReviewRecord): string {
+  if (record.comparability === 'ok') return effectStatusLabel(record.effect_status)
+  return comparabilityLabel(record.comparability)
 }
 function statusKind(record: ReviewRecord): string {
-  if (!record.metrics.comparable) return 'insufficient'
-  return 'observed'
+  return record.comparability === 'ok' ? 'observed' : 'insufficient'
 }
 </script>
 
@@ -308,6 +361,13 @@ function statusKind(record: ReviewRecord): string {
   font-size: var(--vl-text-xs);
   color: var(--vl-color-text-muted);
   margin-bottom: var(--vl-space-1);
+}
+.vl-wizard__confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--vl-space-2);
+  margin-bottom: var(--vl-space-2);
+  font-size: var(--vl-text-sm);
 }
 .vl-wizard__error {
   color: var(--vl-color-danger);

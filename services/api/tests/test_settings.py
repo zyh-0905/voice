@@ -24,4 +24,61 @@ def test_production_accepts_safe_settings(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
     monkeypatch.setenv("SESSION_STORE", "db")
     monkeypatch.setenv("AUTH_INSECURE_DEV", "false")
+    # 14.1:生产禁止 mock 命名。manual 是允许的「无外部 LLM」档,所以显式选它。
+    monkeypatch.setenv("NAMING_MODE", "manual")
+    # 8.2:生产不允许哈希替身
+    monkeypatch.setenv("EMBEDDING_MODE", "api")
+    monkeypatch.setenv("EMBEDDING_ENDPOINT", "https://embed.example/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "bge-small-zh-v1.5")
     assert validate_production_settings().environment == "production"
+
+
+def test_production_rejects_mock_naming(monkeypatch):
+    """默认值是 mock,而 mock 命名会用确定性的演示数据冒充模型产出——看起来完全正常。"""
+    monkeypatch.setenv("VOICELENS_ENV", "production")
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("DEDUPE_HMAC_SECRET", "a-long-production-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    monkeypatch.setenv("SESSION_STORE", "db")
+    monkeypatch.setenv("AUTH_INSECURE_DEV", "false")
+    monkeypatch.setenv("NAMING_MODE", "mock")
+    with pytest.raises(RuntimeError, match="NAMING_MODE"):
+        validate_production_settings()
+
+
+def test_production_requires_pricing_when_using_a_provider(monkeypatch):
+    """10.5:没有可靠价格配置时禁用付费模式——生产选 provider 却没价格必须拦下。"""
+    monkeypatch.setenv("VOICELENS_ENV", "production")
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("DEDUPE_HMAC_SECRET", "a-long-production-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    monkeypatch.setenv("SESSION_STORE", "db")
+    monkeypatch.setenv("AUTH_INSECURE_DEV", "false")
+    monkeypatch.setenv("NAMING_MODE", "provider")
+    monkeypatch.setenv("MODEL_ENDPOINT", "https://model.example/v1")
+    monkeypatch.setenv("MODEL_ID", "some-model")
+    monkeypatch.delenv("MODEL_PRICE_IN", raising=False)
+    monkeypatch.delenv("MODEL_PRICE_OUT", raising=False)
+    with pytest.raises(RuntimeError, match="MODEL_PRICE_IN"):
+        validate_production_settings()
+
+    monkeypatch.setenv("MODEL_PRICE_IN", "0.000001")
+    monkeypatch.setenv("MODEL_PRICE_OUT", "0.000002")
+    monkeypatch.setenv("EMBEDDING_MODE", "api")
+    monkeypatch.setenv("EMBEDDING_ENDPOINT", "https://embed.example/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "bge-small-zh-v1.5")
+    assert validate_production_settings().environment == "production"
+
+
+def test_production_rejects_the_hashing_embedding_standin(monkeypatch):
+    """8.2:计划冻结的是真实向量模型;替身只作演示,生产放行等于「分析能力」名存实亡。"""
+    monkeypatch.setenv("VOICELENS_ENV", "production")
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("DEDUPE_HMAC_SECRET", "a-long-production-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    monkeypatch.setenv("SESSION_STORE", "db")
+    monkeypatch.setenv("AUTH_INSECURE_DEV", "false")
+    monkeypatch.setenv("NAMING_MODE", "manual")
+    monkeypatch.setenv("EMBEDDING_MODE", "hashing")
+    with pytest.raises(RuntimeError, match="EMBEDDING_MODE"):
+        validate_production_settings()

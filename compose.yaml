@@ -1,6 +1,9 @@
 ﻿services:
   # 一次性迁移:模型新增列不会被 create_all 补上,必须先 upgrade head
   migrate:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-migrate:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -15,6 +18,9 @@
         condition: service_healthy
 
   api:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-api:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -40,6 +46,9 @@
       retries: 5
 
   web:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-web:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -70,6 +79,9 @@
       retries: 10
 
   worker:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-worker:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -89,6 +101,9 @@
         condition: service_healthy
 
   relay:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-relay:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -102,6 +117,68 @@
       AUTH_INSECURE_DEV: "true"
       USE_DATABASE: "1"
       OUTBOX_RELAY_INTERVAL_SECONDS: "5"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # §14.2:watchdog 独立成服务,worker 崩溃后由它把租约过期的 running 作业重排队。
+  # app/watchdog.py 只有类、没有 __main__,所以这里用具名 heredoc 显式跑循环;
+  # `python -m services.api.app.watchdog` 会静默退出——正是「看起来接通、实际是哑的」。
+  # 注意 relay_runner 目前也内联跑同一个 pass,两处并发是已知重复;
+  # 但要拆开必须改 relay_runner(非本文件职责),见 docs/runbooks/restore.md 的已知问题。
+  watchdog:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-watchdog:${VOICELENS_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command:
+      - sh
+      - -c
+      - |
+        exec python - <<'PY'
+        import logging, os, signal, time
+        from services.api.app.repository import get_repository
+        from services.api.app.watchdog import RunWatchdog
+
+        logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+        log = logging.getLogger("watchdog")
+        interval = max(1.0, float(os.getenv("WATCHDOG_INTERVAL_SECONDS", "30")))
+        stop = False
+
+        def _request_stop(signum, _frame):
+            global stop
+            stop = True
+            log.info("received signal %s; stopping watchdog", signum)
+
+        signal.signal(signal.SIGTERM, _request_stop)
+        signal.signal(signal.SIGINT, _request_stop)
+        watchdog = RunWatchdog(get_repository().analyses)
+        log.info("watchdog started (interval=%ss)", interval)
+        while not stop:
+            try:
+                result = watchdog.recover_stale()
+                if result.get("recovered") or result.get("errored"):
+                    log.info("watchdog pass: %s", result)
+            except Exception:
+                log.exception("watchdog pass failed")
+            deadline = time.monotonic() + interval
+            while not stop and time.monotonic() < deadline:
+                time.sleep(min(0.5, deadline - time.monotonic()))
+        log.info("watchdog stopped")
+        PY
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
+      REDIS_URL: redis://redis:6379/0
+      AUTH_REQUIRED: "true"
+      AUTH_INSECURE_DEV: "true"
+      USE_DATABASE: "1"
+      WATCHDOG_INTERVAL_SECONDS: "30"
     depends_on:
       migrate:
         condition: service_completed_successfully

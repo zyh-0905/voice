@@ -1,8 +1,10 @@
 import type {
   AnalysisRun,
+  DatasetRow,
+  ValidateBody,
   DatasetBatch,
   DatasetPreview,
-  ImportHealth,
+  ImportHealthView,
   ReviewRecord,
   RiskItem,
   SummaryResponse,
@@ -59,6 +61,15 @@ export interface TaskPatchBody {
 }
 
 // —— W03 项目成员与项目设置 ——
+
+/** GET /projects 的项目列表项;后端项目实体只保证 id/name,其余字段缺省时不猜测 */
+export interface ProjectSummary {
+  id: string
+  name: string
+  /** 后端项目实体没有描述字段(演示项目除外),缺省时视图不显示 */
+  description?: string
+  timezone?: string
+}
 
 export type ProjectMemberRole = 'OWNER' | 'EDITOR' | 'VIEWER'
 
@@ -151,15 +162,22 @@ export interface RiskReviewBody {
   expected_version?: number
 }
 
+/** 计划 7.5/8.7:窗口只给边界;n/N 由服务端从 run 推导,调用方不得提供 */
+export interface ReviewWindowInput {
+  start: string
+  end: string
+}
+
 export interface ReviewCreateBody {
   task_id?: string | null
   run_id: string
   revision: number
   topic_version_ids: string[]
-  n_before: number
-  N_before: number
-  n_after: number
-  N_after: number
+  before: ReviewWindowInput
+  after: ReviewWindowInput
+  /** 两个窗口共用的渠道/产品条件;不传表示不筛选 */
+  filters?: Record<string, string | null>
+  alignment_confirmed: boolean
 }
 
 export interface LoginUser {
@@ -186,8 +204,9 @@ export interface AuthConfig {
 export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
   upload(projectId: string, file: File, signal?: AbortSignal): Promise<DatasetPreview>
-  health(id: string, signal?: AbortSignal): Promise<ImportHealth>
-  health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealth>
+  /** POST /datasets/{id}/validate:完成治理校验并把批次转为 READY,返回 6 项治理计数 */
+  health(id: string, body?: ValidateBody, signal?: AbortSignal): Promise<ImportHealthView>
+  health(projectId: string, id: string, body?: ValidateBody, signal?: AbortSignal): Promise<ImportHealthView>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
   /** POST /auth/login,返回真实 access_token 与用户 */
@@ -210,6 +229,8 @@ export interface ApiClient {
   patchTask(projectId: string, taskId: string, body: TaskPatchBody): Promise<TaskSummary>
   /** W16:项目成员列表;任务负责人只能从此列表选择 */
   listMembers(projectId: string, signal?: AbortSignal): Promise<ProjectMember[]>
+  /** GET /projects:仅列出当前用户有权限访问的项目(分页信封在实现内解包) */
+  listProjects(signal?: AbortSignal): Promise<ProjectSummary[]>
   /** W03/7.2:项目设置(时区、限额、规则、模型可用性) */
   getSettings(projectId: string, signal?: AbortSignal): Promise<ProjectSettings>
   /** W03/7.2:写入项目设置(仅 OWNER);expected_version 过期返回 409,不做幂等键 */
@@ -229,14 +250,43 @@ export interface ApiClient {
   createExport(projectId: string, body: { scope: string }, idempotencyKey: string): Promise<ExportJob>
   /** 下载导出文件:每次重新鉴权,过期/失效返回 410 */
   downloadExport(projectId: string, exportId: string): Promise<Blob>
+  /** GET /projects/{p}/exports/redacted.csv:全量脱敏行 CSV 文本,列固定为 dataset_id、row_index、data */
+  redactedCsv(projectId: string, signal?: AbortSignal): Promise<string>
+}
+
+/**
+ * 是否处于 mock 演示模式:VITE_USE_MOCK 未显式设为 'false' 时默认启用。
+ * 需要按模式切换文案/行为时统一用此谓词,不要各自读 env——否则默认值语义会漂移。
+ */
+export function isMockMode(): boolean {
+  return import.meta.env.VITE_USE_MOCK !== 'false'
 }
 
 /** 按 VITE_USE_MOCK 选择真实/mock 客户端;所有页面与 composable 统一走此入口 */
 export function apiClient(): ApiClient {
-  return import.meta.env.VITE_USE_MOCK !== 'false' ? mockApi : fetchHttpClient()
+  return isMockMode() ? mockApi : fetchHttpClient()
 }
 
-export interface ApiErrorBody { detail?: string; message?: string }
+export interface ApiErrorDetail { code?: string; message?: string; [key: string]: unknown }
+export interface ApiErrorBody { detail?: string | ApiErrorDetail; message?: string }
+
+/** 把服务端的错误体折成一行可读文案。
+ *
+ * FastAPI 的 `detail` 多数是 `{'code': 'VERSION_CONFLICT'}` 这类结构化对象,直接
+ * 塞进 `Error.message` 会显示成 `[object Object]`——真正的错误码被丢掉,排查时只
+ * 能看到一条没信息的消息。字符串 detail 仍然原样使用。
+ */
+export function apiErrorMessage(body: ApiErrorBody | undefined, status: number): string {
+  const detail = body?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (detail && typeof detail === 'object') {
+    const parts = [detail.code, detail.message].filter(
+      (part): part is string => typeof part === 'string' && part.length > 0,
+    )
+    if (parts.length) return parts.join(': ')
+  }
+  return body?.message || `Request failed (${status})`
+}
 export class ApiHttpError extends Error {
   constructor(public readonly status: number, message: string, public readonly body?: ApiErrorBody) {
     super(message)
@@ -299,7 +349,7 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     if (!response.ok) {
       let body: ApiErrorBody | undefined
       try { body = await response.json() } catch { /* non-json error */ }
-      throw new ApiHttpError(response.status, body?.detail || body?.message || `Request failed (${response.status})`, body)
+      throw new ApiHttpError(response.status, apiErrorMessage(body, response.status), body)
     }
     return response.json() as Promise<T>
   }
@@ -316,13 +366,48 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       const signal = typeof projectOrFile === 'string' ? maybeSignal : fileOrSignal as AbortSignal | undefined
       const form = new FormData(); form.append('file', file)
       form.append('consent', 'true')
-      return request<DatasetPreview>(`${project(projectId)}/datasets`, { method: 'POST', body: form, signal })
+      // 服务端把来源列名与工作表清单放在 preview 里,而 DatasetPreview 此前不含它们
+      // ——于是映射步骤只能渲染写死的列,工作表选择更是无从谈起
+      return request<{ id: string; name: string; rows: number; status: string; hasTime: boolean
+                       preview?: { headers?: string[]; rows?: DatasetRow[]; sheet_name?: string
+                                   sheet_names?: string[] } }>(
+        `${project(projectId)}/datasets`, { method: 'POST', body: form, signal },
+      ).then(body => ({
+        id: body.id, name: body.name, rows: body.rows, status: body.status, hasTime: body.hasTime,
+        headers: body.preview?.headers ?? [],
+        rows_preview: body.preview?.rows ?? [],
+        sheetNames: body.preview?.sheet_names ?? [],
+        sheetName: body.preview?.sheet_name ?? null,
+      }))
     },
-    health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
-      const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
-      const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
-      const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
-      return request<ImportHealth>(`${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' }, signal })
+    async health(projectOrId: string, idOrBody?: string | ValidateBody | AbortSignal,
+                 bodyOrSignal?: ValidateBody | AbortSignal, maybeSignal?: AbortSignal) {
+      const projectId = typeof idOrBody === 'string' ? projectOrId : 'demo-project'
+      const id = typeof idOrBody === 'string' ? idOrBody : projectOrId
+      // 重载有 (id, body?, signal?) 与 (projectId, id, body?, signal?) 两种;
+      // 逐个位置试探不如按「哪个是字符串」判——id 一定是字符串
+      const rest = typeof idOrBody === 'string' ? [bodyOrSignal, maybeSignal] : [idOrBody, bodyOrSignal]
+      const body = rest.find((item): item is ValidateBody => !!item && typeof item === 'object' && !('aborted' in item))
+      const signal = rest.find((item): item is AbortSignal => !!item && typeof item === 'object' && 'aborted' in item)
+      // POST /datasets/{id}/validate 同时完成校验(批次转入 READY)并返回治理统计。
+      // 消费方(导入向导的治理报告)要的是 6 项计数,而服务端把它们放在 preview.stats
+      // 里,所以在这里映射一次——否则 mock 与真实各返回一种形状,报告只能靠写死的常量。
+      const response = await request<{ preview?: { stats?: Record<string, number> } }>(
+        `${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`,
+        // 映射、工作表、时区与时间策略必须送到服务端:发空对象等于这四个选项
+        // 在真实模式下完全不生效,而报告看起来照常生成
+        { method: 'POST', body: JSON.stringify(body ?? {}),
+          headers: { 'Content-Type': 'application/json' }, signal },
+      )
+      const stats = response.preview?.stats ?? {}
+      return {
+        inputRows: stats.total ?? 0,
+        validRows: stats.valid ?? 0,
+        invalidRows: stats.invalid ?? 0,
+        duplicateRows: stats.duplicate ?? 0,
+        redactedRows: stats.redacted ?? 0,
+        undatedRows: stats.missing_time ?? 0,
+      }
     },
     runAnalysis(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
       const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
@@ -344,6 +429,9 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     },
     authConfig() {
       return request<AuthConfig>('/auth/config')
+    },
+    listProjects(signal?: AbortSignal) {
+      return list<ProjectSummary>('/projects', signal)
     },
     loginWithAssertion(assertion: string) {
       return request<LoginResponse>('/auth/token', {
@@ -367,6 +455,16 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         throw new ApiHttpError(response.status, response.status === 410 ? 'export_expired' : `Export failed (${response.status})`)
       }
       return response.blob()
+    },
+    async redactedCsv(projectId: string, signal?: AbortSignal) {
+      // 该端点返回 CSV 文本而不是 JSON,不能走 request();鉴权头与 downloadExport 保持一致
+      const token = getAccessToken()
+      const response = await fetch(
+        `${base}${project(projectId)}/exports/redacted.csv`,
+        { credentials: 'include', headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal },
+      )
+      if (!response.ok) throw new ApiHttpError(response.status, `Redacted export failed (${response.status})`)
+      return response.text()
     },
     summary(projectId: string, signal?: AbortSignal) {
       return request<SummaryResponse>(`${project(projectId)}/summary`, { signal })

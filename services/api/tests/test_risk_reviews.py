@@ -11,13 +11,17 @@ RISK_ID = 'risk-002'  # 演示种子中的 CRITICAL 候选
 
 @pytest.fixture
 def risk_id():
-    """每个用例用独立风险记录:裁决会推进 version,共享种子会互相干扰。"""
+    """每个用例用独立风险记录:裁决会推进 version,共享种子会互相干扰。
+
+    复核队列就是 `risk_findings` 表(计划 5.2)。feedback_id 留空:这是用例自造的
+    候选,没有可回溯的 feedback 行;真实扫描出的候选一定带,并受复合外键约束。
+    """
     from uuid import uuid4
     rid = f'risk_test_{uuid4().hex[:8]}'
-    repository.create_entity('risks', {
-        'id': rid, 'project_id': 'demo-project', 'title': '测试候选', 'rule': 'R-TEST',
-        'severity': 'CRITICAL', 'review_state': 'pending', 'status': 'OPEN', 'version': 1,
-    })
+    repository.save_risk_findings('demo-project', None, [{
+        'id': rid, 'rule_id': 'R-TEST', 'policy_version': 'ecommerce-v1',
+        'severity': 'CRITICAL', 'reason': '测试候选',
+    }])
     return rid
 
 

@@ -1,8 +1,13 @@
 """W13 主题人工校正与不可变版本。
 
 操作锁定 run 当前 revision(expected_revision 不符 → 409,并发校正只有一个成功);
-每次校正创建新快照 revision+1,旧快照完整保留在 revision_history,不覆写;
-新版本摘要未重新验证前标为待确认(summary_revalidated=False),不能原样保留不适用的断言。
+每次校正产生 revision+1 的**新版本行**,不覆写旧行(工程计划 5.2:`(topic_id, version)`
+唯一、不可原地更新);新版本摘要未重新验证前标为待确认(summary_revalidated=False),
+不能原样保留不适用的断言。
+
+本模块是**纯函数**:吃一份已加载的快照,吐一份新快照。快照现在是从实体表现算的
+读模型(见 app.revisions),历史不再靠 `revision_history` 那份 JSON 副本保存——
+旧版本留在 topic_versions 里,由 analysis_revisions 的 manifest 指回具体的版本行。
 """
 from __future__ import annotations
 
@@ -29,21 +34,21 @@ def _find_topic(topics: list[dict], topic_id: str) -> dict:
     raise TopicNotFound(f'topic not found: {topic_id}')
 
 
-def _current_snapshot(run: Mapping) -> dict:
-    return dict(run.get('result') or {})
-
-
 def apply_correction(
-    run: Mapping,
+    snapshot: Mapping,
     operation: str,
     expected_revision: int,
     params: dict,
     reason: str,
     sources: Mapping[str, str] | None = None,
-) -> tuple[dict, dict, list[str]]:
-    """返回 (new_snapshot, revision_history, affected_topic_ids)。"""
+) -> tuple[dict, list[str]]:
+    """返回 (new_snapshot, affected_topic_ids)。
+
+    `snapshot` 由调用方用 `revisions.load_revision_snapshot` 加载,本函数不碰仓储:
+    读模型与校正逻辑分开,校正才可能在不连数据库的情况下被测试。
+    """
     _require_reason(reason)
-    snapshot = _current_snapshot(run)
+    snapshot = dict(snapshot or {})
     current_revision = int(snapshot.get('revision') or 0)
     if int(expected_revision) != current_revision:
         raise CorrectionConflict(f'expected revision {expected_revision}, current {current_revision}')
@@ -143,14 +148,6 @@ def apply_correction(
         'evidence_by_topic': evidence_by_topic,
         'unassigned_count': unassigned,
     }
-    history = dict(run.get('revision_history') or {})
-    history[str(current_revision)] = snapshot  # 不可变:旧版本完整保留
-    return new_snapshot, history, affected
-
-
-def snapshot_at(run: Mapping, revision: int) -> dict | None:
-    """读取任意已发布版本;当前版本取 result,历史版本取 revision_history。"""
-    current = _current_snapshot(run)
-    if int(current.get('revision') or 0) == revision:
-        return current
-    return (run.get('revision_history') or {}).get(str(revision))
+    # 不返回 revision_history:旧版本现在留在 topic_versions 里,
+    # 由 analysis_revisions 的 manifest 指回具体版本行,不再复制 JSON 副本
+    return new_snapshot, affected

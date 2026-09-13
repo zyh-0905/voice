@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
+from .ingestion import run_feedback
+
 DEFINITION_VERSION = 'summary-ui-v1'
 UNCLOSED_STATES = ('OPEN', 'IN_PROGRESS', 'PENDING_REVIEW')
 # 反馈行中可识别的时间字段(治理后的脱敏行)
@@ -53,30 +55,33 @@ def _row_matches(row: Mapping, filters: Mapping[str, str | None]) -> bool:
     return True
 
 
-def selected_rows(run: Mapping, filters: Mapping[str, str | None]) -> list[dict]:
-    """本 run 输入集合中通过筛选的反馈行。"""
-    rows: list[dict] = []
-    for dataset in run.get('datasets') or []:
-        for row in (dataset.get('preview') or {}).get('rows') or []:
-            if isinstance(row, dict) and _row_matches(row, filters):
-                rows.append(row)
-    return rows
+def selected_rows(run: Mapping, filters: Mapping[str, str | None], repository) -> list[dict]:
+    """本 run 输入集合中通过筛选的反馈行(取自 feedback 实体表)。
+
+    反馈行带 channel/product/occurred_at,与治理后行同名,所以 `_row_matches`
+    的筛选口径不用改——换的只是取数来源。
+    """
+    return [row for row in run_feedback(dict(run), repository) if _row_matches(row, filters)]
 
 
-def _latest_published_run(analysis_values: Sequence[dict], project_id: str) -> dict | None:
+def _latest_published_run(analysis_values: Sequence[dict], project_id: str, repository) -> dict | None:
+    """最近已发布 revision 的 run;revision 取自 analysis_revisions(5.2)。"""
     published = None
+    best = 0
     for run in analysis_values:
         if run.get('project_id') != project_id:
             continue
-        revision = (run.get('result') or {}).get('revision')
+        revision = repository.latest_revision(project_id, run['id'])
         if not revision:
             continue
-        if published is None or int(revision) >= int(published['result']['revision']):
+        if published is None or int(revision) >= best:
+            best = int(revision)
             published = run
     return published
 
 
-def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | None, revision: int | None) -> dict | None:
+def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | None,
+                revision: int | None, repository) -> dict | None:
     """按 7.7 选择规则定位 run:指定则校验归属与 revision;未指定取最近已发布 run。"""
     if revision is not None and not run_id:
         raise SummaryRequestError(422, 'revision_requires_run_id')
@@ -84,22 +89,25 @@ def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | 
         run = next((item for item in analysis_values if item.get('id') == run_id), None)
         if run is None or run.get('project_id') != project_id:
             raise SummaryRequestError(404, 'run_not_found')
-        published = run.get('result') or {}
-        if not published.get('revision'):
+        published = repository.latest_revision(project_id, run_id)
+        if not published:
             return None
-        if revision is not None and int(published['revision']) != int(revision):
+        if revision is not None and int(published) != int(revision):
             raise SummaryRequestError(404, 'revision_not_found')
         return run
-    return _latest_published_run(analysis_values, project_id)
+    return _latest_published_run(analysis_values, project_id, repository)
 
 
-def pending_risk_feedback_count(run: Mapping) -> int:
-    """本次 run 输入集合内、至少有一个 PENDING 风险 finding 的 distinct 反馈数(全 severity)。"""
-    findings = run.get('risk_findings') or []
+def pending_risk_feedback_count(project_id: str, repository) -> int:
+    """本项目至少有一条 PENDING 候选的 distinct 反馈数(全 severity,4.6 口径)。
+
+    取数来自 `risk_findings` 实体(5.2)。不再按 run 过滤:候选挂在反馈上,而
+    同一反馈的候选不因重跑分析而增加——按 run 过滤会让数字随分析次数变化。
+    """
     return len({
-        str(item.get('feedback_id'))
-        for item in findings
-        if str(item.get('review_state', 'PENDING')).upper() == 'PENDING' and item.get('feedback_id')
+        str(item['feedback_id'])
+        for item in repository.list_risk_findings(project_id)
+        if str(item.get('review_state', 'pending')).lower() == 'pending' and item.get('feedback_id')
     })
 
 
@@ -122,11 +130,15 @@ def build_summary(
     revision: int | None = None,
     filters: Mapping[str, str | None] | None = None,
     now: datetime | None = None,
+    *,
+    # 反馈正文来自 feedback 实体表,所以聚合必须拿到仓储。不给默认值:
+    # 一个「没有仓储也能算」的降级会走一条与生产不同的路径,而且没有任何东西在读。
+    repository,
 ) -> dict:
     """组装 7.7 契约响应。"""
     filters = dict(filters or {})
     timestamp = now or datetime.now(timezone.utc)
-    run = resolve_run(analysis_values, project_id, run_id, revision)
+    run = resolve_run(analysis_values, project_id, run_id, revision, repository)
     active_count, overdue_count = task_metrics(tasks, timestamp)
 
     payload = {
@@ -156,16 +168,17 @@ def build_summary(
     if run is None:
         return payload  # 无已发布 run:洞察为空,项目任务仍可读
 
-    published = run.get('result') or {}
-    rows = selected_rows(run, filters)
+    from .revisions import load_revision_snapshot
+    snapshot = load_revision_snapshot(repository, run) or {}
+    rows = selected_rows(run, filters, repository)
     payload.update({
         'run_id': run.get('id'),
-        'revision': published.get('revision'),
+        'revision': snapshot.get('revision'),
         'denominator': len(rows),
     })
     payload['insight_metrics'].update({
         'valid_feedback_count': len(rows),
-        'topic_count': len(published.get('topics') or []),
-        'pending_risk_feedback_count': pending_risk_feedback_count(run),
+        'topic_count': len(snapshot.get('topics') or []),
+        'pending_risk_feedback_count': pending_risk_feedback_count(project_id, repository),
     })
     return payload

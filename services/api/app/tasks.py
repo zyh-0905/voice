@@ -54,26 +54,52 @@ def can_transition(state: str, action: str, actor_role: str, is_assignee: bool) 
 
 
 def transition_task(task: dict, action: str, expected_version: int, actor_id: str, actor_role: str,
-                    is_assignee: bool, comment: str) -> dict:
-    """执行状态变化,并把事件与状态一起写回 task(同一次更新)。"""
+                    is_assignee: bool, comment: str, event_id: str | None = None) -> tuple[dict, dict]:
+    """执行状态变化,**返回 (task, 待记事件)**。
+
+    事件不再塞进 `task['events']`(那是 JSON 列,计划要的是独立表)。调用方拿到
+    事件后必须与任务状态**在同一次仓储调用里**写入——分成两步的话,中间失败会留下
+    一个状态变了但没有对应事件的任务,而时间线正好是用来回答「这个状态是谁改的」。
+
+    `from_state` 是这里新记下的:JSON 里只记了目标状态,时间线看着能猜,但猜不出
+    改之前是什么。
+    """
     if int(task.get('version') or 0) != int(expected_version):
         raise VersionConflict(f"expected version {expected_version}, current {task.get('version')}")
     state = state_of(task)
     if not can_transition(state, action, actor_role, is_assignee):
         raise InvalidTransition(f'{action} not allowed from {state}')
-    task['state'] = _TRANSITIONS[state][action]
+    to_state = _TRANSITIONS[state][action]
+    task['state'] = to_state
     task['version'] = int(task.get('version') or 0) + 1
-    task.setdefault('events', []).append({
-        'action': action, 'actor': actor_id, 'comment': comment or '', 'state': task['state'],
-    })
     # 关闭任务不自动宣称经营效果改善
-    if task['state'] == CLOSED:
+    if to_state == CLOSED:
         task.setdefault('effect_status', EFFECT_NOT_EVALUATED)
-    return task
+    event = {
+        'id': event_id or f'tev_{task.get("id") or "task"}_{task["version"]}',
+        'action': action,
+        'from_state': state,
+        'to_state': to_state,
+        'actor_id': actor_id,
+        # 只存脱敏正文(10.4):审计与时间线都不带原文
+        'comment_redacted': redact_comment(comment),
+        'material_refs_json': [],
+    }
+    return task, event
+
+
+def redact_comment(comment: str | None) -> str:
+    """事件评论落库前再脱敏一次。
+
+    评论是自由文本,用户可能顺手把订单号、手机号贴进去——而事件表是要长期保留的
+    时间线。复用导入侧同一套规则,不另写一份。
+    """
+    from .ingestion import redact_text
+    return redact_text(str(comment or ''))['text']
 
 
 def confirm_draft(task: dict, expected_version: int, owner_id: str, due_at: str, acceptance: str,
-                  actor_id: str) -> dict:
+                  actor_id: str) -> tuple[dict, dict]:
     """草稿确认:owner_id/due_at/acceptance 必填;缺字段抛 FieldValidationError。"""
     if state_of(task) != DRAFT:
         raise InvalidTransition('confirm only allowed from DRAFT')

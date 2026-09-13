@@ -10,10 +10,6 @@ from typing import Mapping
 from .ingestion import redact_text
 from .segments import split_redacted
 
-# 行内可识别为反馈标识/时间/渠道的字段名(治理后的脱敏行)
-_ID_KEYS = ('feedback_id', 'id')
-_TIME_KEYS = ('occurred_at', 'occurredAt', 'time', 'date', 'created_at', 'event_time')
-_CHANNEL_KEYS = ('channel', 'source_channel', '来源渠道')
 _SEGMENT_MAX_TOKENS = 120
 _SEGMENT_OVERLAP = 12
 
@@ -22,55 +18,43 @@ class FeedbackNotFound(ValueError):
     """反馈不在本项目内(或不存在)。"""
 
 
-def _first(row: Mapping, keys: tuple[str, ...]) -> object | None:
-    for key in keys:
-        value = row.get(key)
-        if value not in (None, ''):
-            return value
-    return None
-
-
 def _redact(value: object) -> str:
     return redact_text(str(value))['text']
 
 
-def _row_text(row: Mapping) -> str:
-    """拼出脱敏全文。
-
-    仓储里存的是解析后的**原始行**(`parse_csv_text` 只对 stats 走脱敏),所以这里
-    与导出边界(`export_redacted`)一致,在出站前对每个值再脱敏一次——否则旧解析器
-    写入的裸数据会从这个端点漏出。逐值处理(而非先拼接)可避免跨字段边界误判。
-    """
-    return ' '.join(_redact(value) for value in row.values() if value is not None)
-
-
 def find_feedback(repository, project_id: str, feedback_id: str) -> dict:
-    """在项目的数据集预览行中定位反馈;找不到即抛 FeedbackNotFound。"""
-    for dataset in repository.datasets.values():
-        if dataset.get('project_id') != project_id:
-            continue
-        rows = (dataset.get('preview') or {}).get('rows') or []
-        for index, row in enumerate(rows):
-            if not isinstance(row, dict):
-                continue
-            row_id = _first(row, _ID_KEYS)
-            generated_id = f"fb_{dataset.get('id', 'ds')}_{index}"
-            if str(row_id) != feedback_id and generated_id != feedback_id:
-                continue
-            text = _row_text(row)
-            spans = split_redacted(text, max_tokens=_SEGMENT_MAX_TOKENS, overlap=_SEGMENT_OVERLAP)
-            channel = _first(row, _CHANNEL_KEYS)
-            return {
-                'feedback_id': feedback_id,
-                'dataset_id': dataset.get('id'),
-                'dataset_name': dataset.get('name'),
-                'source_row': index,
-                'channel': None if channel is None else _redact(channel),
-                'occurred_at': _first(row, _TIME_KEYS),
-                # 只给脱敏全文;不提供原始文件或未脱敏内容
-                'text': text,
-                'segments': [
-                    {'start': span.start, 'end': span.end, 'text': span.text} for span in spans
-                ],
-            }
-    raise FeedbackNotFound(feedback_id)
+    """在项目的 feedback 实体表中定位反馈;找不到即抛 FeedbackNotFound。
+
+    取数走 `feedback` 表(工程计划 5.2)而不是遍历数据集预览行。预览现在是
+    4.3 要求的**最多 20 行样例**,拿它当索引会有一条更难发现的失效路径:
+    第 21 条之后的反馈查不到,而前 20 条一切正常。
+    """
+    row = repository.get_feedback(project_id, feedback_id)
+    if row is None:
+        raise FeedbackNotFound(feedback_id)
+    # 读取侧兜底:数据访问层不假设上游都合规(与导出端点同一做法)。
+    # 对已经脱敏的正文是幂等的——替换标记本身不匹配任何 PII 模式——
+    # 所以 offset 仍然落在同一条正文上。
+    text = _redact(row.get('content_redacted') or '')
+    dataset = repository.datasets.get(row.get('dataset_id')) or {}
+    segments = repository.list_segments(project_id, feedback_id)
+    if segments:
+        spans = [{'start': item['start_offset'], 'end': item['end_offset'],
+                  'text': text[item['start_offset']:item['end_offset']]} for item in segments]
+    else:
+        # 还没跑过分析,分块尚未落库。用与流水线**同一个**分块函数现算:
+        # 同一份正文在任何地方都应得到同一组分块。
+        spans = [{'start': span.start, 'end': span.end, 'text': span.text}
+                 for span in split_redacted(text, max_tokens=_SEGMENT_MAX_TOKENS,
+                                            overlap=_SEGMENT_OVERLAP)]
+    return {
+        'feedback_id': feedback_id,
+        'dataset_id': row.get('dataset_id'),
+        'dataset_name': dataset.get('name'),
+        'source_row': int(row.get('source_row') or 0),
+        'channel': row.get('channel'),
+        'occurred_at': row.get('occurred_at'),
+        # 只给脱敏全文;不提供原始文件或未脱敏内容
+        'text': text,
+        'segments': spans,
+    }

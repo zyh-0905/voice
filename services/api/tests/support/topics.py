@@ -6,19 +6,23 @@ import pytest
 
 from app.main import repository
 from app.publishing import EvidenceRef, TopicDraft, publish_revision
+from support.feedback import publish_revision_rows, seed_run_feedback
 
 TOPIC_ID = 't1'
 REVISION = 1
-FEEDBACK_ID = 'fb_a'
+# 计划 5.2 之后 feedback 行的 id 由 `build_feedback_rows` 按 `fb_{dataset}_{序号}`
+# 派生,不再是调用方给的编号;证据与校正都引用这个真实 id
+DATASET_ID = 'ds_case'
+FEEDBACK_ID = f'fb_{DATASET_ID}_0'
+SECOND_FEEDBACK_ID = f'fb_{DATASET_ID}_1'
+UNASSIGNED_FEEDBACK_ID = f'fb_{DATASET_ID}_2'
 FOREIGN_FEEDBACK_ID = 'fb_foreign'
 
 SOURCES = {
     FEEDBACK_ID: '物流信息一直没有更新,等待了三天。',
-    'fb_b': '申请退款后,希望看到预计到账时间。',
-    'fb_free': '一条待归类的反馈。',
+    SECOND_FEEDBACK_ID: '申请退款后,希望看到预计到账时间。',
+    UNASSIGNED_FEEDBACK_ID: '一条待归类的反馈。',
 }
-
-UNASSIGNED_FEEDBACK_ID = 'fb_free'
 
 
 @pytest.fixture
@@ -30,7 +34,20 @@ def topic_case():
     repository.create_project({'id': project_id, 'name': 'Topics Case Project'})
     repository.create_project({'id': other_project_id, 'name': 'Other Project'})
     run_id = f'run_topics_case_{uuid4().hex[:8]}'
-    # 本项目 run:两主题、各一条证据,成功发布 revision
+    # 本项目 run:两主题、各一条证据,成功发布 revision。
+    # 反馈正文来自 `feedback` 实体表,所以先把行播种进去再建 run——只在 run 里
+    # 摆行的话,校正与证据会走一条生产上不存在的取数路径。
+    run = {
+        'id': run_id, 'project_id': project_id, 'dataset_ids': [DATASET_ID],
+        'status': 'queued', 'stage': 'queued', 'total': 3,
+        'datasets': [{'id': DATASET_ID, 'project_id': project_id, 'preview': {'rows': [
+            {'content': SOURCES[FEEDBACK_ID]},
+            {'content': SOURCES[SECOND_FEEDBACK_ID]},
+            {'content': SOURCES[UNASSIGNED_FEEDBACK_ID]},
+        ]}}],
+    }
+    seed_run_feedback(repository, run)
+    repository.create_analysis(run)
     drafts = [
         TopicDraft(
             topic_id=TOPIC_ID, name='物流体验', summary='物流更新延迟', severity='medium',
@@ -38,31 +55,34 @@ def topic_case():
         ),
         TopicDraft(
             topic_id='t2', name='退款进度', summary='退款状态关注', severity='medium',
-            evidence=[EvidenceRef('fb_b', 1, '申请退款后', 0, 5)],
+            evidence=[EvidenceRef(SECOND_FEEDBACK_ID, 1, '申请退款后', 0, 5)],
         ),
     ]
-    repository.create_analysis({
-        'id': run_id, 'project_id': project_id, 'dataset_ids': ['ds_case'], 'status': 'queued', 'stage': 'queued', 'total': 3,
-        'datasets': [{'id': 'ds_case', 'project_id': project_id, 'preview': {'rows': [
-            {'feedback_id': FEEDBACK_ID, 'text': SOURCES[FEEDBACK_ID]},
-            {'feedback_id': 'fb_b', 'text': SOURCES['fb_b']},
-            {'feedback_id': UNASSIGNED_FEEDBACK_ID, 'text': SOURCES[UNASSIGNED_FEEDBACK_ID]},
-        ]}}],
-    })
-    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=1)
+    # 内存仓储同时充当 AnalysisStore(它有 get_analysis/update_analysis)
+    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=1, repository=repository)
 
-    # 外项目干扰:同名 topic 带外项目证据,任何查询都不应泄漏
-    repository.create_analysis({
-        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': other_project_id, 'dataset_ids': [], 'datasets': [],
+    # 外项目干扰:同名 topic 带外项目证据,任何查询都不应泄漏。
+    # 外项目的反馈行也要真落库:topic_evidence 的复合外键会拒绝指向不存在反馈的证据,
+    # 所以「伪造一条外项目证据」这件事本身必须先有一条外项目反馈。
+    foreign_dataset_id = 'ds_foreign'
+    foreign_run = {
+        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': other_project_id,
+        'dataset_ids': [foreign_dataset_id],
+        'datasets': [{'id': foreign_dataset_id, 'project_id': other_project_id,
+                      'preview': {'rows': [{'content': '外项目原文'}]}}],
         'status': 'done', 'stage': 'completed', 'total': 1,
         'result': {
             'revision': 1,
-            'topics': [{'topic_id': TOPIC_ID, 'name': '外项目主题', 'summary': '', 'severity': 'medium', 'feedback_count': 1}],
+            'topics': [{'topic_id': TOPIC_ID, 'name': '外项目主题', 'summary': '', 'severity': 'medium',
+                        'feedback_count': 1}],
             'evidence_by_topic': {TOPIC_ID: [{'feedback_id': FOREIGN_FEEDBACK_ID, 'source_row': 0,
-                                               'quote': '外项目原文', 'quote_start': 0, 'quote_end': 5}]},
+                                              'quote': '外项目原文', 'quote_start': 0, 'quote_end': 5}]},
             'unassigned_count': 0,
         },
-    })
+    }
+    seed_run_feedback(repository, foreign_run)
+    repository.create_analysis(foreign_run)
+    publish_revision_rows(repository, foreign_run)
 
     return SimpleNamespace(
         project_id=project_id,
