@@ -25,22 +25,25 @@
 
 ## 2. 应用回滚(镜像)
 
+发布时给全套服务打同一个 tag(`VOICELENS_IMAGE_TAG`),回滚时把它切回上一个:
+
 ```bash
-git checkout <上一个发布 tag 或 commit>          # 只影响工作区,不碰数据
-docker compose build api worker relay watchdog web
-docker compose up -d api worker relay watchdog web   # migrate 会先跑(见下)
+# 发布
+VOICELENS_IMAGE_TAG=v1.2.0 docker compose build
+VOICELENS_IMAGE_TAG=v1.2.0 docker compose up -d
+
+# 回滚:只切 tag,不重新构建
+VOICELENS_IMAGE_TAG=v1.1.0 docker compose up -d --no-build
 ```
 
-**当前仓库的硬限制(未解决,写清楚而不是假装能切)**:`compose.yaml` 里的
-`api/worker/relay/watchdog/web` 都用 `build:`,**没有固定 `image:` tag**,所以
-「切回前一镜像」目前只能靠 `git checkout` 旧 commit 重新构建。要真正做到计划 14.5
-的镜像级回滚,需要:
+**必须整套服务打同一个 tag。** 只单独 `build api` 的话,`migrate`/`worker`/`relay`/
+`watchdog` 没有那个 tag,`up -d` 会以
+`No such image: voice-migrate:<tag>` 失败——而它失败在**依赖解析阶段**,`api` 容器
+照旧跑着上一个镜像,看起来像「回滚没生效」而不是「回滚没执行」。
+这一点已在本地演练过一次(见 §5)。
 
-1. 给每个服务加 `image: registry/voicelens-api:<version>`(build + image 并存);
-2. 构建后 push,并把 digest 记进 `scripts/release_manifest.py` 的产物(见 release-checklist);
-3. 回滚时只改 tag/digest 并 `docker compose up -d`,不重新构建。
-
-在那之前,回滚耗时 = 一次完整构建,且构建产物只能靠 commit 追溯。
+镜像推送与 digest 记录(`scripts/release_manifest.py`)仍待接 CI;目前 tag 只在
+本机/同一宿主上有效,跨机回滚需要先 push。
 
 ## 3. 数据库回滚(alembic downgrade)
 
@@ -106,7 +109,8 @@ python3 scripts/release_manifest.py --output /tmp/manifest-after-rollback.json
 
 | 缺口 | 说明 |
 |---|---|
-| compose 无固定 image tag | §2 的镜像级回滚目前不可用,只能靠 git checkout + rebuild |
+| 镜像未推送到 registry | §2 的 tag 级回滚在同一宿主上已可用(与配套的 `VOICELENS_IMAGE_TAG` 一起 build);跨机回滚需先 push,这一步尚未接进 CI |
+| 演练 tag 仍在本地 | 本地演练留下的 `voice-api:v0.0.1-rollback-test` 等六个 tag 可以删;它们不是发布物 |
 | 无 `downgrade` 的自动化测试 | 本文的破坏性清单来自代码阅读 + 一次隔离库演练,没有 CI 门禁 |
 | `run_feedbacks`/`feedback` 的跨项目约束依赖 0014/0015 | 只降级 0015 保留 0014 是安全的;再往前要让应用一起回滚 |
 | create_all 与迁移并存 | 任何服务用新镜像先于迁移启动,都会用模型建表(本次 watchdog 首次启动即建出 `feedback/segments`);顺序必须 migrate → 应用 |

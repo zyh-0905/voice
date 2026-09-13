@@ -1,6 +1,9 @@
 ﻿services:
   # 一次性迁移:模型新增列不会被 create_all 补上,必须先 upgrade head
   migrate:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-migrate:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -15,6 +18,9 @@
         condition: service_healthy
 
   api:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-api:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -40,6 +46,9 @@
       retries: 5
 
   web:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-web:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -70,6 +79,9 @@
       retries: 10
 
   worker:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-worker:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -89,6 +101,9 @@
         condition: service_healthy
 
   relay:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-relay:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -114,6 +129,9 @@
   # 注意 relay_runner 目前也内联跑同一个 pass,两处并发是已知重复;
   # 但要拆开必须改 relay_runner(非本文件职责),见 docs/runbooks/restore.md 的已知问题。
   watchdog:
+    # 14.5 的镜像级回滚要求每个服务有固定 tag:回滚时改 tag 再 up -d,
+    # 而不是 git checkout + rebuild(那会把「回到上一版」变成一次新构建)。
+    image: voice-watchdog:${VOICELENS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api/Dockerfile
