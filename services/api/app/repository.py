@@ -383,8 +383,12 @@ class InMemoryRepository:
 
     # —— §5.2 模型调用:预算与成本的凭据(10.5) ——
     def save_model_call(self, project_id, record):
+        from datetime import datetime, timezone
         value = deepcopy(record)
         value['project_id'] = project_id
+        # 预算按「今日」统计,所以两个仓储都要给出这个字段,否则过滤条件在两个
+        # 模式下含义不同——SQL 有、内存没有时,内存模式会把历史调用也算进今天。
+        value.setdefault('created_at', datetime.now(timezone.utc).isoformat())
         self.model_calls.append(value)
         return value
 

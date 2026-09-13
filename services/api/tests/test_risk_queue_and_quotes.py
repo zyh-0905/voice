@@ -171,7 +171,9 @@ def test_evidence_quote_uses_the_claim_not_a_text_prefix(monkeypatch):
                 claims=[Claim(evidence_id=target, quote=quote, claim='结论')],
             )
 
-    monkeypatch.setattr(pipeline, 'TopicNamer', _StubNamer)
+    # pipeline 现在通过 make_namer 建命名器(按 NAMING_MODE 选 provider),
+    # 所以替换点是工厂,而不是某个类名——后者已经不在这里导入了
+    monkeypatch.setattr(pipeline, 'make_namer', lambda *a, **k: _StubNamer())
     project_id = _project_id()
     # 数据形状经过实测:6 条近似文本 + 3 条无关文本 → 两个干净的簇。
     # 文本完全相同或只有 2-4 条时,sklearn 的 HDBSCAN 会把它们判为噪声(互达距离

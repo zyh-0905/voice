@@ -579,7 +579,8 @@ class SQLAlchemyRepository:
                      'cost_estimated': float(o.cost_estimated) if o.cost_estimated is not None else None,
                      'cost_actual': float(o.cost_actual) if o.cost_actual is not None else None,
                      'provider_request_id': o.provider_request_id,
-                     'response_file_id': o.response_file_id} for o in rows]
+                     'response_file_id': o.response_file_id,
+                     'created_at': o.created_at.isoformat() if o.created_at else None} for o in rows]
 
     def delete_run_data_for_project(self, project_id):
         """项目级:阶段与模型调用一同清理。"""

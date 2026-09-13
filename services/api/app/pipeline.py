@@ -11,7 +11,7 @@ from typing import Mapping
 from .clustering import cluster_embeddings
 from .embedding import encode_segments
 from .ingestion import run_feedback
-from .llm import MockTopicProvider, TopicNamer
+from .llm import CallUsage, make_namer
 from .ingestion import REDACTION_VERSION
 from .publishing import EvidenceRef, TopicDraft, publish_revision
 from .representatives import select_representatives
@@ -88,7 +88,7 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
     vectors = encode_segments([row['text'] for row in rows])
     result = cluster_embeddings(vectors, 'hdbscan', {'min_cluster_size': 2, 'min_samples': 1})
     drafts: list[TopicDraft] = []
-    namer = TopicNamer(MockTopicProvider(), sources)
+    namer = make_namer(sources, spent_today=spent_today_today(repository, run.get('project_id')))
     labels = result.labels
     cluster_ids = sorted({int(label) for label in labels if label != -1})
     for cluster_id in cluster_ids:
@@ -103,8 +103,11 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
         evidence_for_naming = [{'evidence_id': row['feedback_id'], 'text': row['text']}
                                for row in representative_rows]
         candidate = namer.name_topic(evidence_for_naming)
-        record_model_call(repository, run.get('project_id'), run.get('id'), candidate,
-                          evidence_for_naming)
+        # getattr 而不是直接取属性:命名器没有自报用量时,record_model_call 会记一条
+        # UNKNOWN——10.5 要求 UNKNOWN 调用也有记录,而不是缺一条。硬取属性则会让
+        # 一个不符合契约的命名器把整条流水线炸掉。
+        record_model_call(repository, run.get('project_id'), run.get('id'),
+                          getattr(namer, 'last_call', None))
         # 命名阶段返回的 claims 是「引用了哪条证据」的权威来源,按证据 id 取用
         claimed = {claim.evidence_id: claim.quote for claim in candidate.claims}
         evidence = []
@@ -172,8 +175,28 @@ def persist_segments(repository, project_id: str, rows: list[dict]) -> int:
     return written
 
 
-def record_model_call(repository, project_id: str, run_id: str | None, candidate,
-                      evidence: list[dict]) -> None:
+def spent_today_today(repository, project_id: str) -> float:
+    """本项目今天的模型花费;预算按「调用前预留」判断(10.5)。
+
+    没有可靠价格配置时一律返回 0——那时付费模式本来就是禁用的(见 BudgetGuard),
+    这里返回 0 只是让上游的算术成立,不会让任何调用发生。
+    """
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    total = 0.0
+    for call in repository.list_model_calls(project_id):
+        if not str(call.get('created_at') or '').startswith(today):
+            continue
+        cost = call.get('cost_actual')
+        if cost is None:
+            cost = call.get('cost_estimated')
+        if cost is not None:
+            total += float(cost)
+    return total
+
+
+def record_model_call(repository, project_id: str, run_id: str | None,
+                      usage: CallUsage | None) -> None:
     """记一次命名调用的模型账(5.2 model_calls / 10.5 预算与可观测性)。
 
     这个表此前不存在、`model_calls` 全仓库零引用,于是「每日预算」「调用前预留、
@@ -185,18 +208,19 @@ def record_model_call(repository, project_id: str, run_id: str | None, candidate
     """
     import hashlib
     from uuid import uuid4
-    origin = str(getattr(candidate, 'origin', 'provider') or 'provider')
-    payload = '\x1f'.join(sorted(str(item.get('evidence_id')) for item in evidence))
+    usage = usage or CallUsage(provider='unknown', state='UNKNOWN')
     repository.save_model_call(project_id, {
         # 只记请求指纹,不记完整请求(5.2:不记录完整敏感请求)
         'id': f'mc_{uuid4().hex[:10]}', 'run_id': run_id, 'purpose': 'naming',
-        'request_hash': hashlib.sha256(payload.encode('utf-8')).hexdigest(),
-        'provider': origin,
-        'model': None,
-        'state': 'SUCCESS' if origin in ('provider', 'mock') else 'FALLBACK',
-        'tokens_in': None, 'tokens_out': None,
-        'cost_estimated': None, 'cost_actual': None,
-        'provider_request_id': None, 'response_file_id': None,
+        'request_hash': hashlib.sha256(
+            f'{run_id}|{usage.provider}|{usage.state}'.encode('utf-8')).hexdigest(),
+        'provider': usage.provider,
+        'model': usage.model,
+        # 失败也记:只统计成功调用会让预算低估超时与结构失败重试掉的开销(10.5)
+        'state': usage.state,
+        'tokens_in': usage.tokens_in, 'tokens_out': usage.tokens_out,
+        'cost_estimated': usage.cost_estimated, 'cost_actual': usage.cost_actual,
+        'provider_request_id': usage.provider_request_id, 'response_file_id': None,
     })
 
 

@@ -41,6 +41,25 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
         errors.append("SESSION_STORE must be db in production (server-side sessions must survive restarts)")
     if os.getenv("AUTH_INSECURE_DEV", "false").strip().lower() in ("1", "true", "yes", "on"):
         errors.append("AUTH_INSECURE_DEV must be false in production (insecure cookies are dev-only)")
+    # 14.1:production 禁止 mock 命名;manual 允许无外部 LLM。
+    # 不拦的话,一个把 NAMING_MODE 忘在默认值的生产部署会用确定性命名的演示数据
+    # 冒充模型产出——而它看起来完全正常。
+    naming_mode = (os.getenv("NAMING_MODE") or "mock").strip().lower()
+    if naming_mode not in ("provider", "manual"):
+        errors.append(
+            "NAMING_MODE must be provider or manual in production "
+            f"(got {naming_mode!r}); mock naming is demo-only")
+    if naming_mode == "provider":
+        if not (os.getenv("MODEL_ENDPOINT") or "").strip():
+            errors.append("MODEL_ENDPOINT must be set when NAMING_MODE=provider")
+        if not (os.getenv("MODEL_ID") or "").strip():
+            errors.append("MODEL_ID must be set when NAMING_MODE=provider")
+        # 10.5:没有可靠价格配置时禁用付费模式。生产选 provider 却没有价格,
+        # 说明部署方打算花钱但算不出花了多少——那不该悄悄放行。
+        if not (os.getenv("MODEL_PRICE_IN") or "").strip() or not (os.getenv("MODEL_PRICE_OUT") or "").strip():
+            errors.append(
+                "MODEL_PRICE_IN / MODEL_PRICE_OUT must be set when NAMING_MODE=provider "
+                "(10.5: paid mode is disabled without reliable pricing)")
     if errors:
         raise RuntimeError("Invalid production settings: " + "; ".join(errors))
     return cfg
