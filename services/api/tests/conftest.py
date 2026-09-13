@@ -6,6 +6,27 @@ os.environ.setdefault("AUTH_REQUIRED", "false")
 # 带会话 Cookie 的写请求仍然校验 CSRF(见 test_auth_csrf.py)。
 os.environ.setdefault("AUTH_INSECURE_DEV", "true")
 
+# —— 守卫:测试套件不得连到真实数据库 ——
+#
+# `app.main` 在导入时按 USE_DATABASE 选仓储;为真值时它就是 SQLAlchemyRepository,
+# 绑在 DATABASE_URL 指向的库上(开发库)。于是整个套件会在真实数据上建项目、写
+# 数据集、跑分析——而那些夹具用的 id(`p`、`exp_demo`、`del_case_*`)从名字上
+# 完全看不出是测试数据。事后清理时在 live 库里数出 51 个这样的项目、402 条反馈。
+#
+# 漏掉环境变量正是 `.env.example` 的默认值(docker compose run 会读它),所以这不是
+# 假想的误用,是默认就踩。需要真实 PostgreSQL 的用例走 `schema_connection` /
+# `schema_session_factory`:它们自建一个带 `voicelens_test_` 前缀的一次性库,
+# 不依赖这个变量。因此把 USE_DATABASE 置真没有任何正当用途。
+if os.getenv("USE_DATABASE", "").strip().lower() in ("1", "true", "yes"):
+    raise RuntimeError(
+        "USE_DATABASE 为真:测试套件会把夹具写进 DATABASE_URL 指向的真实数据库。\n"
+        "请按 runbook 的方式运行:\n"
+        "  docker compose run --rm -e AUTH_REQUIRED=false -e USE_DATABASE=0 api \\\n"
+        "    sh -c 'PYTHONPATH=/app/services/api python -m pytest services/api/tests -q'\n"
+        "需要真实 PostgreSQL 的用例(schema_connection / schema_session_factory)\n"
+        "会自建一次性测试库,与本变量无关。"
+    )
+
 import pytest
 
 # W11:topic_case 等 support fixture 需显式注册(support/ 不在 pytest 自动发现路径)
