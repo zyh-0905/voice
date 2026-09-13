@@ -101,7 +101,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Warning } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
-import { ApiHttpError, apiClient } from '../../api/client'
+import { ApiHttpError, apiClient, isMockMode } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
@@ -114,7 +114,7 @@ type RiskView = RiskItem & { version?: number }
 
 const session = useSessionStore()
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
-const isDemoMode = import.meta.env.VITE_USE_MOCK !== 'false'
+const isDemoMode = isMockMode()
 const client = apiClient()
 
 const route = useRoute()

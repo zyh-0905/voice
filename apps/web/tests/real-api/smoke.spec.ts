@@ -9,12 +9,22 @@
 import { test, expect } from '@playwright/test'
 
 // 6 条近似 + 3 条无关:这个形状经实测能聚成两个簇;其中一条命中风险规则 duplicate_charge
+//
+// `批次` 列每次都取唯一值,这一点是必需的,不是装饰:这批 CSV 没有来源编号,
+// 计划 4.4 对无来源编号的反馈按 `file_sha256 + sheet_name + source_row` 认事件身份,
+// 所以**内容完全相同的重传会被判为同一条事件**(计入 duplicate,不新增反馈)。
+// 用例之间若共用同一份字节,后两个用例的批次会贡献 0 条反馈,分析自然没有主题。
+// 文件名不同不足以区分——sha256 算的是内容,不是文件名。
 const CSV_ROWS = [
   ...Array.from({ length: 6 }, (_, i) => `物流信息一直没有更新反馈编号${i},2026-08-${String(5 + i).padStart(2, '0')}T10:00:00+08:00`),
   ...Array.from({ length: 2 }, (_, i) => `退款到账时间偏长希望加快编号${i},2026-08-${String(12 + i).padStart(2, '0')}T10:00:00+08:00`),
   '订单被重复扣款了两次请核查,2026-08-15T10:00:00+08:00',
 ]
-const CSV = `text,occurred_at\n${CSV_ROWS.join('\n')}\n`
+/** 每次调用都取唯一值:同一个 worker 里三个用例共享模块作用域,常量会让后两个批次全部撞成重复。 */
+function buildCsv(): string {
+  const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return `text,occurred_at,批次\n${CSV_ROWS.map(row => `${row},${tag}`).join('\n')}\n`
+}
 
 async function login(page: import('@playwright/test').Page) {
   await page.goto('/login')
@@ -30,7 +40,7 @@ async function importAndAnalyze(page: import('@playwright/test').Page) {
   // 文件名带唯一后缀:同源同名同内容会走「重传去重」直接回显已有数据集,
   // 用例之间就会互相干扰(去重键是 project+namespace+kind+name)
   await page.getByTestId('file-input').setInputFiles({
-    name: `real-closed-loop-${Date.now()}.csv`, mimeType: 'text/csv', buffer: Buffer.from(CSV),
+    name: `real-closed-loop-${Date.now()}.csv`, mimeType: 'text/csv', buffer: Buffer.from(buildCsv()),
   })
   // 授权必须主动勾选(计划 4.3),未勾选时上传被拦
   await page.getByTestId('consent-checkbox').check()

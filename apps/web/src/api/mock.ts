@@ -708,6 +708,18 @@ export const mockApi: ApiClient = {
     await delay(200)
     return new Blob(['dataset_id,row_index,data\n'], { type: 'text/csv;charset=utf-8' })
   },
+  async redactedCsv(_projectId: string) {
+    await delay(250)
+    // 与真实端点同形:列固定 dataset_id、row_index、data;行数与演示批次一致,
+    // 页面据此真实统计,而不是显示写死的记录数。
+    const lines = ['dataset_id,row_index,data']
+    for (const batch of SYNTHETIC_BATCHES) {
+      for (let index = 0; index < batch.rows; index += 1) {
+        lines.push(`${batch.id},${index},"{""text"":""合成样本 ${batch.id}-${index}""}"`)
+      }
+    }
+    return `${lines.join('\n')}\n`
+  },
   async summary(projectId: string) {
     await delay(300)
     // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)
@@ -752,6 +764,11 @@ export const mockApi: ApiClient = {
   async listMembers() {
     await delay(200)
     return SYNTHETIC_MEMBERS.map(member => ({ ...member }))
+  },
+  async listProjects() {
+    await delay(200)
+    // 演示模式必须始终有一个可进入的项目(与后端 demo-project 种子同名)
+    return [{ id: 'demo-project', name: 'VoiceLens Demo Project', description: 'Synthetic workspace' }]
   },
   async getSettings() {
     await delay(200)

@@ -60,6 +60,15 @@ export interface TaskPatchBody {
 
 // —— W03 项目成员与项目设置 ——
 
+/** GET /projects 的项目列表项;后端项目实体只保证 id/name,其余字段缺省时不猜测 */
+export interface ProjectSummary {
+  id: string
+  name: string
+  /** 后端项目实体没有描述字段(演示项目除外),缺省时视图不显示 */
+  description?: string
+  timezone?: string
+}
+
 export type ProjectMemberRole = 'OWNER' | 'EDITOR' | 'VIEWER'
 
 export interface ProjectMember {
@@ -218,6 +227,8 @@ export interface ApiClient {
   patchTask(projectId: string, taskId: string, body: TaskPatchBody): Promise<TaskSummary>
   /** W16:项目成员列表;任务负责人只能从此列表选择 */
   listMembers(projectId: string, signal?: AbortSignal): Promise<ProjectMember[]>
+  /** GET /projects:仅列出当前用户有权限访问的项目(分页信封在实现内解包) */
+  listProjects(signal?: AbortSignal): Promise<ProjectSummary[]>
   /** W03/7.2:项目设置(时区、限额、规则、模型可用性) */
   getSettings(projectId: string, signal?: AbortSignal): Promise<ProjectSettings>
   /** W03/7.2:写入项目设置(仅 OWNER);expected_version 过期返回 409,不做幂等键 */
@@ -237,11 +248,21 @@ export interface ApiClient {
   createExport(projectId: string, body: { scope: string }, idempotencyKey: string): Promise<ExportJob>
   /** 下载导出文件:每次重新鉴权,过期/失效返回 410 */
   downloadExport(projectId: string, exportId: string): Promise<Blob>
+  /** GET /projects/{p}/exports/redacted.csv:全量脱敏行 CSV 文本,列固定为 dataset_id、row_index、data */
+  redactedCsv(projectId: string, signal?: AbortSignal): Promise<string>
+}
+
+/**
+ * 是否处于 mock 演示模式:VITE_USE_MOCK 未显式设为 'false' 时默认启用。
+ * 需要按模式切换文案/行为时统一用此谓词,不要各自读 env——否则默认值语义会漂移。
+ */
+export function isMockMode(): boolean {
+  return import.meta.env.VITE_USE_MOCK !== 'false'
 }
 
 /** 按 VITE_USE_MOCK 选择真实/mock 客户端;所有页面与 composable 统一走此入口 */
 export function apiClient(): ApiClient {
-  return import.meta.env.VITE_USE_MOCK !== 'false' ? mockApi : fetchHttpClient()
+  return isMockMode() ? mockApi : fetchHttpClient()
 }
 
 export interface ApiErrorDetail { code?: string; message?: string; [key: string]: unknown }
@@ -387,6 +408,9 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
     authConfig() {
       return request<AuthConfig>('/auth/config')
     },
+    listProjects(signal?: AbortSignal) {
+      return list<ProjectSummary>('/projects', signal)
+    },
     loginWithAssertion(assertion: string) {
       return request<LoginResponse>('/auth/token', {
         method: 'POST', body: JSON.stringify({ assertion }), headers: { 'Content-Type': 'application/json' },
@@ -409,6 +433,16 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
         throw new ApiHttpError(response.status, response.status === 410 ? 'export_expired' : `Export failed (${response.status})`)
       }
       return response.blob()
+    },
+    async redactedCsv(projectId: string, signal?: AbortSignal) {
+      // 该端点返回 CSV 文本而不是 JSON,不能走 request();鉴权头与 downloadExport 保持一致
+      const token = getAccessToken()
+      const response = await fetch(
+        `${base}${project(projectId)}/exports/redacted.csv`,
+        { credentials: 'include', headers: { Accept: 'text/csv', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal },
+      )
+      if (!response.ok) throw new ApiHttpError(response.status, `Redacted export failed (${response.status})`)
+      return response.text()
     },
     summary(projectId: string, signal?: AbortSignal) {
       return request<SummaryResponse>(`${project(projectId)}/summary`, { signal })

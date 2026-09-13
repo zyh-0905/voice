@@ -74,8 +74,7 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { CircleCheckFilled, Upload } from '@element-plus/icons-vue'
-import { ApiHttpError, fetchHttpClient } from '../../api/client'
-import { mockApi } from '../../api/mock'
+import { ApiHttpError, apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import ImportHealth from '../../components/common/ImportHealth.vue'
@@ -87,7 +86,8 @@ import { useImportFlow, syntheticHealth, type ImportStep } from './service'
 const route = useRoute()
 const projectId = computed(() => String(route.params.p))
 
-const client = import.meta.env.VITE_USE_MOCK !== 'false' ? mockApi : fetchHttpClient()
+// 统一走 apiClient():此前这里重写了工厂的三元判断,mock 默认值一改就会与别处不一致
+const client = apiClient()
 const { step, readStoredStep, persistStep, clearStoredStep } = useImportFlow(projectId.value)
 step.value = readStoredStep()
 

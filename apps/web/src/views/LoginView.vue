@@ -68,13 +68,13 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { DocumentChecked, Finished, UserFilled } from '@element-plus/icons-vue'
 import { DEMO_USER, DEMO_VIEWER, useSessionStore, type User } from '../stores/session'
-import { apiClient, ApiHttpError, clearAccessToken, setAccessToken } from '../api/client'
+import { apiClient, ApiHttpError, clearAccessToken, isMockMode, setAccessToken } from '../api/client'
 import VlButton from '../components/common/VlButton.vue'
 
 const router = useRouter()
 const session = useSessionStore()
 const client = apiClient()
-const isRealMode = import.meta.env.VITE_USE_MOCK === 'false'
+const isRealMode = !isMockMode()
 const username = ref('')
 const password = ref('')
 const error = ref('')
