@@ -232,6 +232,144 @@ class Feedback(Base):
     )
 
 
+class Topic(Base):
+    """工程计划 5.2 主题:topic_id 在同一次分析内稳定,跨 run 不自动认为是同一语义。
+
+    `current_version_id` 是活动版本指针(人工校正后原子推进)。它刻意不设外键:
+    topics 与 topic_versions 互相引用,两张表谁先建都会撞上「引用的表还不存在」,
+    而 SQLite 不支持建表后 ALTER ADD CONSTRAINT——那意味着闸门跑不过 sqlite,
+    只能退回「只在 PostgreSQL 上能建」。真正要紧的方向(topic_versions 不得
+    指向别的项目的主题)由 topic_versions 那侧的复合外键保证。
+    """
+
+    __tablename__ = 'topics'
+    # 行 id 带 run_id:`topic_id` 只在一次分析内稳定(5.2),而每个 run 都会把簇命名为
+    # topic-1、topic-2……。裸用 topic_id 做键会让同项目的第二个 run 撞主键,
+    # 它的主题被静默丢弃。
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    # 业务 id(同一 run 内稳定),manifest 与 API 都用它
+    topic_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    current_version_id: Mapped[str | None] = mapped_column(String(200))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default='ACTIVE')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        # topic_versions 的复合外键指向这里
+        UniqueConstraint('project_id', 'id', name='uq_topics_project_id_id'),
+        UniqueConstraint('run_id', 'topic_id', name='uq_topics_run_topic'),
+        Index('ix_topics_project_run', 'project_id', 'run_id'),
+    )
+
+
+class TopicVersion(Base):
+    """工程计划 5.2 主题版本:`(topic_id, version)` 唯一,**不可原地更新**。
+
+    改名/合并/拆分的产物是新行,不是对被改行的 update。这一条此前只能靠「把旧快照
+    复制进 revision_history 数组」近似实现——而那份副本与「当前」副本可以分叉,
+    且没有任何东西会发现。
+    """
+
+    __tablename__ = 'topic_versions'
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    # 业务 id(manifest 与 API 用)与行 id 分开:行 id 必须全局唯一,业务 id 只在一个 run 内稳定
+    topic_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    topic_row_id: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 引入这个版本的分析 revision:人工校正每次推进 revision,topic_version 随之增加
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default='medium')
+    department: Mapped[str | None] = mapped_column(String(64))
+    claims_json: Mapped[list | None] = mapped_column(JSON, default=list)
+    suggested_action: Mapped[str | None] = mapped_column(Text)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 校正后摘要未重新验证前为 false:不能原样保留不适用的断言
+    summary_revalidated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    limitations_json: Mapped[list | None] = mapped_column(JSON, default=list)
+    origin: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('topic_row_id', 'version', name='uq_topic_versions_topic_version'),
+        ForeignKeyConstraint(['project_id', 'topic_row_id'], ['topics.project_id', 'topics.id'],
+                             name='fk_topic_versions_topic_same_project'),
+    )
+
+
+class TopicEvidence(Base):
+    """工程计划 5.2 主题证据:同版本/分块关联唯一,计数按 distinct feedback_id。
+
+    `segment_id` 用空串表示「关联到反馈级」而不是分块级:首版一个反馈一段证据,
+    而 SQL 唯一约束不约束 NULL(含 NULL 的行会被当成各不相同),用可空列的话
+    「同版本同反馈只能有一条」这条约束在 PostgreSQL 上根本不生效。
+    接分块级证据(8.3:同一反馈最多贡献两段)时填真实 segment_id。
+    """
+
+    __tablename__ = 'topic_evidence'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    topic_version_id: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    feedback_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    segment_id: Mapped[str] = mapped_column(String(96), nullable=False, default='')
+    source_row: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quote: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    quote_start: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quote_end: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    similarity: Mapped[float | None] = mapped_column(Numeric(6, 5))
+    is_representative: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('topic_version_id', 'feedback_id', 'segment_id',
+                         name='uq_topic_evidence_version_feedback_segment'),
+        ForeignKeyConstraint(['project_id', 'feedback_id'], ['feedback.project_id', 'feedback.id'],
+                             name='fk_topic_evidence_feedback_same_project'),
+    )
+
+
+class AnalysisRevision(Base):
+    """工程计划 5.2 分析修订:`(run_id, revision)` 唯一,manifest 固定
+    topic_id → topic_version_id。
+
+    旧 revision 永远可读,且**不随最新的主题版本被动改写**——这一点靠的是
+    manifest 记的是那一版的具体 version id,而不是「按名字去找当前的同名主题」。
+    """
+
+    __tablename__ = 'analysis_revisions'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    topic_manifest_json: Mapped[dict | None] = mapped_column(JSON, default=dict)
+    unassigned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reason: Mapped[str | None] = mapped_column(Text)
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('run_id', 'revision', name='uq_analysis_revisions_run_revision'),
+        Index('ix_analysis_revisions_project_run', 'project_id', 'run_id'),
+    )
+
+
+class TopicCorrection(Base):
+    """工程计划 5.2 校正记录:记录 merge/split/rename/create;不保存未脱敏正文。"""
+
+    __tablename__ = 'topic_corrections'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    from_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    to_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_topic_ids: Mapped[list | None] = mapped_column(JSON, default=list)
+    target_topic_ids: Mapped[list | None] = mapped_column(JSON, default=list)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 class RunFeedback(Base):
     """工程计划 5.2:冻结一次分析的输入反馈集合。
 

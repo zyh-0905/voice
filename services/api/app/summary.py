@@ -64,20 +64,24 @@ def selected_rows(run: Mapping, filters: Mapping[str, str | None], repository) -
     return [row for row in run_feedback(dict(run), repository) if _row_matches(row, filters)]
 
 
-def _latest_published_run(analysis_values: Sequence[dict], project_id: str) -> dict | None:
+def _latest_published_run(analysis_values: Sequence[dict], project_id: str, repository) -> dict | None:
+    """最近已发布 revision 的 run;revision 取自 analysis_revisions(5.2)。"""
     published = None
+    best = 0
     for run in analysis_values:
         if run.get('project_id') != project_id:
             continue
-        revision = (run.get('result') or {}).get('revision')
+        revision = repository.latest_revision(project_id, run['id'])
         if not revision:
             continue
-        if published is None or int(revision) >= int(published['result']['revision']):
+        if published is None or int(revision) >= best:
+            best = int(revision)
             published = run
     return published
 
 
-def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | None, revision: int | None) -> dict | None:
+def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | None,
+                revision: int | None, repository) -> dict | None:
     """按 7.7 选择规则定位 run:指定则校验归属与 revision;未指定取最近已发布 run。"""
     if revision is not None and not run_id:
         raise SummaryRequestError(422, 'revision_requires_run_id')
@@ -85,13 +89,13 @@ def resolve_run(analysis_values: Sequence[dict], project_id: str, run_id: str | 
         run = next((item for item in analysis_values if item.get('id') == run_id), None)
         if run is None or run.get('project_id') != project_id:
             raise SummaryRequestError(404, 'run_not_found')
-        published = run.get('result') or {}
-        if not published.get('revision'):
+        published = repository.latest_revision(project_id, run_id)
+        if not published:
             return None
-        if revision is not None and int(published['revision']) != int(revision):
+        if revision is not None and int(published) != int(revision):
             raise SummaryRequestError(404, 'revision_not_found')
         return run
-    return _latest_published_run(analysis_values, project_id)
+    return _latest_published_run(analysis_values, project_id, repository)
 
 
 def pending_risk_feedback_count(run: Mapping) -> int:
@@ -131,7 +135,7 @@ def build_summary(
     """组装 7.7 契约响应。"""
     filters = dict(filters or {})
     timestamp = now or datetime.now(timezone.utc)
-    run = resolve_run(analysis_values, project_id, run_id, revision)
+    run = resolve_run(analysis_values, project_id, run_id, revision, repository)
     active_count, overdue_count = task_metrics(tasks, timestamp)
 
     payload = {
@@ -161,16 +165,17 @@ def build_summary(
     if run is None:
         return payload  # 无已发布 run:洞察为空,项目任务仍可读
 
-    published = run.get('result') or {}
+    from .revisions import load_revision_snapshot
+    snapshot = load_revision_snapshot(repository, run) or {}
     rows = selected_rows(run, filters, repository)
     payload.update({
         'run_id': run.get('id'),
-        'revision': published.get('revision'),
+        'revision': snapshot.get('revision'),
         'denominator': len(rows),
     })
     payload['insight_metrics'].update({
         'valid_feedback_count': len(rows),
-        'topic_count': len(published.get('topics') or []),
+        'topic_count': len(snapshot.get('topics') or []),
         'pending_risk_feedback_count': pending_risk_feedback_count(run),
     })
     return payload

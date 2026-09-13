@@ -186,7 +186,7 @@ def run_analysis_pipeline(store, analysis_id: str, repository=None) -> dict:
     persist_segments(repository, run.get('project_id'), rows)
     drafts = build_topics_from_run(run, repository)
     unassigned = total - sum(len(d.evidence) for d in drafts)
-    snapshot = publish_revision(store, analysis_id, drafts, sources, unassigned)
+    snapshot = publish_revision(store, analysis_id, drafts, sources, unassigned, repository)
     findings = scan_run_risks(run, repository)
     store.update_analysis(analysis_id, {'risk_findings': findings})
     # 扫描独立于聚类,所以候选在主题发布之后单独入队(计划 8.1:1 条严重投诉即使

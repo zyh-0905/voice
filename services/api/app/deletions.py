@@ -28,8 +28,10 @@ def _runs_of(repository, project_id: str) -> list[dict]:
     return [a for a in repository.analyses.values() if a.get('project_id') == project_id]
 
 
-def _topic_count(run: Mapping) -> int:
-    return len((run.get('result') or {}).get('topics') or [])
+def _topic_count(repository, run: Mapping) -> int:
+    """本次 revision 的主题数,取自读模型(5.2:主题不再存在 run JSON 里)。"""
+    from .revisions import load_revision_snapshot
+    return len((load_revision_snapshot(repository, run) or {}).get('topics') or [])
 
 
 def preview_deletion(repository, project_id: str, target_type: str, target_id: str) -> dict:
@@ -44,7 +46,7 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'target_name': project.get('name', project_id),
             'datasets': len(_datasets_of(repository, project_id)),
             'runs': len(runs),
-            'topics': sum(_topic_count(run) for run in runs),
+            'topics': sum(_topic_count(repository, run) for run in runs),
             'tasks': len(repository.list_entities('tasks', project_id)),
             'reviews': len(repository.list_entities('reviews', project_id)),
             'risks': len(repository.list_entities('risks', project_id)),
@@ -64,7 +66,7 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'target_name': dataset.get('name', target_id),
             'datasets': 1,
             'runs': len(affected),
-            'topics': sum(_topic_count(run) for run in affected),
+            'topics': sum(_topic_count(repository, run) for run in affected),
             'tasks': 0, 'reviews': 0, 'risks': 0, 'memberships': 0,
             'feedback': len(repository.list_feedback(project_id, [target_id])),
             # 确认前必须说明:删除批次会让引用它的分析、主题结果与证据失效
@@ -124,6 +126,8 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 输入冻结清单先走:它引用 feedback,而 feedback 稍后才删。
         # 顺序反了的话复合外键会挡住删除,或者留下指向已删反馈的条目。
         repository.delete_run_feedbacks_for_run(project_id, run['id'])
+        # 主题版本与证据先走:它们引用 feedback,而 feedback 稍后才删
+        repository.delete_topics_for_run(project_id, run['id'])
         _safe_delete(repository, repository.delete_analysis, run['id'])
     steps.append({'name': 'purge_runs', 'status': 'done', 'runs': len(runs)})
 
@@ -146,6 +150,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         # 项目级:所有 run 的清单一起走(purge_runs 已经清过一遍,
         # 这里兜住「有清单但没有 run」的残留)
         repository.delete_run_feedbacks_for_project(project_id)
+        repository.delete_topics_for_project(project_id)
         segments = repository.delete_segments_for_project(project_id)
         feedback = repository.delete_feedback_for_project(project_id)
     steps.append({'name': 'purge_feedback', 'status': 'done',

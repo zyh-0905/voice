@@ -15,7 +15,7 @@ from app.reviews import (
     WindowSpec,
     compute_review,
 )
-from support.feedback import new_repository, seed_run_feedback
+from support.feedback import new_repository, publish_revision_rows, seed_run_feedback
 
 # 两窗必须等长,所以不能按自然月取(8 月 31 天、9 月 30 天)——各取 30 天
 BEFORE = WindowSpec('2026-08-01T00:00:00+00:00', '2026-08-31T00:00:00+00:00')
@@ -39,10 +39,19 @@ def _evidence(before_hits: int, after_hits: int = 0, topic: str = 't1') -> dict:
 
 
 def _run(rows, evidence, revision: int = 1) -> dict:
+    """证据必须挂在**主题版本**下:5.2 之后 topic_evidence 的外键指向主题版本行,
+    而 version 由 manifest 按 topics 的 topic_id 推导。只给 evidence_by_topic
+    不给 topics 的话 manifest 是空的,读出来就是「目标主题不属于该 revision」。
+    """
     return {
         'id': 'run_1', 'project_id': 'p',
         'datasets': [{'id': 'ds', 'preview': {'rows': rows}}],
-        'result': {'revision': revision, 'evidence_by_topic': evidence},
+        'result': {
+            'revision': revision,
+            'topics': [{'topic_id': topic, 'name': topic, 'summary': '', 'severity': 'medium',
+                        'feedback_count': len(items)} for topic, items in evidence.items()],
+            'evidence_by_topic': evidence,
+        },
     }
 
 
@@ -63,8 +72,10 @@ def _seeded_run(rows, evidence, revision: int = 1):
     repository = new_repository()
     run = _run(rows, evidence, revision)
     seed_run_feedback(repository, run)
+    # 顺序不能反:发布要写 topic_evidence,而证据得先对齐到表里的真实 feedback_id
     run['result']['evidence_by_topic'] = _bind_feedback_ids(
         run['result']['evidence_by_topic'], rows, run['run_feedback_ids'])
+    publish_revision_rows(repository, run)
     return repository, run
 
 

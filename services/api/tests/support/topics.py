@@ -6,7 +6,7 @@ import pytest
 
 from app.main import repository
 from app.publishing import EvidenceRef, TopicDraft, publish_revision
-from support.feedback import seed_run_feedback
+from support.feedback import publish_revision_rows, seed_run_feedback
 
 TOPIC_ID = 't1'
 REVISION = 1
@@ -58,20 +58,31 @@ def topic_case():
             evidence=[EvidenceRef(SECOND_FEEDBACK_ID, 1, '申请退款后', 0, 5)],
         ),
     ]
-    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=1)
+    # 内存仓储同时充当 AnalysisStore(它有 get_analysis/update_analysis)
+    publish_revision(repository, run_id, drafts, SOURCES, unassigned_count=1, repository=repository)
 
-    # 外项目干扰:同名 topic 带外项目证据,任何查询都不应泄漏
-    repository.create_analysis({
-        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': other_project_id, 'dataset_ids': [], 'datasets': [],
+    # 外项目干扰:同名 topic 带外项目证据,任何查询都不应泄漏。
+    # 外项目的反馈行也要真落库:topic_evidence 的复合外键会拒绝指向不存在反馈的证据,
+    # 所以「伪造一条外项目证据」这件事本身必须先有一条外项目反馈。
+    foreign_dataset_id = 'ds_foreign'
+    foreign_run = {
+        'id': f'run_foreign_{uuid4().hex[:8]}', 'project_id': other_project_id,
+        'dataset_ids': [foreign_dataset_id],
+        'datasets': [{'id': foreign_dataset_id, 'project_id': other_project_id,
+                      'preview': {'rows': [{'content': '外项目原文'}]}}],
         'status': 'done', 'stage': 'completed', 'total': 1,
         'result': {
             'revision': 1,
-            'topics': [{'topic_id': TOPIC_ID, 'name': '外项目主题', 'summary': '', 'severity': 'medium', 'feedback_count': 1}],
+            'topics': [{'topic_id': TOPIC_ID, 'name': '外项目主题', 'summary': '', 'severity': 'medium',
+                        'feedback_count': 1}],
             'evidence_by_topic': {TOPIC_ID: [{'feedback_id': FOREIGN_FEEDBACK_ID, 'source_row': 0,
-                                               'quote': '外项目原文', 'quote_start': 0, 'quote_end': 5}]},
+                                              'quote': '外项目原文', 'quote_start': 0, 'quote_end': 5}]},
             'unassigned_count': 0,
         },
-    })
+    }
+    seed_run_feedback(repository, foreign_run)
+    repository.create_analysis(foreign_run)
+    publish_revision_rows(repository, foreign_run)
 
     return SimpleNamespace(
         project_id=project_id,

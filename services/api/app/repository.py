@@ -66,6 +66,18 @@ class Repository(Protocol):
     def count_segments_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
     def delete_segments_for_project(self, project_id: str) -> int: ...
     def delete_segments_for_dataset(self, project_id: str, dataset_id: str) -> int: ...
+    # —— §5.2 分析修订与主题版本(快照改由实体表现算) ——
+    def save_revision(self, project_id: str, run_id: str, plan: dict) -> dict: ...
+    def latest_revision(self, project_id: str, run_id: str) -> int | None: ...
+    def get_analysis_revision(self, project_id: str, run_id: str, revision: int) -> dict | None: ...
+    def get_topic_version(self, project_id: str, version_id: str) -> dict | None: ...
+    def list_topic_evidence(self, project_id: str, version_id: str) -> list[dict]: ...
+    def save_topic_correction(self, project_id: str, record: dict) -> dict: ...
+    def list_topic_corrections(self, project_id: str, run_id: str) -> list[dict]: ...
+    def next_versions_for_run(self, project_id: str, run_id: str) -> dict[str, int]: ...
+    def count_topics_for_run(self, project_id: str, run_id: str) -> int: ...
+    def delete_topics_for_run(self, project_id: str, run_id: str) -> int: ...
+    def delete_topics_for_project(self, project_id: str) -> int: ...
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
     def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
@@ -87,6 +99,12 @@ class InMemoryRepository:
         self.feedback = {}
         self.segments = {}
         self.run_feedbacks = {}
+        # §5.2 主题与修订:键均带 project_id,越项目引用在内存侧也拿不到
+        self.topics = {}
+        self.topic_versions = {}
+        self.topic_evidence = {}
+        self.analysis_revisions = {}
+        self.topic_corrections = []
 
     def _create(self, collection, value):
         key = value['id']
@@ -211,6 +229,95 @@ class InMemoryRepository:
             raise ValueError(f'Idempotency key already exists: {key}')
         self.idempotency[key] = deepcopy(value)
         return deepcopy(value)
+
+    # —— §5.2 分析修订与主题版本 ——
+    # 四张表一次事务写入:半份修订会同时破坏「(run_id, revision) 唯一」和
+    # 「旧 revision 永远可读」——会出现一个 manifest 指向不存在版本的空壳 revision。
+    def save_revision(self, project_id, run_id, plan):
+        for topic in plan['topics']:
+            self.topics[(project_id, run_id, topic['id'])] = deepcopy(topic)
+        for version in plan['versions']:
+            self.topic_versions[(project_id, version['id'])] = deepcopy(version)
+        for evidence in plan['evidence']:
+            self.topic_evidence.setdefault((project_id, evidence['topic_version_id']), []).append(deepcopy(evidence))
+        record = deepcopy(plan['revision'])
+        self.analysis_revisions[(project_id, run_id, record['revision'])] = record
+        return record
+
+    def latest_revision(self, project_id, run_id):
+        revisions = [rev for (pid, rid, rev) in self.analysis_revisions
+                     if pid == project_id and rid == run_id]
+        return max(revisions) if revisions else None
+
+    def get_analysis_revision(self, project_id, run_id, revision):
+        return deepcopy(self.analysis_revisions.get((project_id, run_id, revision)))
+
+    def get_topic_version(self, project_id, version_id):
+        return deepcopy(self.topic_versions.get((project_id, version_id)))
+
+    def list_topic_evidence(self, project_id, version_id):
+        return deepcopy(self.topic_evidence.get((project_id, version_id), []))
+
+    def save_topic_correction(self, project_id, record):
+        value = deepcopy(record)
+        self.topic_corrections.append(value)
+        return value
+
+    def next_versions_for_run(self, project_id, run_id):
+        """每个主题的下一个可用版本号。
+
+        校正要接着往下编号,不能从 1 重来——重来会撞 `(topic_id, version)` 唯一,
+        而那个约束正是「不可原地更新」的保证。
+        """
+        highest: dict[str, int] = {}
+        topic_ids = {topic['topic_id'] for (pid, rid, _row) , topic in
+                     ((key, value) for key, value in self.topics.items())
+                     if pid == project_id and rid == run_id}
+        for (pid, _vid), version in self.topic_versions.items():
+            if pid != project_id or version['run_id'] != run_id:
+                continue
+            if version['topic_id'] not in topic_ids:
+                continue
+            highest[version['topic_id']] = max(highest.get(version['topic_id'], 0), version['version'])
+        return {topic_id: highest.get(topic_id, 0) + 1 for topic_id in topic_ids}
+
+    def list_topic_corrections(self, project_id, run_id):
+        return [deepcopy(item) for item in self.topic_corrections
+                if item['project_id'] == project_id and item['run_id'] == run_id]
+
+    def count_topics_for_run(self, project_id, run_id):
+        """删除与隔离核验用:某个 run 自己有多少个主题行。"""
+        return sum(1 for (pid, rid, _row) in self.topics if pid == project_id and rid == run_id)
+
+    def delete_topics_for_run(self, project_id, run_id):
+        """删 run 的主题与修订:版本与证据随主题走,不留孤儿行。"""
+        topic_rows = {row_id for (pid, rid, row_id) in self.topics
+                      if pid == project_id and rid == run_id}
+        for version_id in [vid for (pid, vid), version in self.topic_versions.items()
+                           if pid == project_id and version['topic_row_id'] in topic_rows]:
+            self.topic_versions.pop((project_id, version_id), None)
+            self.topic_evidence.pop((project_id, version_id), None)
+        for key in [k for k in self.topics if k[0] == project_id and k[1] == run_id]:
+            del self.topics[key]
+        for key in [k for k in self.analysis_revisions if k[0] == project_id and k[1] == run_id]:
+            del self.analysis_revisions[key]
+        self.topic_corrections = [item for item in self.topic_corrections
+                                  if not (item['project_id'] == project_id and item['run_id'] == run_id)]
+        return len(topic_rows)
+
+    def delete_topics_for_project(self, project_id):
+        topic_keys = [key for key in self.topics if key[0] == project_id]
+        for key in topic_keys:
+            del self.topics[key]
+        for key in [k for k in self.topic_versions if k[0] == project_id]:
+            del self.topic_versions[key]
+        for key in [k for k in self.topic_evidence if k[0] == project_id]:
+            del self.topic_evidence[key]
+        for key in [k for k in self.analysis_revisions if k[0] == project_id]:
+            del self.analysis_revisions[key]
+        self.topic_corrections = [item for item in self.topic_corrections
+                                  if item['project_id'] != project_id]
+        return len(topic_keys)
 
     def delete_idempotency_for_project(self, project_id):
         """10.4:删除项目要清理「幂等响应正文」——它记录着被删对象的存在与内容。

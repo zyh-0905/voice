@@ -1,9 +1,33 @@
 from collections.abc import MutableMapping
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from .db import Base, SessionLocal
-from .models import Project, Membership, Dataset, AnalysisRun, OutboxEvent, Risk, RiskAudit, DeletionJob, ExportJob, Task, Review, IdempotencyKey, Feedback, Segment, RunFeedback
+from .models import (AnalysisRevision, AnalysisRun, Dataset, DeletionJob, ExportJob,
+                     Feedback, IdempotencyKey, Membership, OutboxEvent, Project, Review,
+                     Risk, RiskAudit, RunFeedback, Segment, Task, Topic, TopicCorrection,
+                     TopicEvidence, TopicVersion)
 from .repository import MAX_PUBLISH_ATTEMPTS, same_event
+
+# 模型列与 plan 行的字段名不完全一致(claims/limitations 在库里带 _json 后缀),
+# 映射集中在这里:散在调用点上会漏掉一处,而漏掉的表现是「这个字段永远是默认值」。
+_VERSION_FIELDS = ('id', 'project_id', 'run_id', 'topic_id', 'topic_row_id', 'version',
+                   'revision', 'name', 'summary', 'severity', 'department',
+                   'suggested_action', 'needs_review', 'summary_revalidated', 'origin')
+_VERSION_JSON_FIELDS = {'claims_json': 'claims', 'limitations_json': 'limitations'}
+_EVIDENCE_FIELDS = ('id', 'project_id', 'topic_version_id', 'feedback_id', 'segment_id',
+                    'source_row', 'quote', 'quote_start', 'quote_end', 'similarity',
+                    'is_representative')
+
+
+def _version_kwargs(version: dict) -> dict:
+    kwargs = {key: version.get(key) for key in _VERSION_FIELDS}
+    for column, source in _VERSION_JSON_FIELDS.items():
+        kwargs[column] = list(version.get(source) or [])
+    return kwargs
+
+
+def _evidence_kwargs(evidence: dict) -> dict:
+    return {key: evidence.get(key) for key in _EVIDENCE_FIELDS}
 
 
 class _EntityMap(MutableMapping):
@@ -282,6 +306,167 @@ class SQLAlchemyRepository:
             'identity_quality': obj.identity_quality,
             'redaction_version': obj.redaction_version,
         }
+
+    # —— §5.2 分析修订与主题版本 ——
+    @staticmethod
+    def _topic_version_dict(obj):
+        return {'id': obj.id, 'project_id': obj.project_id, 'topic_id': obj.topic_id,
+                'version': obj.version, 'revision': obj.revision, 'name': obj.name,
+                'summary': obj.summary, 'severity': obj.severity, 'department': obj.department,
+                'claims': list(obj.claims_json or []), 'suggested_action': obj.suggested_action,
+                'needs_review': obj.needs_review, 'summary_revalidated': obj.summary_revalidated,
+                'limitations': list(obj.limitations_json or []), 'origin': obj.origin}
+
+    @staticmethod
+    def _evidence_dict(obj):
+        return {'id': obj.id, 'project_id': obj.project_id, 'topic_version_id': obj.topic_version_id,
+                'feedback_id': obj.feedback_id, 'segment_id': obj.segment_id,
+                'source_row': obj.source_row, 'quote': obj.quote,
+                'quote_start': obj.quote_start, 'quote_end': obj.quote_end,
+                'similarity': float(obj.similarity) if obj.similarity is not None else None,
+                'is_representative': obj.is_representative}
+
+    def save_revision(self, project_id, run_id, plan):
+        """一次事务写入主题行、版本行、证据行与该 revision 记录。
+
+        半份修订会同时破坏「(run_id, revision) 唯一」与「旧 revision 永远可读」:
+        manifest 会指向不存在的版本,而读取端只能少给一个主题——那是最难发现的
+        失败,因为它看起来像「这个主题没有证据」。
+        """
+
+        with self.session() as s, s.begin():
+            for topic in plan['topics']:
+                existing = s.get(Topic, topic['id'])
+                if existing is None:
+                    s.add(Topic(project_id=project_id, run_id=run_id, **{
+                        key: topic[key] for key in ('id', 'topic_id', 'current_version_id', 'state')}))
+                else:
+                    # 主题在同一次分析内 id 稳定,但版本指针要推进到最新
+                    existing.current_version_id = topic['current_version_id']
+                    existing.state = topic['state']
+            s.flush()
+            for version in plan['versions']:
+                s.add(TopicVersion(**_version_kwargs(version)))
+            s.flush()
+            for evidence in plan['evidence']:
+                s.add(TopicEvidence(**_evidence_kwargs(evidence)))
+            record = plan['revision']
+            s.add(AnalysisRevision(**{key: record[key] for key in (
+                'id', 'project_id', 'run_id', 'revision', 'topic_manifest_json',
+                'unassigned_count', 'reason', 'actor_id')}))
+            s.flush()
+        return record
+
+    def latest_revision(self, project_id, run_id):
+        with self.session() as s:
+            return s.scalar(select(func.max(AnalysisRevision.revision)).where(
+                AnalysisRevision.project_id == project_id,
+                AnalysisRevision.run_id == run_id))
+
+    def get_analysis_revision(self, project_id, run_id, revision):
+        with self.session() as s:
+            obj = s.scalars(select(AnalysisRevision).where(
+                AnalysisRevision.project_id == project_id,
+                AnalysisRevision.run_id == run_id,
+                AnalysisRevision.revision == revision)).first()
+            if obj is None:
+                return None
+            return {'id': obj.id, 'project_id': obj.project_id, 'run_id': obj.run_id,
+                    'revision': obj.revision,
+                    'topic_manifest_json': dict(obj.topic_manifest_json or {}),
+                    'unassigned_count': obj.unassigned_count,
+                    'reason': obj.reason, 'actor_id': obj.actor_id}
+
+    def get_topic_version(self, project_id, version_id):
+        with self.session() as s:
+            obj = s.get(TopicVersion, version_id)
+            if obj is None or obj.project_id != project_id:
+                return None
+            return self._topic_version_dict(obj)
+
+    def list_topic_evidence(self, project_id, version_id):
+        with self.session() as s:
+            rows = s.scalars(select(TopicEvidence).where(
+                TopicEvidence.project_id == project_id,
+                TopicEvidence.topic_version_id == version_id).order_by(TopicEvidence.id)).all()
+            return [self._evidence_dict(o) for o in rows]
+
+    def save_topic_correction(self, project_id, record):
+        with self.session() as s, s.begin():
+            s.add(TopicCorrection(project_id=project_id, **{
+                key: record[key] for key in (
+                    'id', 'run_id', 'from_revision', 'to_revision', 'operation',
+                    'source_topic_ids', 'target_topic_ids', 'reason', 'actor_id')}))
+            s.flush()
+        return record
+
+    def list_topic_corrections(self, project_id, run_id):
+        with self.session() as s:
+            rows = s.scalars(select(TopicCorrection).where(
+                TopicCorrection.project_id == project_id,
+                TopicCorrection.run_id == run_id).order_by(TopicCorrection.id)).all()
+            return [{'id': o.id, 'project_id': o.project_id, 'run_id': o.run_id,
+                     'from_revision': o.from_revision, 'to_revision': o.to_revision,
+                     'operation': o.operation,
+                     'source_topic_ids': list(o.source_topic_ids or []),
+                     'target_topic_ids': list(o.target_topic_ids or []),
+                     'reason': o.reason, 'actor_id': o.actor_id} for o in rows]
+
+    def next_versions_for_run(self, project_id, run_id):
+        """每个主题的下一个可用版本号,键是**业务 topic_id**(见内存实现处的说明)。"""
+        with self.session() as s:
+            topic_ids = list(s.scalars(select(Topic.topic_id).where(
+                Topic.project_id == project_id, Topic.run_id == run_id)).all())
+            if not topic_ids:
+                return {}
+            rows = s.execute(
+                select(TopicVersion.topic_id, func.max(TopicVersion.version))
+                .where(TopicVersion.project_id == project_id,
+                       TopicVersion.run_id == run_id,
+                       TopicVersion.topic_id.in_(topic_ids))
+                .group_by(TopicVersion.topic_id)).all()
+            highest = {topic_id: int(version or 0) for topic_id, version in rows}
+            return {topic_id: highest.get(topic_id, 0) + 1 for topic_id in topic_ids}
+
+    def count_topics_for_run(self, project_id, run_id):
+        """删除与隔离核验用:某个 run 自己有多少个主题行。"""
+        with self.session() as s:
+            return int(s.query(Topic).filter(
+                Topic.project_id == project_id, Topic.run_id == run_id).count())
+
+    def delete_topics_for_run(self, project_id, run_id):
+        """删 run 的主题与修订:证据 → 版本 → 主题 → 修订 → 校正记录。
+
+        顺序由复合外键决定:topic_versions 引用 topics,先删版本再删主题。
+        """
+        with self.session() as s, s.begin():
+            topic_ids = list(s.scalars(select(Topic.id).where(
+                Topic.project_id == project_id, Topic.run_id == run_id)).all())
+            version_ids = list(s.scalars(select(TopicVersion.id).where(
+                TopicVersion.project_id == project_id,
+                TopicVersion.topic_row_id.in_(topic_ids or ['']))).all())
+            if version_ids:
+                s.query(TopicEvidence).filter(
+                    TopicEvidence.project_id == project_id,
+                    TopicEvidence.topic_version_id.in_(version_ids)).delete(synchronize_session=False)
+                s.query(TopicVersion).filter(
+                    TopicVersion.project_id == project_id,
+                    TopicVersion.id.in_(version_ids)).delete(synchronize_session=False)
+            s.query(Topic).filter(Topic.project_id == project_id,
+                                  Topic.run_id == run_id).delete(synchronize_session=False)
+            s.query(AnalysisRevision).filter(
+                AnalysisRevision.project_id == project_id,
+                AnalysisRevision.run_id == run_id).delete(synchronize_session=False)
+            s.query(TopicCorrection).filter(
+                TopicCorrection.project_id == project_id,
+                TopicCorrection.run_id == run_id).delete(synchronize_session=False)
+            return len(topic_ids)
+
+    def delete_topics_for_project(self, project_id):
+        with self.session() as s, s.begin():
+            for model in (TopicEvidence, TopicVersion, Topic, AnalysisRevision, TopicCorrection):
+                s.query(model).filter(model.project_id == project_id).delete(synchronize_session=False)
+            return 0
 
     def delete_idempotency_for_project(self, project_id):
         """10.4:删除项目要清理「幂等响应正文」(见内存实现处的说明)。"""

@@ -90,9 +90,9 @@ class ReviewComputation:
         return self.comparability == COMPARABLE
 
 
-def _topic_feedback_ids(run: Mapping, topic_version_ids: Sequence[str]) -> set[str]:
+def _topic_feedback_ids(snapshot: Mapping, topic_version_ids: Sequence[str]) -> set[str]:
     """选中主题覆盖的反馈集合——多主题取并集,天然去重。"""
-    evidence_by_topic = (run.get('result') or {}).get('evidence_by_topic') or {}
+    evidence_by_topic = snapshot.get('evidence_by_topic') or {}
     ids: set[str] = set()
     for topic_id in topic_version_ids:
         for item in evidence_by_topic.get(topic_id) or []:
@@ -174,13 +174,15 @@ def compute_review(
     filters = dict(filters or {})
     reasons: list[str] = []
 
-    published_revision = (run.get('result') or {}).get('revision')
+    from .revisions import load_revision_snapshot
+    snapshot = load_revision_snapshot(repository, run) or {}
+    published_revision = snapshot.get('revision')
     if published_revision is None:
         reasons.append('该分析尚未发布 revision')
     elif int(published_revision) != int(revision):
         reasons.append(f'版本不一致:请求 {revision},当前 {published_revision}')
 
-    evidence_by_topic = (run.get('result') or {}).get('evidence_by_topic') or {}
+    evidence_by_topic = snapshot.get('evidence_by_topic') or {}
     unknown = [t for t in topic_version_ids if t not in evidence_by_topic]
     if unknown:
         reasons.append(f'目标主题不属于该 revision: {", ".join(unknown)}')
@@ -197,7 +199,7 @@ def compute_review(
     if reasons:
         return ReviewComputation(INSUFFICIENT, tuple(reasons), before_q, after_q, None)
 
-    topic_ids = _topic_feedback_ids(run, topic_version_ids)
+    topic_ids = _topic_feedback_ids(snapshot, topic_version_ids)
     before_q = query_window(run, before, filters, topic_ids, repository)
     after_q = query_window(run, after, filters, topic_ids, repository)
 

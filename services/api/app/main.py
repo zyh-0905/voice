@@ -568,9 +568,8 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
     published = _latest_published_run(project_id)
-    if published is not None:
-        from .topics import list_topics_from_run
-        snapshot = published.get('result') or {}
+    snapshot = _snapshot_of(published) if published else None
+    if snapshot is not None:
         total = int(snapshot.get('unassigned_count') or 0) + sum(
             int(t.get('feedback_count') or 0) for t in snapshot.get('topics') or []
         )
@@ -605,7 +604,8 @@ def _evidence_quotes(run: dict, topic_id: str, revision) -> list[dict]:
     引文是脱敏正文里的精确子串,offset 为其 Unicode 字符位置——前端据此高亮,
     不能自行猜 token 位置(计划 8.2)。
     """
-    evidence = ((run.get('result') or {}).get('evidence_by_topic') or {}).get(topic_id) or []
+    snapshot = _snapshot_of(run) or {}
+    evidence = (snapshot.get('evidence_by_topic') or {}).get(topic_id) or []
     sources = {feedback_id: text for feedback_id, text in _run_sources(run).items()}
     quotes: list[dict] = []
     for item in evidence:
@@ -632,27 +632,40 @@ def _run_sources(run: dict) -> dict[str, str]:
 
 
 def _latest_published_run(project_id: str) -> dict | None:
-    """本项目最近已发布 revision 的 run;无发布返回 None。"""
+    """本项目最近已发布 revision 的 run;无发布返回 None。
+
+    revision 取自 `analysis_revisions`(5.2),不再是 run JSON 里的一个标量:
+    标量与版本行可以分叉,而分叉的表现是「看板显示第 3 版,打开却是第 2 版」。
+    """
     published = None
+    best = 0
     for run in analyses.values():
         if run.get('project_id') != project_id:
             continue
-        revision = (run.get('result') or {}).get('revision')
+        revision = repository.latest_revision(project_id, run['id'])
         if not revision:
             continue
-        if published is None or int(revision) >= int(published['result']['revision']):
+        if published is None or int(revision) >= best:
+            best = int(revision)
             published = run
     return published
+
+
+def _snapshot_of(run: dict, revision: int | None = None) -> dict | None:
+    """按 manifest 现算某个 revision 的读模型(见 app.revisions)。"""
+    from .revisions import load_revision_snapshot
+    return load_revision_snapshot(repository, run, revision)
 
 @app.get('/api/v1/projects/{project_id}/topics/{topic_id}/evidence')
 def get_topic_evidence(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
     """主题证据:仅返回本 run 输入内的记录;版本不匹配/不存在返回 404。"""
     from .topics import RevisionNotFound, TopicNotFound, topic_evidence_from_run
     published = _latest_published_run(project_id)
-    if published is None:
+    snapshot = _snapshot_of(published) if published else None
+    if snapshot is None:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     try:
-        items = topic_evidence_from_run(published, topic_id, topic_version_id)
+        items = topic_evidence_from_run(snapshot, topic_id, topic_version_id)
     except (TopicNotFound, RevisionNotFound):
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     return {'items': items, 'total': len(items)}
@@ -667,35 +680,49 @@ class CorrectionRequest(BaseModel):
 @app.post('/api/v1/projects/{project_id}/topics/{topic_id}/corrections', status_code=201)
 def correct_topic(project_id: str, topic_id: str, req: CorrectionRequest, user: dict = Depends(require_project_analyst)):
     """W13 校正:RENAME/MERGE/SPLIT/CREATE;乐观锁 expected_revision,并发只有一个成功(409);
-    新快照 revision+1,旧版本保留在 revision_history。"""
+    新版本 revision+1,**旧版本留在实体行里**(5.2:版本不可原地更新)。"""
     from .pipeline import _flatten_rows
+    from .revisions import plan_revision
     from .versioning import CorrectionConflict, TopicNotFound, apply_correction
     published = _latest_published_run(project_id)
     if published is None:
+        raise HTTPException(404, detail={'code': 'topic_not_found'})
+    snapshot = _snapshot_of(published)
+    if snapshot is None:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     _rows, sources, _total = _flatten_rows(published, repository)
     params = {'topic_id': topic_id, 'name': req.name,
               'source_topic_ids': req.source_topic_ids, 'feedback_ids': req.feedback_ids}
     try:
-        new_snapshot, history, affected = apply_correction(
-            published, req.operation, req.expected_revision, params, req.reason, sources)
+        new_snapshot, affected = apply_correction(
+            snapshot, req.operation, req.expected_revision, params, req.reason, sources)
     except CorrectionConflict:
         raise HTTPException(409, detail={'code': 'correction_conflict'})
     except TopicNotFound:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     except ValueError as exc:
         raise HTTPException(422, detail={'code': 'invalid_correction', 'message': str(exc)})
-    repository.update_analysis(published['id'], {'result': new_snapshot, 'revision_history': history})
+
+    run_id = published['id']
+    # 版本号接着往下编:从 1 重来会撞 (topic_id, version) 唯一,而那个约束
+    # 正是「不可原地更新」的保证
+    plan = plan_revision(project_id, run_id, new_snapshot,
+                         next_versions=repository.next_versions_for_run(project_id, run_id),
+                         reason=req.reason, actor=user.get('id'))
+    repository.save_revision(project_id, run_id, plan)
+    repository.save_topic_correction(project_id, {
+        'id': f'cor_{uuid4().hex[:10]}', 'run_id': run_id,
+        'from_revision': int(req.expected_revision), 'to_revision': int(new_snapshot['revision']),
+        'operation': req.operation, 'source_topic_ids': req.source_topic_ids or [],
+        'target_topic_ids': affected, 'reason': req.reason, 'actor_id': user.get('id'),
+    })
     return {'revision': new_snapshot['revision'], 'affected_topic_ids': affected}
 
 @app.get('/api/v1/projects/{project_id}/topics/{topic_id}')
 def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | None = Query(None), user: dict = Depends(require_project_access)):
     """主题详情:默认当前 revision,传 topic_version_id 可查任意旧版本(不可变)。"""
-    from .versioning import snapshot_at
     published = _latest_published_run(project_id)
-    if published is None:
-        raise HTTPException(404, detail={'code': 'topic_not_found'})
-    snapshot = snapshot_at(published, topic_version_id) if topic_version_id is not None else (published.get('result') or {})
+    snapshot = _snapshot_of(published, topic_version_id) if published else None
     if not snapshot:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
     topic = next((t for t in snapshot.get('topics') or [] if t['topic_id'] == topic_id), None)

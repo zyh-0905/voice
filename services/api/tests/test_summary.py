@@ -6,7 +6,7 @@ import pytest
 from app.main import app
 from app.summary import build_summary
 from support.client import make_client
-from support.feedback import new_repository, seed_run_feedback
+from support.feedback import new_repository, publish_revision_rows, seed_run_feedback
 
 client = make_client()
 
@@ -39,6 +39,9 @@ def _summary(analysis_runs, tasks, project_id='p', **kwargs):
     repository = new_repository()
     for run in analysis_runs:
         seed_run_feedback(repository, run)
+        # 主题与证据现在落在实体表里,读模型按 manifest 现算(5.2):
+        # 不物化的话「主题数是 0」,而那看起来像「这次分析没有主题」
+        publish_revision_rows(repository, run)
     return build_summary(analysis_runs, tasks, project_id, repository=repository, **kwargs)
 
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.main import repository
 from support.client import make_client
-from support.feedback import seed_run_feedback
+from support.feedback import publish_revision_rows, seed_run_feedback
 
 client = make_client()
 
@@ -42,9 +42,16 @@ def _run_with_review_data(before_hits: int = 168, after_hits: int = 102) -> tupl
     # 前 1000 条是前窗、后 1000 条是后窗;证据引用表里的真实 id,不是逻辑编号
     evidence = ([{'feedback_id': frozen[i]} for i in range(before_hits)]
                 + [{'feedback_id': frozen[1000 + i]} for i in range(after_hits)])
-    run['result'] = {'revision': 1, 'topics': [], 'evidence_by_topic': {'t1': evidence},
+    # 证据要挂在主题版本下,所以 topics 不能是空的:version 由 manifest 按 topic_id
+    # 推导,空 topics 会让证据行无处可挂,读出来就是「目标主题不属于该 revision」。
+    run['result'] = {'revision': 1,
+                     'topics': [{'topic_id': 't1', 'name': '物流体验', 'summary': '',
+                                 'severity': 'medium', 'feedback_count': len(evidence)}],
+                     'evidence_by_topic': {'t1': evidence},
                      'unassigned_count': 0, 'status': 'done'}
     repository.create_analysis(run)
+    # 顺序不能反:发布读的是 run 里的快照,先发布后写 result 等于什么都没发布
+    publish_revision_rows(repository, run)
     return project_id, run_id
 
 
