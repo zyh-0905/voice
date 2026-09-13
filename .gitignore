@@ -8,3 +8,10 @@ __pycache__/
 apps/web/test-results/
 *.db
 .venv/
+
+# macOS 目录元数据,与项目无关
+.DS_Store
+
+# 跨会话交接文档:临时性质,其状态描述会随时间过期(例如它写的 PR 状态)。
+# 交接完即可删,因此不纳入版本控制——留在仓库里反而会被当成现状来读。
+HANDOFF.md
