@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .ingestion import (DecodeError, MappingError, STANDARD_FIELDS, UnsupportedEncoding, apply_mapping,
-                        decode_text, parse_csv_text, parse_txt_text, parse_xlsx_bytes, redact_text, validate_mapping)
+                        build_feedback_rows, decode_text, parse_csv_text, parse_txt_text,
+                        parse_xlsx_bytes, redact_text, validate_mapping)
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
@@ -41,6 +42,8 @@ worker = AnalysisWorker(analyses, repository)
 # 工程计划 4.1:上传 20 MiB,单批 5,000 行;超限分别 413/422,不得静默截断
 MAX_BYTES = 20 * 1024 * 1024
 MAX_BATCH_ROWS = 5_000
+# 工程计划 4.3:上传预览只返回最多 20 行已经脱敏的内容
+PREVIEW_ROW_LIMIT = 20
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -132,7 +135,7 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
         # Legacy rows predate HMAC keys; compare their fields only for migration compatibility.
         is_same_source = existing_key == event_key if existing_key else (existing.get('project_id'), existing.get('source_namespace',''), existing.get('source_kind', existing.get('file_ext','')), existing.get('name')) == (project_id, namespace, kind, source_name)
         if is_same_source:
-            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=_redacted_out(existing))
+            if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=_dataset_out(existing))
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
     preview = _parse_upload(ext, data, encoding)
@@ -140,8 +143,14 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     if total > MAX_BATCH_ROWS:
         # 工程计划 4.1:单批 5,000 行,超限 422 建议拆批,不得静默截断
         raise HTTPException(422, detail={'code': 'row_limit_exceeded', 'max_rows': MAX_BATCH_ROWS, 'rows': total})
-    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':total,'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'encoding':(encoding or None) if ext != 'xlsx' else None,'created_at':now()}
-    return repository.create_dataset(d)
+    # `source` 是批次的**待映射暂存**:重新治理(改字段映射/时间策略)要按源列重新
+    # 映射,而 `preview` 在一次 validate 之后装的是规范化结果,源列名会消失。
+    # 此前源列名被覆盖,导致第二次 validate 必然 422「源列不存在于本批次」——
+    # 于是 expected_version 这套乐观锁没有任何可重试的对象。
+    # 行本身在上传时就已脱敏,持久分析取数仍然只走 feedback 表。
+    source = {'headers': list(preview.get('headers') or []), 'rows': preview.get('rows') or []}
+    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':total,'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'source':source,'file_ext':ext,'encoding':(encoding or None) if ext != 'xlsx' else None,'created_at':now()}
+    return _dataset_out(repository.create_dataset(d))
 def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
         raise HTTPException(422, detail={'code': 'invalid_pagination'})
@@ -166,12 +175,24 @@ def _redacted_out(value):
     if isinstance(value, list):
         return [_redacted_out(item) for item in value]
     return value
+
+
+# 仅供服务端使用的暂存键,不出现在任何响应里。
+# `source` 是批次待映射的源行(重新治理要按源列重映射),计划 4.3 规定对外
+# 只有脱敏预览——把源行原样带出去等于绕过那条边界,而且它比预览大得多。
+_INTERNAL_DATASET_KEYS = frozenset({'source'})
+
+
+def _dataset_out(value: dict) -> dict:
+    """数据集的出站表示:剥掉内部暂存,并在出站边界再脱敏一次。"""
+    return _redacted_out({key: item for key, item in value.items()
+                          if key not in _INTERNAL_DATASET_KEYS})
 @app.get('/api/v1/projects/{project_id}/datasets')
 def list_datasets(project_id: str, page: int = 1, page_size: int = 20, user: dict = Depends(require_project_access)):
     page, page_size = _page(page, page_size)
     all_items = [d for d in datasets.values() if d['project_id']==project_id]
     start = (page - 1) * page_size
-    return {'items': [_redacted_out(d) for d in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
+    return {'items': [_dataset_out(d) for d in all_items[start:start + page_size]], 'total': len(all_items), 'page': page, 'page_size': page_size}
 
 @app.get('/api/v1/projects/{project_id}/datasets/{dataset_id}')
 def get_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_access)):
@@ -179,7 +200,7 @@ def get_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_p
     dataset = datasets.get(dataset_id)
     if not dataset or dataset.get('project_id') != project_id:
         raise HTTPException(404, detail={'code': 'dataset_not_found'})
-    return _redacted_out(dataset)
+    return _dataset_out(dataset)
 
 def _resolve_import_timezone(project_id: str, requested: str | None) -> str:
     """导入时区:显式请求 > 项目设置 > 工程计划默认 Asia/Shanghai(4.5)。"""
@@ -201,8 +222,12 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
     preview = d.get('preview') or {}
+    # 一律按**源列**校验映射。用 preview.headers 的话,第一次 validate 之后那里
+    # 已经是标准字段名,用户拿原始源列名重试必然 422,而错误信息还会说
+    # 「源列不存在于本批次」——源列明明在,只是被上一次治理覆盖掉了。
+    source = d.get('source') or preview
     try:
-        mapping = validate_mapping(req.mapping, preview.get('headers') or [])
+        mapping = validate_mapping(req.mapping, source.get('headers') or [])
     except MappingError as exc:
         raise HTTPException(422, detail={'code': 'invalid_mapping', 'message': str(exc)}) from exc
     policy = str(req.time_policy or d.get('time_policy') or 'static').strip().lower()
@@ -214,33 +239,67 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
         raise HTTPException(422, detail={'code': 'invalid_timezone', 'message': f'未知时区: {req.timezone}'}) from exc
 
     if mapping:
-        applied = apply_mapping(preview.get('rows') or [], mapping,
+        # 也从源行重新映射,而不是在上一次的规范化结果上再映射一遍
+        applied = apply_mapping(source.get('rows') or [], mapping,
                                 time_policy=policy, timezone_name=import_timezone)
+        headers = [field for field in STANDARD_FIELDS if field in set(mapping.values())]
+        governed = applied['rows']
         stats = dict(applied['stats'])
-        # 脱敏命中数由解析函数按原始行在上传时统计;剔除无效行后不得超过有效行
-        stats['redacted'] = min(int((preview.get('stats') or {}).get('redacted') or 0), stats['valid'])
-        preview = {
-            'headers': [field for field in STANDARD_FIELDS if field in set(mapping.values())],
-            'rows': applied['rows'],
-            'stats': stats,
-        }
         errors = applied['errors']
     else:
-        # 历史非标准批次:没有可识别的标准字段,保持原有行与统计,不做破坏性重写
+        # 历史非标准批次:没有可识别的标准字段,不做破坏性重写
+        headers = list(source.get('headers') or [])
+        governed = [row for row in (source.get('rows') or []) if isinstance(row, dict)]
         stats = dict(preview.get('stats') or {})
         errors = []
+
+    # 工程计划 5.2:治理后的行写入 feedback 实体表。分析、看板、导出与证据源
+    # 查询都从这里取数——此前它们读的是 JSON 副本,既不可按行查询,
+    # 也没有 `(project_id, event_key)` 这个事件幂等的约束载体。
+    # 这里同时完成 4.4 的跨批次事件去重,所以健康计数要按**实际落库结果**回填,
+    # 否则「输入 = 有效 + 无效 + 重复」这个恒等式会悄悄失衡。
+    secret, _demo_fallback = dedupe_hmac_secret()
+    saved = repository.save_feedback_rows(
+        project_id, dataset_id,
+        build_feedback_rows({**d, 'preview': {'rows': governed}}, secret=secret),
+    )
+    cross_duplicate = int(saved['duplicate'])
+    cross_conflict = len(saved['conflicts'])
+    stats['valid'] = max(0, int(stats.get('valid', 0)) - cross_duplicate - cross_conflict)
+    stats['duplicate'] = int(stats.get('duplicate', 0)) + cross_duplicate
+    stats['invalid'] = int(stats.get('invalid', 0)) + cross_conflict
+    errors.extend(saved['conflicts'])
+    # 脱敏命中数由解析函数按原始行在上传时统计;剔除无效行后不得超过有效行
+    stats['redacted'] = min(int((preview.get('stats') or {}).get('redacted') or 0), stats['valid'])
     total = stats.get('total', 0)
-    valid = stats.get('valid', 0)
+    valid = stats['valid']
+    stored = set(saved['stored_indexes'])
+    preview = {
+        'headers': headers,
+        # 4.3:预览最多 20 行,且必须是**真正落库的那些行**——预览若含被判重复
+        # 或被拒的行,用户照着它校对映射就是在校对不存在的行。
+        'rows': [governed[index] for index in sorted(stored)][:PREVIEW_ROW_LIMIT],
+        'stats': stats,
+        'sample_limit': PREVIEW_ROW_LIMIT,
+    }
     d['preview'] = preview
     d['mapping'] = mapping
     d['time_policy'] = policy
     d['timezone'] = import_timezone
-    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY',
-             status='ready', rows=valid if mapping else d['rows'], version=d['version']+1)
-    d['health'] = {'completeness': round((valid/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
+    # valid == 0 的批次不是「就绪」:它一条反馈都没贡献(最常见的是整批被判重复,
+    # 归属在别的批次上)。标成 READY 会让人以为它可以分析,而分析只能产出一个
+    # 0 输入、0 主题的空 run——用户却以为覆盖了这批数据。
+    has_warning = bool(stats.get('invalid', 0) or stats.get('missing_time', 0) or not valid)
+    d.update(state='READY_WITH_WARNINGS' if has_warning else 'READY',
+             status='ready', rows=valid, version=d['version']+1)
+    d['health'] = {'completeness': round((valid/total)*100) if total else 0, 'piiMasked': True,
+                   'timeFieldMissing': stats.get('missing_time',0),
+                   # 4.4:重复导入要告知用户这些行属于哪些既有批次,
+                   # 否则「本批 1000 行」会让人以为分析只覆盖本批
+                   'existingDatasetIds': saved['existing_dataset_ids']}
     d['validation'] = {'health': d['health'], 'errors': errors, 'preview': preview,
                        'mapping': mapping, 'time_policy': policy, 'timezone': import_timezone}
-    return _redacted_out(repository.update_dataset(dataset_id, d))
+    return _dataset_out(repository.update_dataset(dataset_id, d))
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
     ds=[datasets.get(i) for i in req.dataset_ids]
@@ -256,13 +315,35 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
     total_rows = sum(d.get('rows', 0) for d in ds)
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
+    # 工程计划 4.4:一批行若全部被判重复,它贡献 0 条反馈。放行会产出一个空 run,
+    # 而用户以为分析覆盖了这批数据——这正是「删除/去重做完了但看起来没做」的
+    # 反面:看起来做了,实际什么都没分析。
+    # 拒绝时带出归属批次:用户该做的是去分析那个批次,不是重传一遍。
+    if total_rows == 0:
+        inherited = sorted({dataset_id
+                            for d in ds
+                            for dataset_id in ((d.get('health') or {}).get('existingDatasetIds') or [])})
+        raise HTTPException(422, detail={
+            'code': 'no_feedback_to_analyze',
+            'message': '所选批次没有任何有效反馈,无法分析',
+            'existing_dataset_ids': inherited,
+        })
     # 工程计划 4.1:每项目同时只允许一个活跃分析;已有作业返回 409 和活跃 run_id,
     # 不能让第二个作业悄悄排队。放在数据集校验之后:404/422 语义不受其他作业影响。
     active = next((a for a in analyses.values()
                    if a.get('project_id') == project_id and a.get('status') in ('queued', 'running')), None)
     if active:
         raise HTTPException(409, detail={'code': 'active_analysis_exists', 'run_id': active.get('id')})
-    aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
+    # 工程计划 5.3「输入固定」:创建 run 时冻结反馈集合。此后新增导入不会隐式扩大
+    # 这个 run 的输入,重新治理某批次也不会悄悄换掉它的正文。
+    # 清单落 `run_feedbacks` 表(5.2),而不是塞进 run JSON:进了表才有
+    # `(run_id, feedback_id)` 唯一约束和「不得指向已删反馈」的复合外键。
+    frozen = [row['id'] for row in repository.list_feedback(project_id, req.dataset_ids)]
+    aid='run_'+uuid4().hex[:10]
+    # 先写清单再建 run:total 取实际落表的条数,否则清单与 total 会在
+    # 「有 id 已不存在」时分叉,而进度条会永远差一截
+    total_rows = repository.save_run_feedbacks(project_id, aid, frozen)
+    a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
     repository.create_outbox_event({'event_key': f'analysis.created:{aid}', 'event_type':'analysis.created', 'payload': {'analysis_id': aid, 'project_id': project_id}})
     if idempotency_key:
         try:
@@ -477,6 +558,7 @@ def project_summary(
             list(analyses.values()), repository.list_entities('tasks', project_id), project_id,
             run_id=run_id, revision=revision,
             filters={'start': start, 'end': end, 'channel': channel, 'product': product},
+            repository=repository,
         )
     except SummaryRequestError as exc:
         raise HTTPException(exc.status_code, detail={'code': exc.code})
@@ -544,9 +626,9 @@ def _evidence_quotes(run: dict, topic_id: str, revision) -> list[dict]:
 
 
 def _run_sources(run: dict) -> dict[str, str]:
-    """run 输入集合的 feedback_id → 脱敏正文。"""
-    from .ingestion import iter_run_feedback, row_text
-    return {feedback_id: row_text(row) for feedback_id, row in iter_run_feedback(run)}
+    """run 输入集合的 feedback_id → 脱敏正文(取自 feedback 实体表)。"""
+    from .pipeline import _flatten_rows
+    return _flatten_rows(run, repository)[1]
 
 
 def _latest_published_run(project_id: str) -> dict | None:
@@ -591,7 +673,7 @@ def correct_topic(project_id: str, topic_id: str, req: CorrectionRequest, user: 
     published = _latest_published_run(project_id)
     if published is None:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
-    _rows, sources, _total = _flatten_rows(published)
+    _rows, sources, _total = _flatten_rows(published, repository)
     params = {'topic_id': topic_id, 'name': req.name,
               'source_topic_ids': req.source_topic_ids, 'feedback_ids': req.feedback_ids}
     try:
@@ -994,6 +1076,7 @@ def create_review(project_id: str, req: ReviewCreateRequest, user: dict = Depend
         after=WindowSpec(req.after.start, req.after.end),
         filters=req.filters,
         alignment_confirmed=req.alignment_confirmed,
+        repository=repository,
     )
     review = {
         'id': 'review_' + uuid4().hex[:8], 'project_id': project_id, 'run_id': req.run_id,
@@ -1026,29 +1109,41 @@ def confirm_review(project_id: str, review_id: str, user: dict = Depends(require
     except KeyError: raise HTTPException(404, detail={'code':'review_not_found'})
     if r['project_id'] != project_id: raise HTTPException(404, detail={'code':'review_not_found'})
     return r
+def _export_row(row: dict) -> dict:
+    """把一条反馈映射为导出行——只输出工程计划 5.2 的标准字段。
+
+    不输出任意来源列名:来源表可能带内部编号、门店名一类不该出站的字段,
+    而导出只需要可分析的标准字段。出站前再脱敏一次,使旧解析器写入的数据
+    也不能从这个端点漏出。
+    """
+    fields = {
+        'feedback_id': row.get('id'),
+        'content': row.get('content_redacted'),
+        'channel': row.get('channel'),
+        'product': row.get('product'),
+        'occurred_at': row.get('occurred_at'),
+        'time_quality': row.get('time_quality'),
+        'rating': row.get('rating'),
+        'order_ref': row.get('order_ref_redacted'),
+        'source_status': row.get('source_status'),
+    }
+    return {key: redact_text(str(value))['text'] for key, value in fields.items() if value is not None}
+
+
 @app.get('/api/v1/projects/{project_id}/exports/redacted.csv')
 def export_redacted(project_id: str, user: dict = Depends(require_project_access)):
-    """Export only the redacted dataset previews belonging to *project_id*.
+    """导出本项目的脱敏反馈(工程计划 5.2 的标准字段)。
 
-    The payload intentionally keeps each row in a JSON column.  This avoids
-    leaking arbitrary source column names while preserving nested/duplicate
-    fields, and applies redaction once more at the export boundary so a
-    repository populated by an older parser cannot emit raw PII.
+    每行仍放在一个 JSON 列里(列名固定,不随来源表变化),出站前再脱敏一次。
     """
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
     output = io.StringIO(newline='')
     writer = csv.DictWriter(output, fieldnames=['dataset_id', 'row_index', 'data'])
     writer.writeheader()
-    for dataset in datasets.values():
-        if dataset.get('project_id') != project_id:
-            continue
-        rows = (dataset.get('preview') or {}).get('rows') or []
-        for index, row in enumerate(rows):
-            clean = {}
-            for key, value in (row or {}).items():
-                clean[str(key)] = redact_text(str(value))['text']
-            writer.writerow({'dataset_id': dataset.get('id', ''), 'row_index': index, 'data': json.dumps(clean, ensure_ascii=False, separators=(',', ':'))})
+    for row in repository.list_feedback(project_id):
+        writer.writerow({'dataset_id': row['dataset_id'], 'row_index': row['source_row'],
+                         'data': json.dumps(_export_row(row), ensure_ascii=False, separators=(',', ':'))})
     return Response(content=output.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{project_id}-redacted.csv"'})
 
 
@@ -1076,20 +1171,11 @@ def create_project_export(project_id: str, req: ExportRequest, idempotency_key: 
             if existing is not None:
                 return export_view(existing)
     export_id = f'exp_{uuid4().hex[:10]}'
-    rows: list[dict] = []
-    for dataset in datasets.values():
-        if dataset.get('project_id') != project_id:
-            continue
-        for index, row in enumerate((dataset.get('preview') or {}).get('rows') or []):
-            # 与既有下载端点一致:导出边界再做一次脱敏,列固定不泄露任意来源列名
-            clean = {str(key): redact_text(str(value))['text'] for key, value in (row or {}).items()}
-            clean['dataset_id'] = dataset.get('id', '')
-            clean['row_index'] = index
-            rows.append(clean)
+    # 与下载端点同源:都取 feedback 实体表,列固定,不泄露任意来源列名
+    payload = [{'dataset_id': row['dataset_id'], 'row_index': row['source_row'],
+                'data': json.dumps(_export_row(row), ensure_ascii=False, separators=(',', ':'))}
+               for row in repository.list_feedback(project_id)]
     columns = ['dataset_id', 'row_index', 'data']
-    payload = [{'dataset_id': r['dataset_id'], 'row_index': r['row_index'],
-                'data': json.dumps({k: v for k, v in r.items() if k not in ('dataset_id', 'row_index')},
-                                   ensure_ascii=False, separators=(',', ':'))} for r in rows]
     result = create_export(repository, project_id, req.scope, payload, columns, export_id, user.get('id', 'demo-user'))
     _record_audit(project_id, 'export.created', user, {'export_id': export_id, 'rows': result['row_count']})
     if idempotency_key:

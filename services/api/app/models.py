@@ -1,5 +1,6 @@
 ﻿from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
+from sqlalchemy import (Boolean, DateTime, ForeignKeyConstraint, Index, Integer,
+                        JSON, Numeric, String, Text, UniqueConstraint)
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -180,6 +181,105 @@ class Review(Base):
     metrics: Mapped[dict | None] = mapped_column(JSON)
     effect_status: Mapped[str | None] = mapped_column(String(32))
     limitations: Mapped[list | None] = mapped_column(JSON, default=list)
+
+
+class Feedback(Base):
+    """工程计划 5.2 反馈实体:一行一条反馈,持久正文只保留脱敏结果。
+
+    这张表此前不存在——反馈以 JSON 副本躺在 `datasets.governance->preview->rows`
+    里,再整份复制进 `analysis_runs.result`。那不只是一次冗余:它让 4.4 的
+    `(project_id, event_key)` 事件幂等、10.4 的按行删除清单、5.1 的
+    `(project_id, id)` 复合外键三件事都没有可落地的约束载体,而计划明文禁止
+    「把整个项目装进一个不可查询的 JSON 字段」。
+
+    `id` 沿用既有派生规则 `fb_{dataset_id}_{序号}`,序号是**按 source_row 升序**
+    的枚举位置而不是 source_row 本身:治理阶段会剔除无效行,两者不再相等,
+    但下游(证据链接、导出、证据源查询)一直以枚举位置为准。
+    """
+
+    __tablename__ = 'feedback'
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    # 来源系统的原始编号;id 是平台生成的,两者不能混用(4.2)
+    external_id: Mapped[str | None] = mapped_column(String(255))
+    event_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_redacted: Mapped[str] = mapped_column(Text, nullable=False)
+    # 只用于相似文本候选,不用于幂等——幂等一律走 event_key(4.2)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    time_quality: Mapped[str] = mapped_column(String(16), nullable=False, default='missing')
+    channel: Mapped[str] = mapped_column(String(64), nullable=False, default='unknown')
+    product: Mapped[str] = mapped_column(String(64), nullable=False, default='unknown')
+    rating: Mapped[float | None] = mapped_column(Numeric(3, 2))
+    source_status: Mapped[str | None] = mapped_column(String(64))
+    # 完整订单号不落库(4.2);这里存的已经是脱敏结果
+    order_ref_redacted: Mapped[str | None] = mapped_column(Text)
+    source_row: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_kind: Mapped[str | None] = mapped_column(String(64))
+    # source_id(有来源编号)/ source_row(无来源编号,按文件+行号认身份)
+    identity_quality: Mapped[str] = mapped_column(String(16), nullable=False, default='source_row')
+    redaction_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        # 4.4 事件幂等:同项目同 event_key 只能有一条反馈
+        UniqueConstraint('project_id', 'event_key', name='uq_feedback_project_event_key'),
+        # 5.1 复合外键的被引用侧:让 segments 能表达「不得跨项目引用」
+        UniqueConstraint('project_id', 'id', name='uq_feedback_project_id_id'),
+        Index('ix_feedback_project_occurred', 'project_id', 'occurred_at'),
+        Index('ix_feedback_project_channel', 'project_id', 'channel'),
+        Index('ix_feedback_project_product', 'project_id', 'product'),
+    )
+
+
+class RunFeedback(Base):
+    """工程计划 5.2:冻结一次分析的输入反馈集合。
+
+    5.3「输入固定」要求「之后新增反馈不影响这个 run」。第一增量先把清单冻结在
+    `analysis_runs.result->run_feedback_ids` 里,那是权宜之计:它不参与任何约束,
+    删掉一条反馈后没有东西会阻止清单继续指向它。这张表把同一条语义变成
+    `(run_id, feedback_id)` 唯一约束加复合外键。
+    """
+
+    __tablename__ = 'run_feedbacks'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    feedback_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('run_id', 'feedback_id', name='uq_run_feedbacks_run_feedback'),
+        ForeignKeyConstraint(
+            ['project_id', 'feedback_id'], ['feedback.project_id', 'feedback.id'],
+            name='fk_run_feedbacks_feedback_same_project',
+        ),
+    )
+
+
+class Segment(Base):
+    """工程计划 5.2 分块:offset 指向 `feedback.content_redacted` 的 Unicode 字符位置。
+
+    不存分块正文:正文是 `content_redacted[start:end]` 的函数,存一份副本就多一个
+    与正文不一致的机会。8.2 要求的「offset 用脱敏正文的字符位置」在这里才真正成立。
+    """
+
+    __tablename__ = 'segments'
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    feedback_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    redaction_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['project_id', 'feedback_id'], ['feedback.project_id', 'feedback.id'],
+            name='fk_segments_feedback_same_project',
+        ),
+        UniqueConstraint('feedback_id', 'segment_index', 'redaction_version',
+                         name='uq_segments_feedback_index_version'),
+    )
 
 
 

@@ -9,9 +9,10 @@ import os
 from typing import Mapping
 
 from .clustering import cluster_embeddings
-from .ingestion import row_source_row, row_text
 from .embedding import encode_segments
+from .ingestion import run_feedback
 from .llm import MockTopicProvider, TopicNamer
+from .ingestion import REDACTION_VERSION
 from .publishing import EvidenceRef, TopicDraft, publish_revision
 from .representatives import select_representatives
 from .risk_rules import load_policy, scan_risks
@@ -20,6 +21,10 @@ from .segments import split_redacted
 POLICY_PATH = os.getenv('RISK_POLICY', 'configs/industry/ecommerce.yaml')
 # 没有模型 claim 时引文的字符上限;分块器按句切分,超预算的单句退化为有界切片
 _QUOTE_FALLBACK_CHARS = 80
+# 工程计划 8.2:每块上限 384 tokens,相邻长块重叠 64 tokens。
+# 这里用字符计数近似 token(中文一字一 token),是首版的工程约定,不是精度声明。
+SEGMENT_MAX_TOKENS = 384
+SEGMENT_OVERLAP = 64
 
 
 def _resolve_quote(text: str, claimed: str | None) -> tuple[str, int, int]:
@@ -51,25 +56,33 @@ def _resolve_quote(text: str, claimed: str | None) -> tuple[str, int, int]:
     return text[:end], 0, end
 
 
-def _flatten_rows(run: Mapping) -> tuple[list[dict], dict[str, str], int]:
-    """把 run 的数据集预览行展开为反馈行;返回 (rows, sources, row_offset)。"""
-    rows: list[dict] = []
+def _flatten_rows(run: Mapping, repository) -> tuple[list[dict], dict[str, str], int]:
+    """展开 run 的输入反馈;返回 (rows, sources, total)。
+
+    取数走 `feedback` 实体表(工程计划 5.2),不再读 run 里内嵌的 JSON 副本:
+    反馈正文此前在 `datasets.governance` 与 `analysis_runs.result` 各存一份,
+    两份都可能与另一份不一致,而没有任何东西会发现。
+
+    输入按 run 创建时冻结的 `run_feedback_ids` 取(5.3「输入固定」):之后再导入的
+    反馈不会隐式扩展这个 run 的输入。早于 0014 的 run 没有这个字段,回退到按
+    dataset_ids 取——那批 run 的输入本来就没有冻结过,迁移无法凭空补出正确的集合。
+    """
+    rows = run_feedback(run, repository)
+    flattened: list[dict] = []
     sources: dict[str, str] = {}
-    for dataset in run.get('datasets') or []:
-        preview = dataset.get('preview') or {}
-        for index, row in enumerate(preview.get('rows') or []):
-            feedback_id = str(row.get('feedback_id') or f"fb_{dataset.get('id', 'ds')}_{index}")
-            # 与证据源端点共用同一份正文口径,否则引文 offset 在两处对不上
-            text = row_text(row)
-            # 规范化行显式带 source_row:无效行在治理阶段被剔除后,枚举位置不再等于源行号
-            rows.append({'feedback_id': feedback_id, 'text': text, 'source_row': row_source_row(row, index)})
-            sources[feedback_id] = text
-    return rows, sources, len(rows)
+    for row in rows:
+        feedback_id = str(row['id'])
+        # 正文是库里那一份;它与证据源查询、导出共用同一口径,offset 才对得上
+        text = str(row.get('content_redacted') or '')
+        flattened.append({'feedback_id': feedback_id, 'text': text,
+                          'source_row': int(row.get('source_row') or 0)})
+        sources[feedback_id] = text
+    return flattened, sources, len(flattened)
 
 
-def build_topics_from_run(run: Mapping) -> list[TopicDraft]:
+def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
     """簇/候选 → 主题草稿:真实向量+聚类,命名走 mock/规则,引用精确可校验。"""
-    rows, sources, _ = _flatten_rows(run)
+    rows, sources, _ = _flatten_rows(run, repository)
     if not rows:
         return []
     vectors = encode_segments([row['text'] for row in rows])
@@ -114,10 +127,10 @@ def build_topics_from_run(run: Mapping) -> list[TopicDraft]:
     return drafts
 
 
-def scan_run_risks(run: Mapping) -> list[dict]:
+def scan_run_risks(run: Mapping, repository) -> list[dict]:
     """独立风险扫描(W08)接入:治理后全量扫描,独立于向量与聚类。"""
     policy = load_policy(POLICY_PATH)
-    rows, sources, _ = _flatten_rows(run)
+    rows, sources, _ = _flatten_rows(run, repository)
     findings = []
     for row in rows:
         for candidate in scan_risks(row['feedback_id'], sources[row['feedback_id']], policy):
@@ -137,23 +150,47 @@ def scan_run_risks(run: Mapping) -> list[dict]:
     return findings
 
 
+def persist_segments(repository, project_id: str, rows: list[dict]) -> int:
+    """把一个 run 的输入分块落进 segments 表(工程计划 8.1 的「分块」阶段产物)。
+
+    分块只在这里产生。此前 `split_redacted` 只有证据源查询与引文兜底在调用,
+    `segments` 表并不存在,「offset 指向脱敏正文的 Unicode 位置」这条 8.2 的约定
+    因此没有持久载体,每次读取都要按**当时**的参数重算。
+
+    单句超过 token 预算时分块器会拒绝而不是硬切:那种行记 0 块(与
+    `_resolve_quote` 同一处理),不会被静默截断后声称覆盖全文。
+    """
+    written = 0
+    for row in rows:
+        try:
+            spans = split_redacted(row['text'], max_tokens=SEGMENT_MAX_TOKENS, overlap=SEGMENT_OVERLAP)
+        except ValueError:
+            spans = []
+        written += repository.replace_segments(project_id, row['feedback_id'], spans, REDACTION_VERSION)
+    return written
+
+
 def run_analysis_pipeline(store, analysis_id: str, repository=None) -> dict:
     """完整流水线:风险扫描 → 分块/向量/聚类/命名 → 发布 revision。
 
-    `repository` 用于把风险候选写进项目复核队列;不传则只算不写(纯计算场景)。
+    `repository` 既是反馈正文的取数来源(`feedback` 实体表),也用于把风险候选
+    写进项目复核队列。流水线依赖真实仓储,所以不提供「无仓储」的纯计算降级:
+    那种降级会走一条与生产不同、且没有任何东西在读的路径。
     """
+    if repository is None:
+        raise ValueError('run_analysis_pipeline requires a repository')
     run = store.get_analysis(analysis_id)
     if run is None:
         raise ValueError(f'analysis not found: {analysis_id}')
-    rows, sources, total = _flatten_rows(run)
-    drafts = build_topics_from_run(run)
+    rows, sources, total = _flatten_rows(run, repository)
+    persist_segments(repository, run.get('project_id'), rows)
+    drafts = build_topics_from_run(run, repository)
     unassigned = total - sum(len(d.evidence) for d in drafts)
     snapshot = publish_revision(store, analysis_id, drafts, sources, unassigned)
-    findings = scan_run_risks(run)
+    findings = scan_run_risks(run, repository)
     store.update_analysis(analysis_id, {'risk_findings': findings})
     # 扫描独立于聚类,所以候选在主题发布之后单独入队(计划 8.1:1 条严重投诉即使
     # 不成簇也要进复核队列)
-    if repository is not None:
-        from .risk_service import persist_findings
-        persist_findings(repository, run.get('project_id'), findings)
+    from .risk_service import persist_findings
+    persist_findings(repository, run.get('project_id'), findings)
     return snapshot

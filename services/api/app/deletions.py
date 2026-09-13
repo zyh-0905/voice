@@ -50,6 +50,8 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'risks': len(repository.list_entities('risks', project_id)),
             # 删除项目同时撤销访问,成员数属于影响范围
             'memberships': len(repository.list_members(project_id)),
+            # 10.4 要求先展示影响范围:反馈条数是用户最直接关心的那个数
+            'feedback': len(repository.list_feedback(project_id)),
         }
     if target_type == 'dataset':
         dataset = repository.datasets.get(target_id)
@@ -64,6 +66,7 @@ def preview_deletion(repository, project_id: str, target_type: str, target_id: s
             'runs': len(affected),
             'topics': sum(_topic_count(run) for run in affected),
             'tasks': 0, 'reviews': 0, 'risks': 0, 'memberships': 0,
+            'feedback': len(repository.list_feedback(project_id, [target_id])),
             # 确认前必须说明:删除批次会让引用它的分析、主题结果与证据失效
             'invalidates_reports': len(affected) > 0,
         }
@@ -118,6 +121,9 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
 
     # 3) 清理分析结果(主题、证据、风险候选都挂在 run 上)
     for run in runs:
+        # 输入冻结清单先走:它引用 feedback,而 feedback 稍后才删。
+        # 顺序反了的话复合外键会挡住删除,或者留下指向已删反馈的条目。
+        repository.delete_run_feedbacks_for_run(project_id, run['id'])
         _safe_delete(repository, repository.delete_analysis, run['id'])
     steps.append({'name': 'purge_runs', 'status': 'done', 'runs': len(runs)})
 
@@ -125,6 +131,25 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
     from .exports import invalidate_project_exports
     steps.append({'name': 'invalidate_exports', 'status': 'done',
                   'invalidated': invalidate_project_exports(repository, project_id)})
+
+    # 3.7) 清理反馈与分块(5.2 的实体表)。分块是正文的切片,offset 可以直接
+    # 复原出原文——只删反馈不删分块,等于删了行却把内容留在库里。
+    # 顺序不能颠倒:dataset 范围的分块删除要先按 feedback 定位。
+    if target_type == 'dataset':
+        # 先捕获这批次的 feedback_id:反馈行一删就没法再按 dataset_id 反查分块,
+        # 核验会退化成「整个项目还有没有分块」而永远不为零
+        affected_feedback = [row['id'] for row in repository.list_feedback(project_id, [target_id])]
+        segments = repository.delete_segments_for_dataset(project_id, target_id)
+        feedback = repository.delete_feedback_for_dataset(project_id, target_id)
+    else:
+        affected_feedback: list[str] = []
+        # 项目级:所有 run 的清单一起走(purge_runs 已经清过一遍,
+        # 这里兜住「有清单但没有 run」的残留)
+        repository.delete_run_feedbacks_for_project(project_id)
+        segments = repository.delete_segments_for_project(project_id)
+        feedback = repository.delete_feedback_for_project(project_id)
+    steps.append({'name': 'purge_feedback', 'status': 'done',
+                  'feedback': feedback, 'segments': segments})
 
     # 4) 清理数据集(原文件与导出)
     dataset_ids = [target_id] if target_type == 'dataset' else [d['id'] for d in _datasets_of(repository, project_id)]
@@ -138,6 +163,11 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             for item in repository.list_entities(kind, project_id):
                 _safe_delete(repository, lambda key, _kind=kind: repository.delete_entity(_kind, key), item['id'])
             steps.append({'name': f'purge_{kind}', 'status': 'done'})
+        # 10.4:「清理同项目模型缓存和幂等响应正文」。幂等记录里存着被删对象
+        # 的存在与内容,留着等于删除没做干净——重放同一个幂等键还会命中一条
+        # 指向已删分析的响应。
+        steps.append({'name': 'purge_idempotency', 'status': 'done',
+                      'keys': repository.delete_idempotency_for_project(project_id)})
         repository.delete_memberships(project_id)
         steps.append({'name': 'purge_memberships', 'status': 'done'})
         repository.delete_project(project_id)
@@ -152,9 +182,16 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             'reviews': len(repository.list_entities('reviews', project_id)),
             'risks': len(repository.list_entities('risks', project_id)),
             'memberships': len(repository.list_members(project_id)),
+            'feedback': len(repository.list_feedback(project_id)),
+            'segments': repository.count_segments(project_id),
+            'idempotency': repository.count_idempotency(project_id),
         }
     else:
-        remaining = {'datasets': int(target_id in repository.datasets)}
+        remaining = {
+            'datasets': int(target_id in repository.datasets),
+            'feedback': len(repository.list_feedback(project_id, [target_id])),
+            'segments': repository.count_segments_for_feedback(project_id, affected_feedback),
+        }
     steps.append({'name': 'verify', 'status': 'done', 'remaining': remaining})
     if any(remaining.values()):
         raise DeletionConflict(f'dependencies_remaining: {remaining}')
@@ -163,7 +200,7 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         'job_id': job_id, 'state': 'DONE', 'target_type': target_type,
         'target_id': target_id, 'actor': actor, 'steps': steps,
         # 回执只保留计数,不含任何正文
-        'removed': {key: preview[key] for key in ('datasets', 'runs', 'topics', 'tasks', 'reviews', 'risks', 'memberships')},
+        'removed': {key: preview[key] for key in ('datasets', 'runs', 'topics', 'tasks', 'reviews', 'risks', 'memberships', 'feedback')},
     }
     try:
         repository.update_entity('deletions', job_id, {'state': 'DONE', 'steps': steps, 'receipt': receipt})

@@ -1,5 +1,5 @@
 """Deterministic ingestion helpers shared by upload and validation endpoints."""
-import csv, io, re
+import csv, hashlib, hmac, io, re
 from collections import Counter
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -118,22 +118,150 @@ def row_source_row(row, fallback: int) -> int:
         return fallback
 
 
-def iter_run_feedback(run) -> list[tuple[str, dict]]:
-    """遍历一个 run 输入集合里的反馈,返回 (feedback_id, 原始行)。
+def feedback_identity(row) -> tuple[str | None, str]:
+    """返回 (external_id, identity_quality)。
 
-    feedback_id 的派生规则集中在这里:行内显式 id 优先,否则 `fb_{dataset_id}_{行号}`。
-    流水线与复盘计算都依赖它——两处各拼一套的话,主题证据和复盘分子会指向不同的
-    反馈集合,而且不会有任何报错。
+    工程计划 4.2:`feedback_id` 是来源系统的原始编号,存 `external_id`;平台自己的
+    `id` 另生成。没有来源编号时按 `source_row` 认身份(4.4)。
     """
-    items: list[tuple[str, dict]] = []
-    for dataset in (run or {}).get('datasets') or []:
-        preview = dataset.get('preview') or {}
-        for index, row in enumerate(preview.get('rows') or []):
-            if not isinstance(row, dict):
-                continue
-            feedback_id = str(row.get('feedback_id') or f"fb_{dataset.get('id', 'ds')}_{index}")
-            items.append((feedback_id, row))
-    return items
+    external = row.get('feedback_id') if isinstance(row, dict) else None
+    text = str(external).strip() if external is not None else ''
+    return (text, 'source_id') if text else (None, 'source_row')
+
+
+def feedback_event_key(secret: str, dataset, *, external_id: str | None, source_row: int) -> str:
+    """工程计划 4.4 的事件键。
+
+    有来源编号:`HMAC(project_dedupe_key, source_namespace + "\\0" + external_id)`
+    无来源编号:`HMAC(project_dedupe_key, file_sha256 + sheet_name + source_row)`
+
+    与 web 层的数据集级去重键**不是一回事**:那个认的是「同一个来源被重传」,
+    这个认的是「同一条反馈事件」。同文本不同来源编号是两条不同事件,都要保留,
+    所以消息里必须带来源身份而不是正文。
+
+    已知缺口:XLSX 工作表选择尚未实现,`sheet_name` 目前恒为空,因此同一工作簿的
+    不同工作表按行号去重会互相碰撞。补工作表选择时要连同这里一起改。
+    """
+    if external_id is not None:
+        message = f"{dataset.get('source_namespace') or ''}\0{external_id}"
+    else:
+        message = f"{dataset.get('content_hash') or ''}{dataset.get('sheet_name') or ''}{source_row}"
+    return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def content_fingerprint(text: str) -> str:
+    """脱敏正文的 SHA-256。工程计划 4.2:只用于相似文本候选,不用于幂等。"""
+    return hashlib.sha256((text or '').encode('utf-8')).hexdigest()
+
+
+def build_feedback_rows(dataset, *, secret: str, redaction_version: str = REDACTION_VERSION) -> list[dict]:
+    """把一个数据集的治理后行展开为待落库的 feedback 行。
+
+    迁移回填与导入落库**共用本函数**。各写一份的话,存量行与新行的 event_key
+    口径会悄悄分叉——而幂等、按行删除、跨项目约束全都建立在它之上,分叉了
+    也不会有任何报错。
+
+    规范化批次(经 `apply_mapping`)带标准字段,直接取用;历史非标准批次退回
+    逐值拼接正文(`row_text`),字段只能给默认值。两种情况下正文都已经是脱敏结果。
+    """
+    rows = (dataset.get('preview') or {}).get('rows') or []
+    source_kind = dataset.get('source_kind') or dataset.get('file_ext')
+    built: list[dict] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        # 与流水线、证据源查询共用同一份正文口径,否则引文 offset 在三处对不上
+        text = row_text(row)
+        source_row = row_source_row(row, index)
+        external_id, identity_quality = feedback_identity(row)
+        occurred_at = _coerce_timestamp(row.get('created_at') or row.get('occurred_at'))
+        rating = _coerce_rating(row.get('rating'))
+        built.append({
+            'external_id': external_id,
+            'event_key': feedback_event_key(secret, dataset, external_id=external_id, source_row=source_row),
+            'content_redacted': text,
+            'content_hash': content_fingerprint(text),
+            'occurred_at': occurred_at,
+            'time_quality': str(row.get('time_quality') or ('exact' if occurred_at else 'missing')),
+            'channel': str(row.get('channel') or DEFAULT_CHANNEL),
+            'product': str(row.get('product') or DEFAULT_PRODUCT),
+            'rating': rating,
+            'source_status': _optional_text(row.get('status')),
+            'order_ref_redacted': _optional_text(row.get('order_ref') or row.get('order_id')),
+            'source_row': source_row,
+            'source_kind': source_kind,
+            'identity_quality': identity_quality,
+            'redaction_version': redaction_version,
+            # 序号按 source_row 升序枚举,与既有 `fb_{dataset}_{序号}` 派生规则一致
+            'id': f"fb_{dataset.get('id', 'ds')}_{index}",
+        })
+    return built
+
+
+def _optional_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return redact_text(text)['text'] if text else None
+
+
+def _coerce_timestamp(value) -> datetime | None:
+    """把库里存的 ISO 字符串还原成 timezone-aware datetime。
+
+    `feedback.occurred_at` 是 timestamptz 列而不是 JSON 字符串——计划 5.1 要求
+    时间筛选走数据库,`[start, end)` 半开区间才可能下推到索引。
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value or '').strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _coerce_rating(value) -> float | None:
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if RATING_MIN <= number <= RATING_MAX else None
+
+
+def run_feedback(run, repository) -> list[dict]:
+    """取一个 run 输入集合内的反馈行,取自 `feedback` 实体表(工程计划 5.2)。
+
+    「这个 run 的输入是哪几条反馈」只在这里判定:流水线、复盘、看板、导出与
+    证据源查询都经过它。各写一套的话,复盘分子与主题证据会指向不同的反馈集合,
+    而且不会有任何报错。
+
+    输入取自 `run_feedbacks` 表(5.2/5.3「输入固定」),之后再导入的反馈不会隐式
+    扩大这个 run 的输入。早于 0015 的 run 没有表行,回退到 run JSON 里的
+    `run_feedback_ids`(0014 的过渡形态);再早于 0014 的 run 连那个字段也没有,
+    只能按 dataset_ids 取——那批 run 的输入本来就没有冻结过,迁移无法凭空补出
+    当时正确的集合。两级回退都是为存量数据准备的,新 run 一律走表。
+
+    返回的行字段名与治理后行对齐(channel/product/occurred_at),所以按字段名
+    筛选的调用方不需要改动。
+    """
+    project_id = (run or {}).get('project_id')
+    run_id = (run or {}).get('id')
+    frozen = repository.list_run_feedback_ids(project_id, run_id) if run_id else []
+    if not frozen:
+        frozen = (run or {}).get('run_feedback_ids')
+    if not frozen:
+        return repository.list_feedback(project_id, list((run or {}).get('dataset_ids') or []))
+    # 按冻结的 id 直接取,不要拉全项目再过滤:流水线每跑一次要对同一个 run
+    # 取三轮(分块、主题、风险扫描),全项目扫描会把成本乘在项目总量上
+    return repository.list_feedback(project_id, feedback_ids=[str(item) for item in frozen])
+
+
+def iter_run_feedback(run, repository) -> list[tuple[str, dict]]:
+    """遍历一个 run 输入集合里的反馈,返回 (feedback_id, 反馈行)。"""
+    return [(str(row['id']), row) for row in run_feedback(run, repository)]
 
 
 def redact_row(row: dict) -> dict:

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
-from .ingestion import iter_run_feedback, row_text
+from .ingestion import iter_run_feedback
 from .review_metrics import WindowMetrics, compare_counts
 
 # 与 summary/feedback 一致的可用时间字段名
@@ -110,7 +110,8 @@ def _matches_filters(row: Mapping, filters: Mapping) -> bool:
     return True
 
 
-def query_window(run: Mapping, spec: WindowSpec, filters: Mapping, topic_ids: set[str]) -> WindowQuery:
+def query_window(run: Mapping, spec: WindowSpec, filters: Mapping, topic_ids: set[str],
+                 repository) -> WindowQuery:
     """在 run 的输入集合内统计一个窗口。半开区间 [start, end),两窗共用同一套筛选。"""
     start, end = _parse_time(spec.start), _parse_time(spec.end)
     n = N = untimed = 0
@@ -118,7 +119,7 @@ def query_window(run: Mapping, spec: WindowSpec, filters: Mapping, topic_ids: se
         return WindowQuery(spec.start, spec.end, 0, 0, 0)
 
     seen: set[str] = set()
-    for feedback_id, row in iter_run_feedback(run):
+    for feedback_id, row in iter_run_feedback(run, repository):
         if feedback_id in seen:
             continue
         if not _matches_filters(row, filters):
@@ -165,6 +166,9 @@ def compute_review(
     after: WindowSpec,
     filters: Mapping | None = None,
     alignment_confirmed: bool = False,
+    # 反馈正文来自 feedback 实体表;不给默认值——「没有仓储也能算」的降级
+    # 会走一条与生产不同的路径,而没有任何东西在读它。
+    repository,
 ) -> ReviewComputation:
     """按计划 8.7 推导一份复盘结果。不可比时 metrics 为 None,不输出任何变化结论。"""
     filters = dict(filters or {})
@@ -181,8 +185,8 @@ def compute_review(
     if unknown:
         reasons.append(f'目标主题不属于该 revision: {", ".join(unknown)}')
 
-    before_q = query_window(run, before, filters, set())
-    after_q = query_window(run, after, filters, set())
+    before_q = query_window(run, before, filters, set(), repository)
+    after_q = query_window(run, after, filters, set(), repository)
     reasons.extend(_window_reasons(before_q, after_q))
 
     if not alignment_confirmed:
@@ -194,8 +198,8 @@ def compute_review(
         return ReviewComputation(INSUFFICIENT, tuple(reasons), before_q, after_q, None)
 
     topic_ids = _topic_feedback_ids(run, topic_version_ids)
-    before_q = query_window(run, before, filters, topic_ids)
-    after_q = query_window(run, after, filters, topic_ids)
+    before_q = query_window(run, before, filters, topic_ids, repository)
+    after_q = query_window(run, after, filters, topic_ids, repository)
 
     if before_q.untimed or after_q.untimed:
         return ReviewComputation(

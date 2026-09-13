@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
+from .ingestion import run_feedback
+
 DEFINITION_VERSION = 'summary-ui-v1'
 UNCLOSED_STATES = ('OPEN', 'IN_PROGRESS', 'PENDING_REVIEW')
 # 反馈行中可识别的时间字段(治理后的脱敏行)
@@ -53,14 +55,13 @@ def _row_matches(row: Mapping, filters: Mapping[str, str | None]) -> bool:
     return True
 
 
-def selected_rows(run: Mapping, filters: Mapping[str, str | None]) -> list[dict]:
-    """本 run 输入集合中通过筛选的反馈行。"""
-    rows: list[dict] = []
-    for dataset in run.get('datasets') or []:
-        for row in (dataset.get('preview') or {}).get('rows') or []:
-            if isinstance(row, dict) and _row_matches(row, filters):
-                rows.append(row)
-    return rows
+def selected_rows(run: Mapping, filters: Mapping[str, str | None], repository) -> list[dict]:
+    """本 run 输入集合中通过筛选的反馈行(取自 feedback 实体表)。
+
+    反馈行带 channel/product/occurred_at,与治理后行同名,所以 `_row_matches`
+    的筛选口径不用改——换的只是取数来源。
+    """
+    return [row for row in run_feedback(dict(run), repository) if _row_matches(row, filters)]
 
 
 def _latest_published_run(analysis_values: Sequence[dict], project_id: str) -> dict | None:
@@ -122,6 +123,10 @@ def build_summary(
     revision: int | None = None,
     filters: Mapping[str, str | None] | None = None,
     now: datetime | None = None,
+    *,
+    # 反馈正文来自 feedback 实体表,所以聚合必须拿到仓储。不给默认值:
+    # 一个「没有仓储也能算」的降级会走一条与生产不同的路径,而且没有任何东西在读。
+    repository,
 ) -> dict:
     """组装 7.7 契约响应。"""
     filters = dict(filters or {})
@@ -157,7 +162,7 @@ def build_summary(
         return payload  # 无已发布 run:洞察为空,项目任务仍可读
 
     published = run.get('result') or {}
-    rows = selected_rows(run, filters)
+    rows = selected_rows(run, filters, repository)
     payload.update({
         'run_id': run.get('id'),
         'revision': published.get('revision'),
