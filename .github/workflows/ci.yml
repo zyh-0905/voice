@@ -94,17 +94,36 @@ jobs:
   # mock 套件——那一套只能证明前端自洽,证明不了前后端契约一致。
   real-api:
     runs-on: ubuntu-latest
+    # 后端连**真实 PostgreSQL**。此前跑在内存仓储上,于是「真实」只到 HTTP 层为止
+    # ——而内存仓储不校验列约束也不校验外键,`save_stages` 的运算符优先级、
+    # `tasks.owner` 的可空性、删除顺序这三类缺陷它一个都看不见。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: voicelens
+          POSTGRES_PASSWORD: voicelens
+          POSTGRES_DB: voicelens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voicelens -d voicelens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # 后端跑在容器里;host 网络让它直接看到 runner 上的 postgres 与端口
+      REAL_API_DOCKER_NETWORK: host
+      REAL_API_DATABASE_URL: postgresql+psycopg://voicelens:voicelens@localhost:5432/voicelens
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - run: python -m pip install --upgrade pip && pip install -r services/api/requirements.txt
+      - name: Build the API image
+        run: docker build -f services/api/Dockerfile -t voice-api:latest .
       - working-directory: apps/web
         run: npm ci
       - working-directory: apps/web

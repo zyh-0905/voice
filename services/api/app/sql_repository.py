@@ -57,7 +57,15 @@ class _EntityMap(MutableMapping):
     def _to_dict(self, obj):
         if self.kind == 'datasets':
             value = dict(obj.governance or {})
-            value.update(id=obj.id, project_id=obj.project_id, name=obj.filename, status=obj.status, content_hash=getattr(obj, 'content_hash', None), source_namespace=getattr(obj, 'source_namespace', None), source_kind=getattr(obj, 'source_kind', None))
+            # **只覆盖真正的列。** content_hash / source_namespace / source_kind 不是
+            # datasets 表的列——它们存在 governance 里。此前这里用
+            # `getattr(obj, 'content_hash', None)` 读回来(永远 None),把 governance 里
+            # 正确的值覆盖成空:于是 SQL 模式下
+            # `event_key = HMAC(secret, content_hash + sheet_name + source_row)`
+            # 退化成 `HMAC(secret, '' + '' + source_row)`——一个项目里所有数据集按行号
+            # 共用同一个事件键,第二批次的第 0 行被判成第一批次第 0 行的冲突。
+            # 内存仓储原样存 dict,所以完全看不见。
+            value.update(id=obj.id, project_id=obj.project_id, name=obj.filename, status=obj.status)
             value.setdefault('created_at', obj.created_at.isoformat() if obj.created_at else None)
             return value
         value = dict(obj.result or {})
@@ -71,9 +79,9 @@ class _EntityMap(MutableMapping):
         obj.status = value.get('status', 'uploaded' if self.kind == 'datasets' else 'queued')
         if self.kind == 'datasets':
             obj.filename = value.get('name', key)
-            obj.content_hash = value.get('content_hash')
-            obj.source_namespace = value.get('source_namespace')
-            obj.source_kind = value.get('source_kind')
+            # 不写 obj.content_hash / source_namespace / source_kind:它们不是列,
+            # 赋上去只会成为「本进程可见、重启即消失」的幻影属性,而读取端会以为拿到了真值。
+            # governance 是这些字段的唯一存储。
             obj.governance = dict(value)
         else:
             obj.dataset_id = (value.get('dataset_ids') or [''])[0]

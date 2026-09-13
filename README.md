@@ -161,6 +161,20 @@ npm --prefix apps/web run build
 npm --prefix apps/web run test:e2e -- --project=chromium --workers=1
 ```
 
+真实 API 闭环套件(**后端连真实 PostgreSQL**):
+
+```bash
+# 一次性:把数据库暴露到宿主机 5433(默认 compose 不发布数据库端口)
+docker compose -f compose.yaml -f compose.e2e.yaml up -d postgres
+npm --prefix apps/web run test:e2e:real
+```
+
+它每次重建一个带 `voicelens_test_` 前缀的专用库并升到 head,后端在容器里跑
+(`scripts/e2e_server.py`)。此前这一套跑在内存仓储上,于是「真实」只到 HTTP 层
+——而内存仓储不校验列约束也不校验外键。改成真库之后立刻就抓到一个只在 SQL 模式
+出现的缺陷:`datasets` 的 `content_hash` 重新加载后恒为空,导致事件键退化成
+`HMAC(secret, '' + '' + source_row)`,一个项目里所有数据集按行号共用同一个键。
+
 离线分析质量评估：
 
 ```powershell

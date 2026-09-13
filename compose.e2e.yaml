@@ -1,0 +1,14 @@
+# real-api E2E 专用覆盖:把 postgres 暴露到宿主机 5433。
+#
+# 默认 compose **不发布数据库端口**——那是刻意的(数据库不该对宿主机开放)。
+# 这个文件只在需要跑真实套件时叠加:
+#
+#   docker compose -f compose.yaml -f compose.e2e.yaml up -d postgres
+#   npm --prefix apps/web run test:e2e:real
+#
+# 用 5433 而不是 5432:开发机上常有别的 PostgreSQL 占着 5432,撞上之后套件会连到
+# 一个不相干的实例上——而它照样能建库、照样跑,只是测的不是这套栈。
+services:
+  postgres:
+    ports:
+      - "5433:5432"
