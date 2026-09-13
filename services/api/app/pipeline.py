@@ -9,7 +9,7 @@ import os
 from typing import Mapping
 
 from .clustering import cluster_embeddings
-from .embedding import encode_segments
+from .embedding_provider import encode_texts, resolve_embedding_provider
 from .ingestion import run_feedback
 from .llm import CallUsage, make_namer
 from .ingestion import REDACTION_VERSION
@@ -85,10 +85,13 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
     rows, sources, _ = _flatten_rows(run, repository)
     if not rows:
         return []
-    vectors = encode_segments([row['text'] for row in rows])
+    # 向量 provider 由 EMBEDDING_MODE 决定(8.2 的接入点);接缝在这里,
+    # 而不是把某个模型编进流水线
+    provider = resolve_embedding_provider()
+    vectors = encode_texts(provider, [row['text'] for row in rows])
     result = cluster_embeddings(vectors, 'hdbscan', {'min_cluster_size': 2, 'min_samples': 1})
     drafts: list[TopicDraft] = []
-    namer = make_namer(sources, spent_today=spent_today_today(repository, run.get('project_id')))
+    namer = make_namer(sources, spent_today=spent_today(repository, run.get('project_id')))
     labels = result.labels
     cluster_ids = sorted({int(label) for label in labels if label != -1})
     for cluster_id in cluster_ids:
@@ -175,7 +178,7 @@ def persist_segments(repository, project_id: str, rows: list[dict]) -> int:
     return written
 
 
-def spent_today_today(repository, project_id: str) -> float:
+def spent_today(repository, project_id: str) -> float:
     """本项目今天的模型花费;预算按「调用前预留」判断(10.5)。
 
     没有可靠价格配置时一律返回 0——那时付费模式本来就是禁用的(见 BudgetGuard),
@@ -271,8 +274,15 @@ def run_analysis_pipeline(store, analysis_id: str, repository=None) -> dict:
     persist_segments(repository, project_id, rows)
     _stage('segment', started)
 
+    # 8.2 要求模型 revision 可追溯:冻结进阶段的 config_hash,而不是只活在日志里。
+    # 换模型不重跑的话不会有人发现,而聚类结果会变——所以它必须落到数据上。
+    embedding_revision = resolve_embedding_provider().revision
+
     started = time.monotonic()
     drafts = build_topics_from_run(run, repository)
+    record_stage(repository, project_id, analysis_id, 'embed',
+                 started_at=datetime.fromtimestamp(started, tz=timezone.utc),
+                 output_hash=embedding_revision)
     _stage('cluster', started)
 
     unassigned = total - sum(len(d.evidence) for d in drafts)

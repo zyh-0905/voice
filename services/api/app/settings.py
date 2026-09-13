@@ -60,6 +60,18 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
             errors.append(
                 "MODEL_PRICE_IN / MODEL_PRICE_OUT must be set when NAMING_MODE=provider "
                 "(10.5: paid mode is disabled without reliable pricing)")
+    # 8.2:计划冻结的是真实向量模型,而哈希替身只作演示。生产放行替身等于让
+    # 「分析能力」名义上存在、实际跑在确定性哈希上——正是要禁止的那种偏离。
+    embedding_mode = (os.getenv("EMBEDDING_MODE") or "hashing").strip().lower()
+    if embedding_mode not in ("api",):
+        errors.append(
+            "EMBEDDING_MODE must be api in production "
+            f"(got {embedding_mode!r}); the hashing stand-in is demo-only")
+    else:
+        if not (os.getenv("EMBEDDING_ENDPOINT") or "").strip():
+            errors.append("EMBEDDING_ENDPOINT must be set when EMBEDDING_MODE=api")
+        if not (os.getenv("EMBEDDING_MODEL") or "").strip():
+            errors.append("EMBEDDING_MODEL must be set when EMBEDDING_MODE=api")
     if errors:
         raise RuntimeError("Invalid production settings: " + "; ".join(errors))
     return cfg

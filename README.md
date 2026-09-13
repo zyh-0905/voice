@@ -9,8 +9,10 @@ VoiceLens 是一个面向授权反馈数据的分析与治理 Web MVP。系统�
 - CSV、XLSX、TXT 导入与严格格式校验
 - 邮箱、手机号、订单号脱敏（导入落库即脱敏，下游只见脱敏正文）
 - HMAC 来源去重、幂等键、分页和写接口限流
-- 确定性 CPU 主题分析、摘要和证据 offset
-- 可替换的结构化 LLM provider 与离线质量评估
+- 主题分析:分块 → 向量 → HDBSCAN 聚类 → 命名,证据带可复原的字符 offset
+  - 向量 provider 由 `EMBEDDING_MODE` 选择(`api` 走外部服务,`hashing` 为本地
+    替身,仅演示);命名 provider 由 `NAMING_MODE` 选择(`provider`/`manual`/`mock`)
+- 结构化 LLM 命名 provider(冻结提示词 + schema 校验 + 证据引用校验 + 超时/预算降级)
 - 项目、风险、任务、复核、复盘、导出和删除流程
 - SQLAlchemy + Alembic + PostgreSQL Repository
 - Celery/Redis、outbox relay 和 Nginx 同源部署
@@ -102,6 +104,12 @@ python scripts/validate-compose.py  # 无 Docker 时的静态校验
 | `AUTH_INSECURE_DEV` | 本地 http 场景显式开关（非 Secure Cookie、无会话请求跳过 CSRF）；**生产启动检测到即失败** |
 | `CORS_ORIGINS` | 允许的前端来源白名单（逗号分隔，不支持通配） |
 | `IDENTITY_PROVIDER` | `local`（默认，账号来自 `LOCAL_ACCOUNTS`）或 `oidc`（需 `OIDC_ISSUER`/`OIDC_AUDIENCE`/`OIDC_JWKS_URL`） |
+| `NAMING_MODE` | `mock`（默认，演示）/ `provider`（外部模型）/ `manual`（不调模型，等待人工命名）。**生产禁止 mock** |
+| `MODEL_ENDPOINT` / `MODEL_ID` / `MODEL_API_KEY` | `NAMING_MODE=provider` 时必填；密钥只注入 worker |
+| `MODEL_PRICE_IN` / `MODEL_PRICE_OUT` / `DAILY_MODEL_BUDGET` | 预算与成本（§10.5）。**没有可靠价格配置时禁用付费模式**，不是一个请求都不发 |
+| `EMBEDDING_MODE` | `hashing`（默认，本地替身，仅演示）/ `api`（外部向量服务）。**生产禁止 hashing** |
+| `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | `EMBEDDING_MODE=api` 时必填 |
+| `EMBEDDING_REVISION` | 向量模型 revision；未填时用 model id 兜底，不编造版本号 |
 
 生产启动会校验上述约束（`app/settings.py`），不满足直接失败。
 
