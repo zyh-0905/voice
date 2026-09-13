@@ -108,7 +108,8 @@ python scripts/validate-compose.py  # 无 Docker 时的静态校验
 | `MODEL_ENDPOINT` / `MODEL_ID` / `MODEL_API_KEY` | `NAMING_MODE=provider` 时必填；密钥只注入 worker |
 | `MODEL_PRICE_IN` / `MODEL_PRICE_OUT` / `DAILY_MODEL_BUDGET` | 预算与成本（§10.5）。**没有可靠价格配置时禁用付费模式**，不是一个请求都不发 |
 | `EMBEDDING_MODE` | `hashing`（默认，本地替身，仅演示）/ `api`（外部向量服务）。**生产禁止 hashing** |
-| `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | `EMBEDDING_MODE=api` 时必填 |
+| `MODEL_BASE_URL` | **多数网关在同一 host 上同时提供 chat 与 embeddings**：只配这一个 + `MODEL_API_KEY`，命名与向量就都能用（端点按 `/chat/completions`、`/embeddings` 推导，显式变量可覆盖） |
+| `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | 用不同供应商或不同模型时才需要；缺省回落到 `MODEL_BASE_URL` / `MODEL_ID` / `MODEL_API_KEY` |
 | `EMBEDDING_REVISION` | 向量模型 revision；未填时用 model id 兜底，不编造版本号 |
 
 生产启动会校验上述约束（`app/settings.py`），不满足直接失败。

@@ -276,3 +276,52 @@ def test_pipeline_records_the_embedding_revision(monkeypatch):
     monkeypatch.setenv('EMBEDDING_MODEL', 'bge-small-zh-v1.5')
     monkeypatch.setenv('EMBEDDING_REVISION', 'bge-small-zh-v1.5@a5beb1e')
     assert resolve_embedding_provider().revision == 'bge-small-zh-v1.5@a5beb1e'
+
+
+# —— 一个供应商同时供 chat 与 embeddings:配一个 base URL 与一把 key ——
+
+def test_base_url_and_shared_key_serve_both_providers(monkeypatch):
+    """多数 LLM 网关在同一 host 上同时提供 /chat/completions 与 /embeddings。
+
+    所以「一个供应商、一个 key」是常态:配 MODEL_BASE_URL 与 MODEL_API_KEY 就够,
+    具体端点变量只在用不同供应商时才需要。
+    """
+    from app.topic_provider import HTTPTopicProvider
+
+    monkeypatch.setenv('MODEL_BASE_URL', 'https://gateway.example/v1')
+    monkeypatch.setenv('MODEL_ID', 'qwen-max')
+    monkeypatch.setenv('MODEL_API_KEY', 'shared-key')
+    monkeypatch.delenv('MODEL_ENDPOINT', raising=False)
+    monkeypatch.delenv('EMBEDDING_ENDPOINT', raising=False)
+    monkeypatch.delenv('EMBEDDING_MODEL', raising=False)
+    monkeypatch.delenv('EMBEDDING_API_KEY', raising=False)
+
+    chat = HTTPTopicProvider.from_env()
+    embed = HTTPEmbeddingProvider.from_env()
+
+    assert chat.endpoint == 'https://gateway.example/v1/chat/completions'
+    assert chat.api_key == 'shared-key'
+    assert embed.endpoint == 'https://gateway.example/v1/embeddings'
+    assert embed.api_key == 'shared-key'
+    # 向量模型名沿用 MODEL_ID,除非单独指定——不同模型的向量维度不同,单独指定
+    # 时以它为准
+    assert embed.model == 'qwen-max'
+
+
+def test_explicit_endpoints_still_win(monkeypatch):
+    """约定只是便利:显式变量始终覆盖推导结果。"""
+    from app.topic_provider import HTTPTopicProvider
+
+    monkeypatch.setenv('MODEL_BASE_URL', 'https://gateway.example/v1')
+    monkeypatch.setenv('MODEL_ID', 'qwen-max')
+    monkeypatch.setenv('MODEL_ENDPOINT', 'https://other.example/custom/chat')
+    monkeypatch.setenv('EMBEDDING_ENDPOINT', 'https://embed.example/v2/embed')
+
+    assert HTTPTopicProvider.from_env().endpoint == 'https://other.example/custom/chat'
+    assert HTTPEmbeddingProvider.from_env().endpoint == 'https://embed.example/v2/embed'
+
+
+def test_base_url_trailing_slash_is_tolerated(monkeypatch):
+    monkeypatch.setenv('MODEL_BASE_URL', 'https://gateway.example/v1/')
+    monkeypatch.setenv('MODEL_ID', 'm')
+    assert HTTPEmbeddingProvider.from_env().endpoint == 'https://gateway.example/v1/embeddings'

@@ -50,8 +50,11 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
             "NAMING_MODE must be provider or manual in production "
             f"(got {naming_mode!r}); mock naming is demo-only")
     if naming_mode == "provider":
-        if not (os.getenv("MODEL_ENDPOINT") or "").strip():
-            errors.append("MODEL_ENDPOINT must be set when NAMING_MODE=provider")
+        # 端点可以是显式的 MODEL_ENDPOINT,也可以由 MODEL_BASE_URL 推导
+        base_url = (os.getenv("MODEL_BASE_URL") or "").strip()
+        if not (os.getenv("MODEL_ENDPOINT") or "").strip() and not base_url:
+            errors.append(
+                "MODEL_ENDPOINT or MODEL_BASE_URL must be set when NAMING_MODE=provider")
         if not (os.getenv("MODEL_ID") or "").strip():
             errors.append("MODEL_ID must be set when NAMING_MODE=provider")
         # 10.5:没有可靠价格配置时禁用付费模式。生产选 provider 却没有价格,
@@ -68,10 +71,13 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
             "EMBEDDING_MODE must be api in production "
             f"(got {embedding_mode!r}); the hashing stand-in is demo-only")
     else:
-        if not (os.getenv("EMBEDDING_ENDPOINT") or "").strip():
-            errors.append("EMBEDDING_ENDPOINT must be set when EMBEDDING_MODE=api")
-        if not (os.getenv("EMBEDDING_MODEL") or "").strip():
-            errors.append("EMBEDDING_MODEL must be set when EMBEDDING_MODE=api")
+        emb_base = (os.getenv("MODEL_BASE_URL") or "").strip()
+        if not (os.getenv("EMBEDDING_ENDPOINT") or "").strip() and not emb_base:
+            errors.append(
+                "EMBEDDING_ENDPOINT or MODEL_BASE_URL must be set when EMBEDDING_MODE=api")
+        if not (os.getenv("EMBEDDING_MODEL") or os.getenv("MODEL_ID") or "").strip():
+            errors.append(
+                "EMBEDDING_MODEL (or MODEL_ID) must be set when EMBEDDING_MODE=api")
     if errors:
         raise RuntimeError("Invalid production settings: " + "; ".join(errors))
     return cfg

@@ -25,6 +25,7 @@ from urllib import error, request
 import numpy as np
 
 from .embedding import EMBEDDING_DIM, EMBEDDING_REVISION, encode_segments
+from .topic_provider import resolve_api_key, resolve_endpoint, resolve_model_id
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_BATCH_SIZE = 32  # 8.2:CPU batch_size 初始为 32
@@ -86,13 +87,19 @@ class HTTPEmbeddingProvider:
 
     @classmethod
     def from_env(cls) -> 'HTTPEmbeddingProvider | None':
-        endpoint = (os.getenv('EMBEDDING_ENDPOINT') or '').strip()
-        model = (os.getenv('EMBEDDING_MODEL') or '').strip()
+        """端点与密钥都支持从 chat 那边回落。
+
+        一个供应商同时提供 chat 与 embeddings 是常态:配一个 `MODEL_BASE_URL` 与
+        一把 `MODEL_API_KEY` 就能同时供两者,`EMBEDDING_*` 变量只在用不同供应商
+        (或不同模型)时才需要。
+        """
+        endpoint = resolve_endpoint('EMBEDDING_ENDPOINT', 'MODEL_BASE_URL', '/embeddings')
+        model = resolve_model_id('EMBEDDING_MODEL')
         if not endpoint or not model:
             return None
         return cls(
             endpoint=endpoint, model=model,
-            api_key=(os.getenv('EMBEDDING_API_KEY') or '').strip() or None,
+            api_key=resolve_api_key('EMBEDDING_API_KEY', 'MODEL_API_KEY'),
             timeout_seconds=_float_env('EMBEDDING_TIMEOUT_SECONDS', DEFAULT_TIMEOUT_SECONDS),
             batch_size=int(_float_env('EMBEDDING_BATCH_SIZE', DEFAULT_BATCH_SIZE)),
             declared_revision=(os.getenv('EMBEDDING_REVISION') or '').strip() or None,

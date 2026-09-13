@@ -45,6 +45,35 @@ def load_system_prompt() -> str:
         return handle.read().strip()
 
 
+def resolve_endpoint(specific: str, base_var: str, path: str) -> str:
+    """显式端点优先;没给时按 `MODEL_BASE_URL` + 约定路径拼。
+
+    便于「一个供应商同时提供 chat 与 embeddings」的部署:配一个 base URL 就够,
+    而两个具体端点变量始终可以单独覆盖。
+    """
+    explicit = (os.getenv(specific) or '').strip()
+    if explicit:
+        return explicit
+    root = (os.getenv(base_var) or '').strip().rstrip('/')
+    return f'{root}{path}' if root else ''
+
+
+def resolve_model_id(var: str) -> str:
+    return (os.getenv(var) or os.getenv('MODEL_ID') or '').strip()
+
+
+def resolve_api_key(specific: str, fallback: str) -> str | None:
+    """密钥优先取专用变量,其次回落到共用的那把。
+
+    「一个供应商一个 key」是常态;分别配两把只在用不同供应商时才需要。
+    """
+    for name in (specific, fallback):
+        value = (os.getenv(name) or '').strip()
+        if value:
+            return value
+    return None
+
+
 @dataclass
 class CallUsage:
     """一次调用的记账信息,供 `model_calls` 落库(10.5)。"""
@@ -128,9 +157,14 @@ class HTTPTopicProvider:
 
     @classmethod
     def from_env(cls) -> 'HTTPTopicProvider | None':
-        """按 14.1 的配置键构造;缺必要项返回 None(调用方据此判断能否走付费模式)。"""
-        endpoint = (os.getenv('MODEL_ENDPOINT') or '').strip()
-        model = (os.getenv('MODEL_ID') or '').strip()
+        """按 14.1 的配置键构造;缺必要项返回 None(调用方据此判断能否走付费模式)。
+
+        端点优先取显式的 `MODEL_ENDPOINT`;没给时按 `MODEL_BASE_URL` 拼
+        `/chat/completions`。后者是 OpenAI 兼容网关的事实约定,而显式变量始终可以覆盖
+        —— 约定是便利,不是猜测。
+        """
+        endpoint = resolve_endpoint('MODEL_ENDPOINT', 'MODEL_BASE_URL', '/chat/completions')
+        model = resolve_model_id('MODEL_ID')
         if not endpoint or not model:
             return None
         provider = (os.getenv('MODEL_PROVIDER') or 'http').strip() or 'http'
@@ -139,7 +173,7 @@ class HTTPTopicProvider:
         except ValueError:
             timeout = DEFAULT_TIMEOUT_SECONDS
         return cls(endpoint=endpoint, model=model,
-                   api_key=(os.getenv('MODEL_API_KEY') or '').strip() or None,
+                   api_key=resolve_api_key('MODEL_API_KEY', 'MODEL_API_KEY'),
                    timeout_seconds=timeout, origin=provider,
                    budget=BudgetGuard.from_env())
 
