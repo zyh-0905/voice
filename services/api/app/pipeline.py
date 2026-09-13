@@ -9,7 +9,7 @@ import os
 from typing import Mapping
 
 from .clustering import cluster_embeddings
-from .ingestion import row_text
+from .ingestion import row_source_row, row_text
 from .embedding import encode_segments
 from .llm import MockTopicProvider, TopicNamer
 from .publishing import EvidenceRef, TopicDraft, publish_revision
@@ -61,7 +61,8 @@ def _flatten_rows(run: Mapping) -> tuple[list[dict], dict[str, str], int]:
             feedback_id = str(row.get('feedback_id') or f"fb_{dataset.get('id', 'ds')}_{index}")
             # 与证据源端点共用同一份正文口径,否则引文 offset 在两处对不上
             text = row_text(row)
-            rows.append({'feedback_id': feedback_id, 'text': text, 'source_row': index})
+            # 规范化行显式带 source_row:无效行在治理阶段被剔除后,枚举位置不再等于源行号
+            rows.append({'feedback_id': feedback_id, 'text': text, 'source_row': row_source_row(row, index)})
             sources[feedback_id] = text
     return rows, sources, len(rows)
 

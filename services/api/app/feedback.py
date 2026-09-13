@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from .ingestion import redact_text, row_text
+from .ingestion import redact_text, row_source_row, row_text
 from .segments import split_redacted
 
 # 行内可识别为反馈标识/时间/渠道的字段名(治理后的脱敏行)
@@ -63,7 +63,7 @@ def find_feedback(repository, project_id: str, feedback_id: str) -> dict:
                 'feedback_id': feedback_id,
                 'dataset_id': dataset.get('id'),
                 'dataset_name': dataset.get('name'),
-                'source_row': index,
+                'source_row': row_source_row(row, index),
                 'channel': None if channel is None else _redact(channel),
                 'occurred_at': _first(row, _TIME_KEYS),
                 # 只给脱敏全文;不提供原始文件或未脱敏内容

@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from uuid import uuid4
-from .ingestion import parse_csv_text, parse_xlsx_bytes, redact_text
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from .ingestion import (DecodeError, MappingError, STANDARD_FIELDS, UnsupportedEncoding, apply_mapping,
+                        decode_text, parse_csv_text, parse_txt_text, parse_xlsx_bytes, redact_text, validate_mapping)
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
@@ -36,7 +38,10 @@ repository = get_repository()
 datasets = repository.datasets
 analyses = repository.analyses
 worker = AnalysisWorker(analyses, repository)
-MAX_BYTES = 50 * 1024 * 1024
+# 工程计划 4.1:上传 20 MiB,单批 5,000 行;超限分别 413/422,不得静默截断
+MAX_BYTES = 20 * 1024 * 1024
+MAX_BATCH_ROWS = 5_000
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 ALLOWED = {'txt', 'csv', 'xlsx'}
 def now(): return datetime.now(timezone.utc).isoformat()
 class ValidateRequest(BaseModel):
@@ -75,13 +80,47 @@ def readiness():
             database.update(status='unreachable', error=type(exc).__name__)
             return JSONResponse(status_code=503, content={'status': 'not_ready', 'database': database, 'queue': queue})
     return {'status': 'ready', 'database': database, 'queue': queue}
+async def _read_limited(file: UploadFile) -> bytes:
+    """按块累计读取上传内容,边读边查上限(工程计划 4.1:累计字节也要检查)。
+
+    一次性 read() 再比对会把整个大文件先收进内存,限制等于形同虚设。
+    """
+    chunks = bytearray()
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        chunks.extend(chunk)
+        if len(chunks) > MAX_BYTES:
+            raise HTTPException(413, detail={'code': 'file_too_large', 'max_bytes': MAX_BYTES})
+    return bytes(chunks)
+
+
+def _parse_upload(ext: str, data: bytes, encoding: str | None) -> dict:
+    """解析上传内容:CSV/TXT 按显式编码解码,XLSX 走只读解析(工程计划 4.1/4.3)。
+
+    解码失败必须报错,禁止用替换字符悄悄兜底——乱码正文一旦入库,后续脱敏、
+    向量与证据引文都会以假乱真。
+    """
+    try:
+        if ext == 'xlsx':
+            return parse_xlsx_bytes(data)
+        text = decode_text(data, encoding)
+        return parse_txt_text(text) if ext == 'txt' else parse_csv_text(text)
+    except UnsupportedEncoding as exc:
+        raise HTTPException(422, detail={'code': 'unsupported_encoding', 'message': str(exc)}) from exc
+    except DecodeError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
+
+
 @app.post('/api/v1/projects/{project_id}/datasets', status_code=201)
-async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_project_analyst)):
+async def upload(project_id: str, file: UploadFile = File(...), name: str|None = Form(None), source_namespace: str|None = Form(None), source_kind: str|None = Form(None), encoding: str|None = Form(None), consent: bool = Form(False), user: dict = Depends(require_project_analyst)):
     if not consent: raise HTTPException(422, detail={'code':'consent_required'})
     ext = (file.filename or '').rsplit('.',1)[-1].lower()
     if ext not in ALLOWED: raise HTTPException(422, detail={'code':'unsupported_file_type'})
-    data = await file.read()
-    if len(data) > MAX_BYTES: raise HTTPException(413, detail={'code':'file_too_large'})
+    data = await _read_limited(file)
     content_hash = hashlib.sha256(data).hexdigest()
     source_name = name or file.filename or 'upload'
     namespace = source_namespace or ''
@@ -96,13 +135,12 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
             if existing.get('content_hash') == content_hash: return JSONResponse(status_code=200, content=_redacted_out(existing))
             raise HTTPException(409, detail={'code':'source_conflict'})
     did='ds_'+uuid4().hex[:10]
-    try:
-        preview = parse_csv_text(data.decode('utf-8')) if ext == 'csv' else parse_xlsx_bytes(data) if ext == 'xlsx' else {'headers': [], 'rows': [], 'stats': {}}
-    except UnicodeDecodeError as exc:
-        raise HTTPException(422, detail={'code': 'invalid_file', 'message': f'invalid UTF-8 CSV at byte {exc.start}'}) from exc
-    except ValueError as exc:
-        raise HTTPException(422, detail={'code': 'invalid_file', 'message': str(exc)}) from exc
-    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':preview.get('stats',{}).get('total',0),'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'created_at':now()}
+    preview = _parse_upload(ext, data, encoding)
+    total = int((preview.get('stats') or {}).get('total') or 0)
+    if total > MAX_BATCH_ROWS:
+        # 工程计划 4.1:单批 5,000 行,超限 422 建议拆批,不得静默截断
+        raise HTTPException(422, detail={'code': 'row_limit_exceeded', 'max_rows': MAX_BATCH_ROWS, 'rows': total})
+    d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':total,'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'file_ext':ext,'encoding':(encoding or None) if ext != 'xlsx' else None,'created_at':now()}
     return repository.create_dataset(d)
 def _page(page: int, page_size: int):
     if page < 1 or page_size < 1 or page_size > 100:
@@ -143,15 +181,65 @@ def get_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_p
         raise HTTPException(404, detail={'code': 'dataset_not_found'})
     return _redacted_out(dataset)
 
+def _resolve_import_timezone(project_id: str, requested: str | None) -> str:
+    """导入时区:显式请求 > 项目设置 > 工程计划默认 Asia/Shanghai(4.5)。"""
+    stored = repository.get_project_settings(project_id) or {}
+    name = str(requested or '').strip() or str(stored.get('timezone') or '').strip() or 'Asia/Shanghai'
+    ZoneInfo(name)  # 校验时区名;未知时区由端点转 422
+    return name
+
+
 @app.post('/api/v1/projects/{project_id}/datasets/{dataset_id}/validate', status_code=202)
 def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict = Depends(require_project_analyst)):
+    """治理校验:应用字段映射与时间策略,把批次转为 READY(工程计划 4.2/4.3)。
+
+    映射后的行只保留标准字段;无效行不落库但保留源行号(§4.1);严格模式缺
+    created_at 判无效,静态模式标 time_quality=missing(§4.2)。健康计数满足
+    input_rows = valid_rows + invalid_rows + duplicate_rows(§4.5)。
+    """
     d=datasets.get(dataset_id)
     if not d or d['project_id']!=project_id: raise HTTPException(404, detail={'code':'dataset_not_found'})
     if req.expected_version is not None and req.expected_version != d['version']: raise HTTPException(409, detail={'code':'version_conflict'})
-    stats = d.get('preview', {}).get('stats', {})
-    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY', status='ready', rows=d['rows'], version=d['version']+1)
-    total = stats.get('total', 0); d['health'] = {'completeness': round((stats.get('valid',0)/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
-    d['validation'] = {'health': d['health'], 'errors': [], 'preview': d.get('preview', {})}
+    preview = d.get('preview') or {}
+    try:
+        mapping = validate_mapping(req.mapping, preview.get('headers') or [])
+    except MappingError as exc:
+        raise HTTPException(422, detail={'code': 'invalid_mapping', 'message': str(exc)}) from exc
+    policy = str(req.time_policy or d.get('time_policy') or 'static').strip().lower()
+    if policy not in ('strict', 'static'):
+        raise HTTPException(422, detail={'code': 'invalid_time_policy', 'allowed': ['strict', 'static']})
+    try:
+        import_timezone = _resolve_import_timezone(project_id, req.timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(422, detail={'code': 'invalid_timezone', 'message': f'未知时区: {req.timezone}'}) from exc
+
+    if mapping:
+        applied = apply_mapping(preview.get('rows') or [], mapping,
+                                time_policy=policy, timezone_name=import_timezone)
+        stats = dict(applied['stats'])
+        # 脱敏命中数由解析函数按原始行在上传时统计;剔除无效行后不得超过有效行
+        stats['redacted'] = min(int((preview.get('stats') or {}).get('redacted') or 0), stats['valid'])
+        preview = {
+            'headers': [field for field in STANDARD_FIELDS if field in set(mapping.values())],
+            'rows': applied['rows'],
+            'stats': stats,
+        }
+        errors = applied['errors']
+    else:
+        # 历史非标准批次:没有可识别的标准字段,保持原有行与统计,不做破坏性重写
+        stats = dict(preview.get('stats') or {})
+        errors = []
+    total = stats.get('total', 0)
+    valid = stats.get('valid', 0)
+    d['preview'] = preview
+    d['mapping'] = mapping
+    d['time_policy'] = policy
+    d['timezone'] = import_timezone
+    d.update(state='READY_WITH_WARNINGS' if stats.get('invalid',0) or stats.get('missing_time',0) else 'READY',
+             status='ready', rows=valid if mapping else d['rows'], version=d['version']+1)
+    d['health'] = {'completeness': round((valid/total)*100) if total else 0, 'piiMasked': True, 'timeFieldMissing': stats.get('missing_time',0)}
+    d['validation'] = {'health': d['health'], 'errors': errors, 'preview': preview,
+                       'mapping': mapping, 'time_policy': policy, 'timezone': import_timezone}
     return _redacted_out(repository.update_dataset(dataset_id, d))
 @app.post('/api/v1/projects/{project_id}/analyses', status_code=202)
 def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|None = Header(None), user: dict = Depends(require_project_analyst)):
@@ -168,6 +256,12 @@ def create_analysis(project_id: str, req: AnalysisRequest, idempotency_key: str|
     if any(d['state'] not in ('READY','READY_WITH_WARNINGS') for d in ds): raise HTTPException(422, detail={'code':'dataset_not_ready'})
     total_rows = sum(d.get('rows', 0) for d in ds)
     if total_rows > 5000: raise HTTPException(422, detail={'code':'analysis_row_limit','max_rows':5000,'rows':total_rows})
+    # 工程计划 4.1:每项目同时只允许一个活跃分析;已有作业返回 409 和活跃 run_id,
+    # 不能让第二个作业悄悄排队。放在数据集校验之后:404/422 语义不受其他作业影响。
+    active = next((a for a in analyses.values()
+                   if a.get('project_id') == project_id and a.get('status') in ('queued', 'running')), None)
+    if active:
+        raise HTTPException(409, detail={'code': 'active_analysis_exists', 'run_id': active.get('id')})
     aid='run_'+uuid4().hex[:10]; a={'id':aid,'project_id':project_id,'dataset_ids':req.dataset_ids,'datasets':ds,'status':'queued','stage':'queued','progress':0,'total':total_rows}; repository.create_analysis(a)
     repository.create_outbox_event({'event_key': f'analysis.created:{aid}', 'event_type':'analysis.created', 'payload': {'analysis_id': aid, 'project_id': project_id}})
     if idempotency_key:
