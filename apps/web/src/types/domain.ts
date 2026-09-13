@@ -4,6 +4,30 @@ export interface DatasetPreview {
   rows: number
   status: string
   hasTime: boolean
+  /** 来源列名(脱敏预览的表头)。向导据此渲染映射步骤——此前那一屏是写死的三列。 */
+  headers: string[]
+  /** 上传时的脱敏预览行(最多 20 行,4.3) */
+  rows_preview: DatasetRow[]
+  /** XLSX 的全部工作表名;单表或非 XLSX 时为空 */
+  sheetNames: string[]
+  /** 当前选中的工作表(4.3) */
+  sheetName: string | null
+}
+
+/** 工程计划 4.2 的标准反馈字段:映射目标只能是它们 */
+export type StandardField = 'feedback_id' | 'content' | 'created_at' | 'channel'
+  | 'product' | 'rating' | 'order_id' | 'order_ref' | 'status'
+
+export type DatasetRow = Record<string, string>
+
+/** 治理请求:§4.3 的映射、工作表、时区与时间策略都要送到服务端。
+ *
+ * 此前向导发的是空对象,于是四个选项在真实与 mock 两种模式下都不生效。 */
+export interface ValidateBody {
+  mapping?: Record<string, string>
+  sheet_name?: string
+  time_policy?: 'strict' | 'static'
+  timezone?: string
 }
 export interface ImportHealth {
   completeness: number

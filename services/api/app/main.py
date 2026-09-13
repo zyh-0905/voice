@@ -6,7 +6,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .ingestion import (DecodeError, MappingError, STANDARD_FIELDS, UnsupportedEncoding, apply_mapping,
                         build_feedback_rows, decode_text, parse_csv_text, parse_txt_text,
-                        parse_xlsx_bytes, redact_text, validate_mapping)
+                        parse_xlsx_sheets, redact_text, validate_mapping)
 from .repository import get_repository
 from .worker import AnalysisWorker
 from .middleware import CsrfMiddleware, SecurityHeadersMiddleware
@@ -107,7 +107,12 @@ def _parse_upload(ext: str, data: bytes, encoding: str | None) -> dict:
     """
     try:
         if ext == 'xlsx':
-            return parse_xlsx_bytes(data)
+            # 全部工作表:治理时用户才选哪一张,而那时没有文件字节了(§4.3 的顺序是
+            # 上传 → 选工作表/映射 → 治理)
+            sheets = parse_xlsx_sheets(data)
+            default = next(iter(sheets))
+            return {**sheets[default], 'sheet_name': default,
+                    'sheet_names': list(sheets), 'sheets': sheets}
         text = decode_text(data, encoding)
         return parse_txt_text(text) if ext == 'txt' else parse_csv_text(text)
     except UnsupportedEncoding as exc:
@@ -149,6 +154,10 @@ async def upload(project_id: str, file: UploadFile = File(...), name: str|None =
     # 于是 expected_version 这套乐观锁没有任何可重试的对象。
     # 行本身在上传时就已脱敏,持久分析取数仍然只走 feedback 表。
     source = {'headers': list(preview.get('headers') or []), 'rows': preview.get('rows') or []}
+    if preview.get('sheets'):
+        # 工作表数据留在**暂存**里:它不进任何出站响应(_dataset_out 会剥掉 source),
+        # 治理时按用户选择取用
+        source['sheets'] = preview['sheets']
     d={'id':did,'project_id':project_id,'event_key':event_key,'content_hash':content_hash,'name':source_name,'rows':total,'status':'uploaded','state':'UPLOADED','hasTime':False,'version':1,'health':{'completeness':0,'piiMasked':True,'timeFieldMissing':0},'preview':preview,'source':source,'file_ext':ext,'encoding':(encoding or None) if ext != 'xlsx' else None,'created_at':now()}
     return _dataset_out(repository.create_dataset(d))
 def _page(page: int, page_size: int):
@@ -226,6 +235,16 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
     # 已经是标准字段名,用户拿原始源列名重试必然 422,而错误信息还会说
     # 「源列不存在于本批次」——源列明明在,只是被上一次治理覆盖掉了。
     source = d.get('source') or preview
+    # §4.3:用户在上传之后、治理之前选工作表。选择落在 dataset 上,并进入 4.4 的
+    # 事件键——否则同一工作簿的两张表会按行号互相判成重复。
+    sheets = source.get('sheets') or {}
+    chosen_sheet = str(req.sheet_name or d.get('sheet_name') or '').strip()
+    if chosen_sheet and sheets:
+        if chosen_sheet not in sheets:
+            raise HTTPException(422, detail={'code': 'worksheet_not_found',
+                                             'available': sorted(sheets)})
+        source = sheets[chosen_sheet]
+        d['sheet_name'] = chosen_sheet
     try:
         mapping = validate_mapping(req.mapping, source.get('headers') or [])
     except MappingError as exc:
@@ -282,6 +301,13 @@ def validate(project_id: str, dataset_id: str, req: ValidateRequest, user: dict 
         'stats': stats,
         'sample_limit': PREVIEW_ROW_LIMIT,
     }
+    # 工作表名与可选项随预览出站:导入向导靠它渲染选择器;工作表**内容**不出站
+    # (它留在 source 暂存里,由 _dataset_out 剥掉)。
+    if d.get('sheet_name'):
+        preview['sheet_name'] = d['sheet_name']
+    available = sorted(((d.get('source') or {}).get('sheets') or {})) or list(preview.get('sheet_names') or [])
+    if available:
+        preview['sheet_names'] = available
     d['preview'] = preview
     d['mapping'] = mapping
     d['time_policy'] = policy

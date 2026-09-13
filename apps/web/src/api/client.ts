@@ -1,5 +1,7 @@
 import type {
   AnalysisRun,
+  DatasetRow,
+  ValidateBody,
   DatasetBatch,
   DatasetPreview,
   ImportHealthView,
@@ -203,8 +205,8 @@ export interface ApiClient {
   upload(file: File, signal?: AbortSignal): Promise<DatasetPreview>
   upload(projectId: string, file: File, signal?: AbortSignal): Promise<DatasetPreview>
   /** POST /datasets/{id}/validate:完成治理校验并把批次转为 READY,返回 6 项治理计数 */
-  health(id: string, signal?: AbortSignal): Promise<ImportHealthView>
-  health(projectId: string, id: string, signal?: AbortSignal): Promise<ImportHealthView>
+  health(id: string, body?: ValidateBody, signal?: AbortSignal): Promise<ImportHealthView>
+  health(projectId: string, id: string, body?: ValidateBody, signal?: AbortSignal): Promise<ImportHealthView>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
   /** POST /auth/login,返回真实 access_token 与用户 */
@@ -364,20 +366,40 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       const signal = typeof projectOrFile === 'string' ? maybeSignal : fileOrSignal as AbortSignal | undefined
       const form = new FormData(); form.append('file', file)
       form.append('consent', 'true')
-      return request<DatasetPreview>(`${project(projectId)}/datasets`, { method: 'POST', body: form, signal })
+      // 服务端把来源列名与工作表清单放在 preview 里,而 DatasetPreview 此前不含它们
+      // ——于是映射步骤只能渲染写死的列,工作表选择更是无从谈起
+      return request<{ id: string; name: string; rows: number; status: string; hasTime: boolean
+                       preview?: { headers?: string[]; rows?: DatasetRow[]; sheet_name?: string
+                                   sheet_names?: string[] } }>(
+        `${project(projectId)}/datasets`, { method: 'POST', body: form, signal },
+      ).then(body => ({
+        id: body.id, name: body.name, rows: body.rows, status: body.status, hasTime: body.hasTime,
+        headers: body.preview?.headers ?? [],
+        rows_preview: body.preview?.rows ?? [],
+        sheetNames: body.preview?.sheet_names ?? [],
+        sheetName: body.preview?.sheet_name ?? null,
+      }))
     },
-    async health(projectOrId: string, idOrSignal?: string | AbortSignal, maybeSignal?: AbortSignal) {
-      const projectId = typeof idOrSignal === 'string' ? projectOrId : 'demo-project'
-      const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
-      const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
+    async health(projectOrId: string, idOrBody?: string | ValidateBody | AbortSignal,
+                 bodyOrSignal?: ValidateBody | AbortSignal, maybeSignal?: AbortSignal) {
+      const projectId = typeof idOrBody === 'string' ? projectOrId : 'demo-project'
+      const id = typeof idOrBody === 'string' ? idOrBody : projectOrId
+      // 重载有 (id, body?, signal?) 与 (projectId, id, body?, signal?) 两种;
+      // 逐个位置试探不如按「哪个是字符串」判——id 一定是字符串
+      const rest = typeof idOrBody === 'string' ? [bodyOrSignal, maybeSignal] : [idOrBody, bodyOrSignal]
+      const body = rest.find((item): item is ValidateBody => !!item && typeof item === 'object' && !('aborted' in item))
+      const signal = rest.find((item): item is AbortSignal => !!item && typeof item === 'object' && 'aborted' in item)
       // POST /datasets/{id}/validate 同时完成校验(批次转入 READY)并返回治理统计。
       // 消费方(导入向导的治理报告)要的是 6 项计数,而服务端把它们放在 preview.stats
       // 里,所以在这里映射一次——否则 mock 与真实各返回一种形状,报告只能靠写死的常量。
-      const body = await request<{ preview?: { stats?: Record<string, number> } }>(
+      const response = await request<{ preview?: { stats?: Record<string, number> } }>(
         `${project(projectId)}/datasets/${encodeURIComponent(id)}/validate`,
-        { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' }, signal },
+        // 映射、工作表、时区与时间策略必须送到服务端:发空对象等于这四个选项
+        // 在真实模式下完全不生效,而报告看起来照常生成
+        { method: 'POST', body: JSON.stringify(body ?? {}),
+          headers: { 'Content-Type': 'application/json' }, signal },
       )
-      const stats = body.preview?.stats ?? {}
+      const stats = response.preview?.stats ?? {}
       return {
         inputRows: stats.total ?? 0,
         validRows: stats.valid ?? 0,

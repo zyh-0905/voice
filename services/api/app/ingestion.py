@@ -139,8 +139,9 @@ def feedback_event_key(secret: str, dataset, *, external_id: str | None, source_
     这个认的是「同一条反馈事件」。同文本不同来源编号是两条不同事件,都要保留,
     所以消息里必须带来源身份而不是正文。
 
-    已知缺口:XLSX 工作表选择尚未实现,`sheet_name` 目前恒为空,因此同一工作簿的
-    不同工作表按行号去重会互相碰撞。补工作表选择时要连同这里一起改。
+    `sheet_name` 由导入流程写入(§4.3 的「选择工作表」):不写的话,同一工作簿的
+    不同工作表会按 file_sha256 + 行号 去重而互相碰撞——两张表的第 3 行会被当成
+    同一条反馈。有来源编号时不受影响(那条路径不看工作表)。
     """
     if external_id is not None:
         message = f"{dataset.get('source_namespace') or ''}\0{external_id}"
@@ -319,26 +320,69 @@ def parse_txt_text(text: str) -> dict:
     stats = classify_rows(rows)
     return {"headers": ['content'], "rows": [redact_row(row) for row in rows], "stats": stats}
 
-def parse_xlsx_bytes(data: bytes) -> dict:
-    """Parse the first worksheet of an XLSX workbook with bounded dimensions."""
+def _parse_worksheet(ws) -> dict:
+    """读一个工作表:表头 + 行 + 健康统计(按原始行统计)。"""
+    values = ws.iter_rows(values_only=True)
+    try:
+        raw_headers = next(values)
+    except StopIteration:
+        return {"headers": [], "rows": [], "stats": classify_rows([])}
+    headers = [str(v).strip() if v is not None else "" for v in raw_headers]
+    if len(headers) > MAX_XLSX_COLUMNS:
+        raise ValueError(f"column limit exceeded ({MAX_XLSX_COLUMNS})")
+    rows = []
+    for idx, vals in enumerate(values, 1):
+        if idx > MAX_XLSX_ROWS:
+            raise ValueError(f"row limit exceeded ({MAX_XLSX_ROWS})")
+        rows.append({h: ("" if v is None else str(v)) for h, v in zip(headers, vals)})
+    # 同 CSV:落库即脱敏,stats 仍按原始行统计
+    stats = classify_rows(rows)
+    return {"headers": headers, "rows": [redact_row(row) for row in rows], "stats": stats}
+
+
+def parse_xlsx_bytes(data: bytes, sheet_name: str | None = None) -> dict:
+    """读 XLSX 的一个工作表(默认第一个),并**列出全部工作表名**。
+
+    工程计划 4.3 的导入顺序里「选择工作表」在映射之前,所以上传就要能报出有哪些
+    工作表;此前只读 worksheets[0] 且不返回名字,用户无从选择,同一工作簿的第二个
+    工作表根本进不来。
+
+    结果里带 `sheet_name`(实际读取的那张)与 `sheet_names`(全部)。工作表明写错
+    时**报错**而不是悄悄退回第一张——静默退回会让用户以为分析的是他选的那张。
+    """
     try:
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        ws = wb.worksheets[0] if wb.worksheets else None
-        if ws is None: raise ValueError("workbook has no worksheets")
-        values = ws.iter_rows(values_only=True)
-        try: raw_headers = next(values)
-        except StopIteration: return {"headers": [], "rows": [], "stats": classify_rows([])}
-        headers = [str(v).strip() if v is not None else "" for v in raw_headers]
-        if len(headers) > MAX_XLSX_COLUMNS: raise ValueError(f"column limit exceeded ({MAX_XLSX_COLUMNS})")
-        rows = []
-        for idx, vals in enumerate(values, 1):
-            if idx > MAX_XLSX_ROWS: raise ValueError(f"row limit exceeded ({MAX_XLSX_ROWS})")
-            row = {h: ("" if v is None else str(v)) for h, v in zip(headers, vals)}
-            rows.append(row)
-        # 同 CSV:落库即脱敏,stats 仍按原始行统计
-        stats = classify_rows(rows)
-        return {"headers": headers, "rows": [redact_row(row) for row in rows], "stats": stats}
+        names = [str(ws.title) for ws in wb.worksheets]
+        if not names:
+            raise ValueError("workbook has no worksheets")
+        chosen = str(sheet_name).strip() if sheet_name else ''
+        if chosen:
+            ws = next((sheet for sheet in wb.worksheets if str(sheet.title) == chosen), None)
+            if ws is None:
+                raise ValueError(f"worksheet not found: {chosen}; available: {', '.join(names)}")
+        else:
+            ws, chosen = wb.worksheets[0], names[0]
+        parsed = _parse_worksheet(ws)
+        return {**parsed, "sheet_name": chosen, "sheet_names": names}
+    except ValueError: raise
+    except Exception as exc:
+        raise ValueError(f"invalid or corrupted xlsx file: {exc}") from exc
+
+
+def parse_xlsx_sheets(data: bytes) -> dict[str, dict]:
+    """读**全部**工作表,供上传时暂存、治理时按用户选择取用。
+
+    多读几份而不是治理时重读:治理只在收到文件字节的那一次请求里有 bytes,
+    之后再要就得让用户重传——而 §4.3 的顺序是「上传 → 选工作表/映射 → 治理」。
+    """
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        sheets = {str(ws.title): _parse_worksheet(ws) for ws in wb.worksheets}
+        if not sheets:
+            raise ValueError("workbook has no worksheets")
+        return sheets
     except ValueError: raise
     except Exception as exc:
         raise ValueError(f"invalid or corrupted xlsx file: {exc}") from exc

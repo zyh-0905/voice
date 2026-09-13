@@ -47,7 +47,12 @@
 
     <section v-else-if="step === 'mapping'" class="vl-panel">
       <h2 class="vl-import-upload__title">2 · 字段映射</h2>
-      <FieldMapping @next="onMapped" />
+      <FieldMapping
+        :headers="dataset?.headers ?? []"
+        :sheet-names="dataset?.sheetNames ?? []"
+        :sheet-name="dataset?.sheetName ?? null"
+        @next="onMapped"
+      />
     </section>
 
     <section v-else-if="step === 'report'" class="vl-panel">
@@ -128,19 +133,30 @@ async function upload() {
   }
 }
 
-async function onMapped() {
+async function onMapped(payload: { mapping: Record<string, string>; sheetName: string | null; timePolicy: 'strict' | 'static' }) {
   // 进入治理报告前先让服务端完成校验:这既是治理报告的数字来源,也是批次转入 READY
   // 的必经步骤——未校验的批次会被 create_analysis 以 dataset_not_ready 拒绝。
-  // 此前这里填的是写死的 syntheticHealth(),报告与实际文件无关,批次也永远停在 uploaded。
+  //
+  // **映射、工作表与时间策略必须一起送过去。** 此前这里发的是空对象,于是 §4.3 的
+  // 四个选项(工作表/映射/时区/时间策略)在真实模式下一个都不生效——而报告照常
+  // 生成、向导照常前进,看不出任何异常。
   if (!dataset.value) { error.value = '批次尚未上传,请返回上一步'; return }
   busy.value = true
   error.value = ''
   try {
-    health.value = await client.health(projectId.value, dataset.value.id)
+    health.value = await client.health(projectId.value, dataset.value.id, {
+      mapping: payload.mapping,
+      time_policy: payload.timePolicy,
+      ...(payload.sheetName ? { sheet_name: payload.sheetName } : {}),
+      // 不送 timezone:服务端按项目设置解析(§4.5),而向导没有时区选择器——
+      // 送一个恒为空的值等于加一条永远不会生效的链路。
+    })
     warnings.value = health.value.undatedRows > 0 ? ['部分反馈缺少时间字段,趋势分析将受限'] : []
     persistStep('report')
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '生成治理报告失败'
+    error.value = err instanceof ApiHttpError
+      ? (err.body?.message || err.message)
+      : (err instanceof Error ? err.message : '生成治理报告失败')
   } finally {
     busy.value = false
   }

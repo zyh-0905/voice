@@ -42,7 +42,21 @@ async function uploadMock(projectOrFile: string | File, fileOrSignal?: File | Ab
   await delay(300)
   const file = typeof projectOrFile === 'string' && fileOrSignal instanceof File ? fileOrSignal : projectOrFile
   const name = typeof file === 'string' ? file : file.name
-  return { id: 'demo-1', name, rows: 1248, status: 'ready', hasTime: false }
+  // 与真实端点同形状:列名 + 脱敏预览行 + 工作表清单。此前这里只有四个字段,
+  // 于是映射步骤只能渲染写死的列——mock 与真实两个模式都渲染不出用户自己的表头。
+  const headers = ['call_id', 'transcript', 'agent', 'created_at']
+  const preview = [
+    { call_id: 'C-1', transcript: '物流信息一直没有更新', agent: '坐席A', created_at: '2026-08-05' },
+    { call_id: 'C-2', transcript: '退款一直没有到账', agent: '坐席B', created_at: '2026-08-06' },
+  ]
+  return {
+    id: 'demo-1', name, rows: 1248, status: 'ready', hasTime: true,
+    headers,
+    rows_preview: preview,
+    // 多工作表只在 XLSX 时出现;演示里给一张表,选择器不渲染——与真实一致
+    sheetNames: name.toLowerCase().endsWith('.xlsx') ? ['一月', '二月'] : [],
+    sheetName: name.toLowerCase().endsWith('.xlsx') ? '一月' : null,
+  }
 }
 
 // —— 合成 UI 契约样例(工程计划 7.7 自带样例):仅用于 UI 演示,
@@ -673,7 +687,8 @@ const SYNTHETIC_BATCHES: DatasetBatch[] = [
 
 export const mockApi: ApiClient = {
   upload: uploadMock,
-  // 与真实实现同形状:治理报告的 6 项计数(见 client.health 的映射)
+  // 与真实实现同形状:治理报告的 6 项计数(见 client.health 的映射)。
+  // **合成样例,与传入的映射无关**——mock 不做真实治理,别把它当校验结果读。
   async health() {
     await delay(200)
     return { inputRows: 1248, validRows: 1240, invalidRows: 3, duplicateRows: 5, redactedRows: 812, undatedRows: 12 }
