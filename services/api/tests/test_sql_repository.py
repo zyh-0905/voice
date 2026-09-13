@@ -23,7 +23,8 @@ def test_explicit_writes_survive_new_sessions(repo):
 
 def test_worker_states_are_committed(repo):
     repo.analyses['run'] = {'id': 'run', 'project_id': 'p', 'dataset_ids': ['ds'], 'status': 'queued', 'total': 2}
-    worker = AnalysisWorker(repo.analyses)
+    # 流水线需要仓储:反馈正文取自 feedback 实体表,风险候选也要写进项目队列
+    worker = AnalysisWorker(repo.analyses, repo)
     worker.cancel('run')
     assert repo.analyses['run']['status'] == 'cancelled'
     worker.retry('run')
@@ -38,7 +39,7 @@ def test_api_validation_and_inline_run_persist(repo, monkeypatch):
     monkeypatch.setattr(main, 'repository', repo)
     monkeypatch.setattr(main, 'datasets', repo.datasets)
     monkeypatch.setattr(main, 'analyses', repo.analyses)
-    monkeypatch.setattr(main, 'worker', AnalysisWorker(repo.analyses))
+    monkeypatch.setattr(main, 'worker', AnalysisWorker(repo.analyses, repo))
     monkeypatch.setenv('RUN_WORKER_INLINE', 'true')
     client = TestClient(main.app)
     uploaded = client.post('/api/v1/projects/p/datasets', files={'file': ('a.csv', b'text\nhello\n')}, data={'consent': 'true'})

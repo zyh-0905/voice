@@ -6,6 +6,7 @@ import pytest
 from app.main import app
 from app.summary import build_summary
 from support.client import make_client
+from support.feedback import new_repository, seed_run_feedback
 
 client = make_client()
 
@@ -29,20 +30,32 @@ def _task(state, due_at=None, project_id='p'):
     return {'id': f'task-{state}-{due_at}', 'project_id': project_id, 'state': state, 'due_at': due_at}
 
 
+def _summary(analysis_runs, tasks, project_id='p', **kwargs):
+    """播种 feedback 行后再聚合。
+
+    工程计划 5.2 之后正文取自 `feedback` 表,run 里内嵌的行只是样例;
+    直接调用 build_summary 会测到一条生产上不存在的取数路径。
+    """
+    repository = new_repository()
+    for run in analysis_runs:
+        seed_run_feedback(repository, run)
+    return build_summary(analysis_runs, tasks, project_id, repository=repository, **kwargs)
+
+
 def test_summary_exposes_scopes():
-    summary = build_summary([_run()], [_task('OPEN')], 'p', now=AS_OF)
+    summary = _summary([_run()], [_task('OPEN')], 'p', now=AS_OF)
     assert summary['insight_metrics']['scope'] == 'selected_analysis'
     assert summary['action_metrics']['scope'] == 'project_all_runs'
     assert summary['action_metrics']['overdue_task_count'] <= summary['action_metrics']['active_task_count']
 
 
 def test_denominator_matches_valid_feedback_count():
-    summary = build_summary([_run(rows=[{'text': 'a'}, {'text': 'b'}, {'text': 'c'}])], [], 'p', now=AS_OF)
+    summary = _summary([_run(rows=[{'text': 'a'}, {'text': 'b'}, {'text': 'c'}])], [], 'p', now=AS_OF)
     assert summary['denominator'] == summary['insight_metrics']['valid_feedback_count'] == 3
 
 
 def test_topic_count_from_published_revision():
-    summary = build_summary([_run(topics=5)], [], 'p', now=AS_OF)
+    summary = _summary([_run(topics=5)], [], 'p', now=AS_OF)
     assert summary['insight_metrics']['topic_count'] == 5
 
 
@@ -53,15 +66,15 @@ def test_pending_risk_counts_distinct_feedback_all_severities():
         {'feedback_id': 'fb2', 'rule_id': 'r1', 'severity': 'LOW', 'review_state': 'PENDING'},
         {'feedback_id': 'fb3', 'rule_id': 'r1', 'severity': 'HIGH', 'review_state': 'CONFIRMED'},
     ]
-    summary = build_summary([_run(findings=findings)], [], 'p', now=AS_OF)
+    summary = _summary([_run(findings=findings)], [], 'p', now=AS_OF)
     # 同一反馈命中两条规则只计 1;已确认的不计入
     assert summary['insight_metrics']['pending_risk_feedback_count'] == 2
 
 
 def test_filters_only_affect_insight_metrics():
     tasks = [_task('OPEN'), _task('IN_PROGRESS', due_at='2026-09-01T00:00:00+00:00')]
-    unfiltered = build_summary([_run()], tasks, 'p', now=AS_OF)
-    filtered = build_summary([_run()], tasks, 'p', filters={'channel': 'phone'}, now=AS_OF)
+    unfiltered = _summary([_run()], tasks, 'p', now=AS_OF)
+    filtered = _summary([_run()], tasks, 'p', filters={'channel': 'phone'}, now=AS_OF)
     # 无 channel 字段的行不被筛掉,但 action 指标在任何筛选下都不变
     assert filtered['action_metrics'] == unfiltered['action_metrics']
     assert filtered['action_metrics']['active_task_count'] == 2
@@ -70,7 +83,7 @@ def test_filters_only_affect_insight_metrics():
 
 def test_channel_filter_narrows_insight_denominator():
     rows = [{'text': 'a', 'channel': 'phone'}, {'text': 'b', 'channel': 'chat'}]
-    summary = build_summary([_run(rows=rows)], [], 'p', filters={'channel': 'phone'}, now=AS_OF)
+    summary = _summary([_run(rows=rows)], [], 'p', filters={'channel': 'phone'}, now=AS_OF)
     assert summary['denominator'] == 1
 
 
@@ -80,7 +93,7 @@ def test_time_window_is_half_open():
         {'text': 'at-start', 'occurred_at': '2026-09-01T00:00:00+00:00'},
         {'text': 'at-end', 'occurred_at': '2026-09-02T00:00:00+00:00'},
     ]
-    summary = build_summary([_run(rows=rows)], [], 'p',
+    summary = _summary([_run(rows=rows)], [], 'p',
                             filters={'start': '2026-09-01T00:00:00+00:00', 'end': '2026-09-02T00:00:00+00:00'},
                             now=AS_OF)
     assert summary['denominator'] == 1  # [start, end)
@@ -89,21 +102,21 @@ def test_time_window_is_half_open():
 def test_overdue_boundary_due_equals_as_of_is_not_overdue():
     due = AS_OF.isoformat()
     just_before = (AS_OF - timedelta(seconds=1)).isoformat()
-    summary = build_summary([_run()], [_task('OPEN', due_at=due), _task('OPEN', due_at=just_before)], 'p', now=AS_OF)
+    summary = _summary([_run()], [_task('OPEN', due_at=due), _task('OPEN', due_at=just_before)], 'p', now=AS_OF)
     assert summary['action_metrics']['active_task_count'] == 2
     assert summary['action_metrics']['overdue_task_count'] == 1
 
 
 def test_closed_states_excluded_from_active():
     tasks = [_task('DRAFT'), _task('CLOSED'), _task('CANCELLED'), _task('PENDING_REVIEW')]
-    summary = build_summary([_run()], tasks, 'p', now=AS_OF)
+    summary = _summary([_run()], tasks, 'p', now=AS_OF)
     assert summary['action_metrics']['active_task_count'] == 1
 
 
 def test_no_published_run_returns_null_insight_but_readable_tasks():
     run = {'id': 'run-q', 'project_id': 'p', 'status': 'queued', 'datasets': [],
            'result': {}, 'risk_findings': []}
-    summary = build_summary([run], [_task('OPEN')], 'p', now=AS_OF)
+    summary = _summary([run], [_task('OPEN')], 'p', now=AS_OF)
     assert summary['run_id'] is None and summary['revision'] is None
     assert summary['insight_metrics']['valid_feedback_count'] is None
     assert summary['insight_metrics']['topic_count'] is None
@@ -114,19 +127,19 @@ def test_no_published_run_returns_null_insight_but_readable_tasks():
 
 def test_revision_without_run_id_rejected():
     with pytest.raises(Exception) as exc:
-        build_summary([_run()], [], 'p', revision=1, now=AS_OF)
+        _summary([_run()], [], 'p', revision=1, now=AS_OF)
     assert getattr(exc.value, 'status_code', None) == 422
 
 
 def test_foreign_run_not_found():
     with pytest.raises(Exception) as exc:
-        build_summary([_run(project_id='other')], [], 'p', run_id='run-1', now=AS_OF)
+        _summary([_run(project_id='other')], [], 'p', run_id='run-1', now=AS_OF)
     assert getattr(exc.value, 'status_code', None) == 404
 
 
 def test_latest_published_run_is_selected():
     runs = [_run(run_id='run-old', revision=1), _run(run_id='run-new', revision=3)]
-    summary = build_summary(runs, [], 'p', now=AS_OF)
+    summary = _summary(runs, [], 'p', now=AS_OF)
     assert summary['run_id'] == 'run-new'
     assert summary['revision'] == 3
 

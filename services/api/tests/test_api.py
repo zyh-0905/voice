@@ -1,8 +1,9 @@
-from app.main import app, datasets
+from app.main import app, datasets, repository
 from app.ingestion import redact_text, parse_csv_text
 from app import auth
 import pytest
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 
@@ -27,7 +28,10 @@ def test_readiness_demo_skips_optional_dependencies():
     assert payload['database']['status'] == 'skipped'
     assert payload['queue']['status'] == 'skipped'
 def test_upload_validate_analysis():
-    r=client.post('/api/v1/projects/p/datasets', files={'file':('a.csv',b'x')}, data={'consent':'true'})
+    # 文件必须带一条数据行:`b'x'` 只有一个表头,治理后有效行数为 0,
+    # 而 0 反馈的批次现在会被拒绝发起分析(4.4:整批被判重复时也走这条)。
+    # 那个断言要证明的是「上传→治理→分析」这条路走得通,所以夹具得有数据。
+    r=client.post('/api/v1/projects/p/datasets', files={'file':('a.csv',b'x\nhello\n')}, data={'consent':'true'})
     assert r.status_code == 201
     did=r.json()['id']
     assert client.post(f'/api/v1/projects/p/datasets/{did}/validate',json={}).status_code == 202
@@ -71,12 +75,19 @@ def test_domain_endpoints_and_viewer_guard():
     assert client.post(f'/api/v1/projects/demo-project/reviews/{review}/confirm', headers={'Authorization':f'Bearer {analyst_token}'}).status_code == 200
 
 def test_redacted_export_contains_only_project_rows_and_masks_pii():
-    datasets['export-a'] = {'id': 'export-a', 'project_id': 'demo-project', 'preview': {'rows': [
-        {'email': 'person@example.com', 'phone': '13812345678', 'note': 'safe'}
-    ]}}
-    datasets['export-b'] = {'id': 'export-b', 'project_id': 'other-project', 'preview': {'rows': [
-        {'email': 'other@example.com'}
-    ]}}
+    # 导出读 feedback 实体表(计划 5.2),不再遍历数据集预览行:只在数据集里摆行
+    # 会得到一份空导出,而「只有本项目、且已脱敏」这两条断言都会假通过
+    for dataset in (
+        {'id': 'export-a', 'project_id': 'demo-project', 'preview': {'rows': [
+            {'email': 'person@example.com', 'phone': '13812345678', 'note': 'safe'}
+        ]}},
+        {'id': 'export-b', 'project_id': 'other-project', 'preview': {'rows': [
+            {'email': 'other@example.com'}
+        ]}},
+    ):
+        datasets[dataset['id']] = dataset
+        seed_run_feedback(repository, {'project_id': dataset['project_id'], 'datasets': [dataset]})
+
     response = client.get('/api/v1/projects/demo-project/exports/redacted.csv')
     assert response.status_code == 200
     body = response.text

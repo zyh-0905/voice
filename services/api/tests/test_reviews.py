@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.main import repository
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 
@@ -15,28 +16,35 @@ AFTER = {'start': '2026-09-01T00:00:00+00:00', 'end': '2026-10-01T00:00:00+00:00
 
 
 def _run_with_review_data(before_hits: int = 168, after_hits: int = 102) -> tuple[str, str]:
-    """造一个已发布 revision 的 run:前窗 168/1000、后窗 102/1000(计划 8.7 黄金用例一)。"""
+    """造一个已发布 revision 的 run:前窗 168/1000、后窗 102/1000(计划 8.7 黄金用例一)。
+
+    反馈行先写进 `feedback` 实体表(计划 5.2):复盘的分母与分子都从那里取,
+    只在 run 里摆行会测到一条生产上不存在的取数路径。
+    """
     project_id = f'rv_{uuid4().hex[:8]}'
     repository.create_project({'id': project_id, 'name': '复盘用例'})
     rows = [
-        {'feedback_id': f'before_{i}', 'text': '物流信息一直没有更新',
+        {'feedback_id': f'before_{i}', 'content': '物流信息一直没有更新',
          'occurred_at': f'2026-08-{1 + i % 28:02d}T00:00:00+00:00'}
         for i in range(1000)
     ] + [
-        {'feedback_id': f'after_{i}', 'text': '物流信息一直没有更新',
+        {'feedback_id': f'after_{i}', 'content': '物流信息一直没有更新',
          'occurred_at': f'2026-09-{1 + i % 28:02d}T00:00:00+00:00'}
         for i in range(1000)
     ]
-    evidence = ([{'feedback_id': f'before_{i}'} for i in range(before_hits)]
-                + [{'feedback_id': f'after_{i}'} for i in range(after_hits)])
     run_id = f'run_{uuid4().hex[:8]}'
-    repository.create_analysis({
+    run = {
         'id': run_id, 'project_id': project_id, 'dataset_ids': ['ds_rv'],
         'status': 'done', 'stage': 'completed', 'total': 2000,
         'datasets': [{'id': 'ds_rv', 'project_id': project_id, 'preview': {'rows': rows}}],
-        'result': {'revision': 1, 'topics': [], 'evidence_by_topic': {'t1': evidence},
-                   'unassigned_count': 0, 'status': 'done'},
-    })
+    }
+    frozen = seed_run_feedback(repository, run)
+    # 前 1000 条是前窗、后 1000 条是后窗;证据引用表里的真实 id,不是逻辑编号
+    evidence = ([{'feedback_id': frozen[i]} for i in range(before_hits)]
+                + [{'feedback_id': frozen[1000 + i]} for i in range(after_hits)])
+    run['result'] = {'revision': 1, 'topics': [], 'evidence_by_topic': {'t1': evidence},
+                     'unassigned_count': 0, 'status': 'done'}
+    repository.create_analysis(run)
     return project_id, run_id
 
 

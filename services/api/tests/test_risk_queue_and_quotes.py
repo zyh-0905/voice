@@ -6,11 +6,14 @@
 """
 from uuid import uuid4
 
+import pytest
+
 from app import pipeline
 from app.evidence_validation import Claim, TopicCandidate
 from app.main import repository
 from app.risk_service import risk_entity_id
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 
@@ -36,11 +39,18 @@ def _project_id() -> str:
 
 
 def _run(project_id: str, rows: list[dict]) -> dict:
-    return {
+    """造 run 并把内嵌行播种进 feedback 实体表(计划 5.2)。
+
+    流水线不再读 run 里内嵌的 JSON 副本;不播种就等于喂给它一个空输入集合,
+    扫描会「成功」但一条候选都扫不出来。
+    """
+    run = {
         'id': f'run_{uuid4().hex[:8]}', 'project_id': project_id, 'dataset_ids': ['ds_x'],
         'status': 'queued', 'stage': 'queued', 'total': len(rows),
         'datasets': [{'id': 'ds_x', 'project_id': project_id, 'preview': {'rows': rows}}],
     }
+    seed_run_feedback(repository, run)
+    return run
 
 
 def _queued(project_id: str) -> dict[str, dict]:
@@ -64,11 +74,12 @@ def test_scan_findings_enter_the_risk_queue():
     assert 'safety_fire' in queued
     assert queued['duplicate_charge']['severity'] == 'HIGH'
     assert queued['safety_fire']['severity'] == 'CRITICAL'
-    # 单条严重投诉即使不成簇也要入队(计划 8.1),这里它确实没进任何主题
-    assert queued['safety_fire']['feedback_id'] == 'fb_b'
+    # 单条严重投诉即使不成簇也要入队(计划 8.1),这里它确实没进任何主题。
+    # 候选指向 feedback 表里的真实行(用例里的 fb_a/fb_b/fb_c 只是逻辑编号)
+    assert queued['safety_fire']['feedback_id'] == run['run_feedback_ids'][1]
     # 候选不是既成事实:入队恒为待复核
     assert {item['review_state'] for item in queued.values()} == {'pending'}
-    assert 'fb_c' not in {item.get('feedback_id') for item in queued.values()}
+    assert run['run_feedback_ids'][2] not in {item.get('feedback_id') for item in queued.values()}
 
 
 def test_rescan_is_idempotent():
@@ -90,7 +101,7 @@ def test_rescan_does_not_overwrite_human_decision():
 
     run = _run(project_id, rows)
     pipeline.run_analysis_pipeline(_Store(run), run['id'], repository)
-    risk_id = risk_entity_id(project_id, 'fb_b', 'safety_fire', 'ecommerce-v1')
+    risk_id = risk_entity_id(project_id, run['run_feedback_ids'][0], 'safety_fire', 'ecommerce-v1')
     repository.update_entity('risks', risk_id, {
         'review_state': 'confirmed', 'reviewed_by': 'u_analyst', 'review_reason': '已核实为个例',
     })
@@ -103,13 +114,19 @@ def test_rescan_does_not_overwrite_human_decision():
     assert kept['reviewed_by'] == 'u_analyst'
 
 
-def test_persist_findings_is_skipped_without_repository():
-    """不传仓储时只算不写:纯计算场景不应产生副作用。"""
+def test_run_analysis_pipeline_refuses_to_run_without_repository():
+    """不传仓储必须直接报错,而不是静默地「只算不写」。
+
+    反馈正文来自 `feedback` 实体表(计划 5.2),没有仓储就没有取数来源;旧的
+    降级路径会走一条与生产不同、且没有任何东西在读的计算——它「成功」过一次,
+    却让「候选进了复核队列」这件事在真实部署里根本没发生。
+    """
     project_id = _project_id()
     run = _run(project_id, [{'feedback_id': 'fb_b', 'text': '充电时冒烟起火。'}])
-    pipeline.run_analysis_pipeline(_Store(run), run['id'])
-    assert repository.list_entities('risks', project_id) == []
-    assert run['risk_findings'], '扫描产物本身仍要写进 run'
+    with pytest.raises(ValueError, match='repository'):
+        pipeline.run_analysis_pipeline(_Store(run), run['id'])
+    assert repository.list_entities('risks', project_id) == [], '拒绝执行时不得产生副作用'
+    assert not run.get('risk_findings'), '拒绝执行时不得写入扫描产物'
 
 
 # —— 证据引文 ——
@@ -149,13 +166,15 @@ def test_evidence_quote_uses_the_claim_not_a_text_prefix(monkeypatch):
     # 数据形状经过实测:6 条近似文本 + 3 条无关文本 → 两个干净的簇。
     # 文本完全相同或只有 2-4 条时,sklearn 的 HDBSCAN 会把它们判为噪声(互达距离
     # 退化),那是算法性质,不是本用例要测的东西。
-    rows = [{'feedback_id': f'fb_{i}', 'text': base + f'补充说明{i}'} for i in range(1, 7)]
-    rows += [{'feedback_id': f'fb_other_{i}', 'text': '完全不同的另一批反馈内容,关于退款到账时间的问题。'}
+    rows = [{'feedback_id': f'fb_{i}', 'content': base + f'补充说明{i}'} for i in range(1, 7)]
+    rows += [{'feedback_id': f'fb_other_{i}', 'content': '完全不同的另一批反馈内容,关于退款到账时间的问题。'}
              for i in range(1, 4)]
-    text_of = {row['feedback_id']: row['text'] for row in rows}
     run = _run(project_id, rows)
+    # 正文与 id 都来自 feedback 表:证据引用的是表里的行,不是 run 里的副本
+    text_of = {feedback_id: row['content']
+               for feedback_id, row in zip(run['run_feedback_ids'], rows)}
 
-    drafts = pipeline.build_topics_from_run(run)
+    drafts = pipeline.build_topics_from_run(run, repository)
     assert drafts, '近似文本应聚成一簇'
     refs = {ref.feedback_id: ref for draft in drafts for ref in draft.evidence}
     assert refs, '主题应带证据'

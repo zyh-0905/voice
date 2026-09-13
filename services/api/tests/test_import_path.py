@@ -15,6 +15,7 @@ from app.ingestion import apply_mapping, parse_txt_text, row_text, validate_mapp
 from app.main import repository
 from app.pipeline import _flatten_rows
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 
@@ -157,7 +158,11 @@ def test_mapping_normalises_rows_to_standard_fields():
 
 
 def test_mapped_rows_still_feed_row_text_and_run_feedback():
-    """映射后的行必须继续被流水线/证据源共用取数函数消费(正文只取 content)。"""
+    """映射后的行必须继续被流水线/证据源共用取数函数消费(正文只取 content)。
+
+    校验落库后 `_flatten_rows` 走 `feedback` 实体表:这里指向**真实落库**的批次,
+    而不是把行再抄一份进 run JSON——后者是一条生产上不存在的取数路径。
+    """
     project_id = _project('feed')
     upload = _upload(project_id, 'm.csv', 'msg,ch\n快递很慢,客服\n'.encode())
     mapping = {'msg': 'content', 'ch': 'channel'}
@@ -165,7 +170,10 @@ def test_mapped_rows_still_feed_row_text_and_run_feedback():
     dataset = validated.json()
 
     assert row_text(dataset['preview']['rows'][0]) == '快递很慢'
-    rows, sources, total = _flatten_rows({'datasets': [dataset]})
+    run = {'id': 'run_feed', 'project_id': project_id,
+           'dataset_ids': [dataset['id']], 'datasets': [dataset]}
+    seed_run_feedback(repository, run)  # 5.3:run 创建时冻结输入集合
+    rows, sources, total = _flatten_rows(run, repository)
     assert total == 1
     assert rows[0]['source_row'] == 0
     assert sources['fb_' + dataset['id'] + '_0'] == '快递很慢'
@@ -216,8 +224,13 @@ def test_empty_and_formula_content_never_become_feedback():
     codes = {(e['source_row'], e['code']) for e in body['validation']['errors']}
     assert (0, 'FORMULA_NOT_ALLOWED') in codes
     assert (1, 'CONTENT_REQUIRED') in codes
-    # 公式字符串绝不能出现在任何出站正文里
+    # 公式字符串绝不能进入治理结果(§4.3),也绝不能落进 feedback 实体表。
+    # 整份响应体都要干净:`source`(待映射暂存)虽是服务端内部字段,但不能出站——
+    # 它带着未映射的原始单元格值,出站等于绕过 4.3 的边界。
     assert '=SUM' not in json.dumps(body, ensure_ascii=False)
+    assert 'source' not in body, '待映射暂存不得出现在响应里'
+    assert [row['content_redacted']
+            for row in repository.list_feedback(project_id, [body['id']])] == ['正常反馈']
 
 
 def test_overlong_content_is_invalid_and_keeps_source_row():

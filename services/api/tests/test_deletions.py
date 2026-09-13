@@ -193,3 +193,30 @@ def test_project_deletion_removes_memberships():
     assert receipt['removed']['memberships'] == 2
     assert repository.list_members(project_id) == []
     assert repository.list_user_memberships('u_owner') == []
+
+
+def test_project_deletion_purges_idempotency_records():
+    """10.4:「清理同项目模型缓存和**幂等响应正文**」。
+
+    幂等记录里存着被删对象的存在与内容。留着它等于删除没做干净——重放同一个
+    幂等键还会命中一条指向已删分析的响应,而调用方会以为那个分析还在。
+    """
+    from app.deletions import execute_deletion
+
+    project_id, name = _project('幂等项目')
+    repository.create_idempotency('idem-del-1', {
+        'project_id': project_id, 'fingerprint': 'fp', 'analysis_id': 'run_gone',
+    })
+    repository.create_idempotency('idem-other', {
+        'project_id': 'someone_else', 'fingerprint': 'fp', 'analysis_id': 'run_keep',
+    })
+    assert repository.count_idempotency(project_id) == 1
+
+    receipt = execute_deletion(repository, project_id, 'project', project_id, name,
+                               'job_idem', 'demo-user')
+
+    assert repository.count_idempotency(project_id) == 0
+    verify = next(s for s in receipt['steps'] if s['name'] == 'verify')
+    assert verify['remaining']['idempotency'] == 0
+    # 别的项目的幂等记录不受影响:删除必须是项目范围的
+    assert repository.get_idempotency('idem-other') is not None

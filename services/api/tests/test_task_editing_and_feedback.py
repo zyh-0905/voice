@@ -7,6 +7,7 @@ import pytest
 from app.feedback import FeedbackNotFound, find_feedback
 from app.main import repository
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 
@@ -83,23 +84,34 @@ def test_patch_unknown_task_404():
 # —— 证据源 ——
 
 def _dataset_with_feedback(project_id, dataset_id, rows):
+    """建批次并把行写进 feedback 实体表(计划 5.2)。
+
+    证据源端点读的是 `feedback` 表,不再遍历数据集预览行(预览现在是 4.3 的
+    最多 20 行样例——只摆预览的话,第 21 条之后的反馈会永远查不到)。
+    播种走与导入完全相同的派生函数,所以 id 形状与会话正文口径都一致。
+    """
     repository.create_project({'id': project_id, 'name': f'项目 {project_id}'})
-    repository.create_dataset({
+    dataset = {
         'id': dataset_id, 'project_id': project_id, 'name': '批次', 'rows': len(rows),
         'preview': {'rows': rows},
-    })
+    }
+    repository.create_dataset(dataset)
+    seed_run_feedback(repository, {'project_id': project_id, 'datasets': [dataset]})
 
 
 def test_feedback_returns_redacted_text_row_and_segments():
     project_id = f'fb_case_{uuid4().hex[:6]}'
-    _dataset_with_feedback(project_id, f'ds_{project_id}', [
+    dataset_id = f'ds_{project_id}'
+    _dataset_with_feedback(project_id, dataset_id, [
         {'feedback_id': 'fb_target', 'text': '物流很慢。', 'channel': '在线客服',
          'occurred_at': '2026-08-26T09:12:00+08:00'},
     ])
-    response = client.get(f'/api/v1/projects/{project_id}/feedback/fb_target')
+    # 证据源按平台自己生成的 id(`fb_{dataset}_{序号}`)定位,来源系统的编号不进路径
+    feedback_id = f'fb_{dataset_id}_0'
+    response = client.get(f'/api/v1/projects/{project_id}/feedback/{feedback_id}')
     assert response.status_code == 200
     body = response.json()
-    assert body['feedback_id'] == 'fb_target'
+    assert body['feedback_id'] == feedback_id
     assert body['source_row'] == 0
     assert body['channel'] == '在线客服'
     assert body['occurred_at'].startswith('2026-08-26')
@@ -128,13 +140,15 @@ def test_feedback_is_project_scoped():
     other = f'fb_oth_{uuid4().hex[:6]}'
     _dataset_with_feedback(owner, f'ds_{owner}', [{'feedback_id': 'fb_secret', 'text': '本项目反馈'}])
     _dataset_with_feedback(other, f'ds_{other}', [{'feedback_id': 'fb_foreign', 'text': '外项目反馈'}])
+    own_feedback_id = f'fb_ds_{owner}_0'
+    foreign_feedback_id = f'fb_ds_{other}_0'
 
     # 本项目可查
-    assert client.get(f'/api/v1/projects/{owner}/feedback/fb_secret').status_code == 200
+    assert client.get(f'/api/v1/projects/{owner}/feedback/{own_feedback_id}').status_code == 200
     # 用别人的项目路径查同一 id → 404(不暴露跨项目数据)
-    assert client.get(f'/api/v1/projects/{other}/feedback/fb_secret').status_code == 404
+    assert client.get(f'/api/v1/projects/{other}/feedback/{own_feedback_id}').status_code == 404
     # 外项目反馈在本项目下不可见
-    assert client.get(f'/api/v1/projects/{owner}/feedback/fb_foreign').status_code == 404
+    assert client.get(f'/api/v1/projects/{owner}/feedback/{foreign_feedback_id}').status_code == 404
 
 
 def test_feedback_not_found_404():
@@ -144,17 +158,24 @@ def test_feedback_not_found_404():
 
 
 def test_feedback_never_returns_raw_pii():
-    """仓储存的是解析后的原始行(parse_csv_text 只对 stats 脱敏),端点必须自建脱敏边界。
+    """落库即脱敏(计划 7.2),但读取侧仍要兜住存量行,端点必须自建脱敏边界。
 
     与 GET /exports/redacted.csv 的既有做法一致:出站前再脱敏一次,避免旧解析器
-    写入的裸数据从这个端点漏出。
+    写入的裸数据从这个端点漏出。这里把播种后的正文改回未脱敏形状来模拟那类
+    存量行——否则测的只是「写进去的时候没漏」,而读取边界一旦失守不会被发现。
     """
     project_id = f'fb_pii_{uuid4().hex[:6]}'
-    _dataset_with_feedback(project_id, f'ds_{project_id}', [
+    dataset_id = f'ds_{project_id}'
+    _dataset_with_feedback(project_id, dataset_id, [
         {'feedback_id': 'fb_pii', 'email': 'real-person@example.com',
          'phone': '13812345678', 'order': 'ORD-123456', 'note': '物流很慢'},
     ])
-    response = client.get(f'/api/v1/projects/{project_id}/feedback/fb_pii')
+    feedback_id = f'fb_{dataset_id}_0'
+    legacy = repository.get_feedback(project_id, feedback_id)
+    legacy['content_redacted'] = 'real-person@example.com 13812345678 ORD-123456 物流很慢'
+    repository.save_feedback_rows(project_id, dataset_id, [legacy])
+
+    response = client.get(f'/api/v1/projects/{project_id}/feedback/{feedback_id}')
     assert response.status_code == 200
     body = response.json()
 

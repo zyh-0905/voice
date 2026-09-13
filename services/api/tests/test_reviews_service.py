@@ -15,6 +15,7 @@ from app.reviews import (
     WindowSpec,
     compute_review,
 )
+from support.feedback import new_repository, seed_run_feedback
 
 # 两窗必须等长,所以不能按自然月取(8 月 31 天、9 月 30 天)——各取 30 天
 BEFORE = WindowSpec('2026-08-01T00:00:00+00:00', '2026-08-31T00:00:00+00:00')
@@ -22,15 +23,16 @@ AFTER = WindowSpec('2026-09-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00')
 
 
 def _rows(start: date, count: int, prefix: str) -> list[dict]:
+    """造一批反馈行;`feedback_id` 只是用例的逻辑编号,真实 id 由表派生。"""
     return [
-        {'feedback_id': f'{prefix}_{i}', 'text': '物流信息一直没有更新',
+        {'feedback_id': f'{prefix}_{i}', 'content': '物流信息一直没有更新',
          'occurred_at': (start + timedelta(days=i % 28)).isoformat()}
         for i in range(count)
     ]
 
 
 def _evidence(before_hits: int, after_hits: int = 0, topic: str = 't1') -> dict:
-    """主题 t1 的证据:前窗前 before_hits 条 + 后窗前 after_hits 条。"""
+    """主题 t1 的证据:前窗前 before_hits 条 + 后窗前 after_hits 条(逻辑编号)。"""
     ids = [{'feedback_id': f'before_{i}'} for i in range(before_hits)]
     ids += [{'feedback_id': f'after_{i}'} for i in range(after_hits)]
     return {topic: ids}
@@ -44,15 +46,41 @@ def _run(rows, evidence, revision: int = 1) -> dict:
     }
 
 
+def _bind_feedback_ids(evidence_by_topic, rows, frozen_ids):
+    """把用例的逻辑编号换成 `feedback` 表里的真实 id。
+
+    计划 5.2 之后行的 id 由 `build_feedback_rows` 派生(不再是行里写的编号),
+    证据必须引用真实 id:对不上的话分母照常、分子却会静默算成 0,结论就反了。
+    """
+    by_external = {str(row['feedback_id']): feedback_id
+                   for row, feedback_id in zip(rows, frozen_ids)}
+    return {topic: [{'feedback_id': by_external[str(item['feedback_id'])]} for item in items]
+            for topic, items in evidence_by_topic.items()}
+
+
+def _seeded_run(rows, evidence, revision: int = 1):
+    """造 run、把内嵌行播种进 feedback 表,并把证据对齐到表里的真实 id。"""
+    repository = new_repository()
+    run = _run(rows, evidence, revision)
+    seed_run_feedback(repository, run)
+    run['result']['evidence_by_topic'] = _bind_feedback_ids(
+        run['result']['evidence_by_topic'], rows, run['run_feedback_ids'])
+    return repository, run
+
+
 def _computation(rows, evidence, *, before=BEFORE, after=AFTER, topics=('t1',),
-                 run_revision=1, request_revision=None, **kwargs):
+                 run_revision=1, request_revision=None):
     """run_revision 是已发布的版本,request_revision 是请求里写的版本——两者分开,
-    才能构造出「版本不一致」。"""
+    才能构造出「版本不一致」。
+
+    工程计划 5.2 之后正文与 id 来自 `feedback` 表,run 里内嵌的行只是输入样例;
+    不播种就会测到一条生产上不存在的取数路径。
+    """
     published = run_revision if request_revision is None else request_revision
+    repository, run = _seeded_run(rows, evidence, run_revision)
     return compute_review(
-        _run(rows, evidence, run_revision),
-        revision=published, topic_version_ids=list(topics),
-        before=before, after=after, alignment_confirmed=True, **kwargs,
+        run, revision=published, topic_version_ids=list(topics),
+        before=before, after=after, alignment_confirmed=True, repository=repository,
     )
 
 
@@ -100,7 +128,7 @@ def test_overlapping_windows_are_insufficient():
 def test_untimed_rows_block_comparability():
     """无时间数据无法确认覆盖 → insufficient,不能用导入日期顶替。"""
     rows = _rows(date(2026, 8, 1), 100, 'before')
-    rows += [{'feedback_id': f'after_{i}', 'text': '没有时间字段'} for i in range(100)]
+    rows += [{'feedback_id': f'after_{i}', 'content': '没有时间字段'} for i in range(100)]
     result = _computation(rows, _evidence(17, 10))
 
     assert result.comparability == INSUFFICIENT
@@ -110,9 +138,10 @@ def test_untimed_rows_block_comparability():
 def test_unconfirmed_alignment_is_insufficient():
     """本版不做跨 run 自动主题对齐,目标映射必须人工确认(计划 8.7)。"""
     rows = _rows(date(2026, 8, 1), 100, 'before') + _rows(date(2026, 9, 1), 100, 'after')
+    repository, run = _seeded_run(rows, _evidence(17, 10))
     result = compute_review(
-        _run(rows, _evidence(17, 10)), revision=1, topic_version_ids=['t1'],
-        before=BEFORE, after=AFTER, alignment_confirmed=False,
+        run, revision=1, topic_version_ids=['t1'],
+        before=BEFORE, after=AFTER, alignment_confirmed=False, repository=repository,
     )
 
     assert result.comparability == INSUFFICIENT
@@ -158,21 +187,17 @@ def test_zero_denominator_is_insufficient():
 def test_multi_topic_numerator_is_a_deduped_union():
     """多主题取反馈并集:同一条反馈属于两个主题也只算一次(计划 8.7)。"""
     rows = [
-        {'feedback_id': 'shared', 'text': '被两个主题引用', 'occurred_at': '2026-08-05T00:00:00+00:00'},
-        {'feedback_id': 'only_t1', 'text': '只有 t1 引用', 'occurred_at': '2026-08-06T00:00:00+00:00'},
-        {'feedback_id': 'after_0', 'text': '后窗', 'occurred_at': '2026-09-05T00:00:00+00:00'},
+        {'feedback_id': 'shared', 'content': '被两个主题引用', 'occurred_at': '2026-08-05T00:00:00+00:00'},
+        {'feedback_id': 'only_t1', 'content': '只有 t1 引用', 'occurred_at': '2026-08-06T00:00:00+00:00'},
+        {'feedback_id': 'after_0', 'content': '后窗', 'occurred_at': '2026-09-05T00:00:00+00:00'},
     ]
-    run = {
-        'id': 'run_1', 'project_id': 'p',
-        'datasets': [{'id': 'ds', 'preview': {'rows': rows}}],
-        'result': {'revision': 1, 'evidence_by_topic': {
-            't1': [{'feedback_id': 'shared'}, {'feedback_id': 'only_t1'}],
-            't2': [{'feedback_id': 'shared'}],
-        }},
-    }
+    repository, run = _seeded_run(rows, {
+        't1': [{'feedback_id': 'shared'}, {'feedback_id': 'only_t1'}],
+        't2': [{'feedback_id': 'shared'}],
+    })
     result = compute_review(
         run, revision=1, topic_version_ids=['t1', 't2'],
-        before=BEFORE, after=AFTER, alignment_confirmed=True,
+        before=BEFORE, after=AFTER, alignment_confirmed=True, repository=repository,
     )
 
     # 并集 {shared, only_t1};若按主题相加会得到 3

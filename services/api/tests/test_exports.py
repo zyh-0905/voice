@@ -16,6 +16,7 @@ from app.exports import (
 )
 from app.main import repository
 from support.client import make_client
+from support.feedback import seed_run_feedback
 
 client = make_client()
 PROJECT = 'demo-project'
@@ -114,10 +115,13 @@ def test_unknown_export_404():
 
 def test_folder_endpoint_creates_and_downloads_redacted_csv():
     repository.create_project({'id': 'exp_demo', 'name': '导出端点'})
-    repository.create_dataset({
+    dataset = {
         'id': 'ds_exp', 'project_id': 'exp_demo', 'name': '批次', 'rows': 1,
         'preview': {'rows': [{'email': 'person@example.com', 'note': '=1+1'}]},
-    })
+    }
+    repository.create_dataset(dataset)
+    # 导出取 feedback 实体表(计划 5.2):不播种的话导出是空的,断言会假通过
+    seed_run_feedback(repository, {'project_id': 'exp_demo', 'datasets': [dataset]})
     created = client.post('/api/v1/projects/exp_demo/exports', json={'scope': 'project'})
     assert created.status_code == 202
     body = created.json()
@@ -135,18 +139,22 @@ def test_folder_endpoint_creates_and_downloads_redacted_csv():
     for row in parsed:
         for cell in row:
             assert not cell.lstrip(' \t\r\n\x00\x0b\x0c')[:1] in ('=', '+', '-', '@'), cell
-    # data 列是 JSON 文本(不泄露任意来源列名);解析后核对脱敏与原文保留
+    # data 列是 JSON 文本,列名固定为标准字段——不再原样吐出任意来源列名(计划 5.2)
     header, first = parsed[0], parsed[1]
     payload = json.loads(first[header.index('data')])
-    assert payload['email'] == '<EMAIL_REDACTED>'
-    assert payload['note'] == '=1+1'
+    assert payload['content'] == '<EMAIL_REDACTED> =1+1'
+    assert 'email' not in payload and 'note' not in payload
 
 
 def test_deletion_invalidates_unexpired_exports():
     repository.create_project({'id': 'exp_del', 'name': '删除联动'})
-    repository.create_dataset({'id': 'ds_del', 'project_id': 'exp_del', 'name': '批次', 'rows': 1,
-                               'preview': {'rows': [{'note': 'x'}]}})
+    dataset = {'id': 'ds_del', 'project_id': 'exp_del', 'name': '批次', 'rows': 1,
+               'preview': {'rows': [{'note': 'x'}]}}
+    repository.create_dataset(dataset)
+    # 同上:导出取 feedback 表,不播种就得到空导出,「下载可用」的断言会假通过
+    seed_run_feedback(repository, {'project_id': 'exp_del', 'datasets': [dataset]})
     created = client.post('/api/v1/projects/exp_del/exports', json={'scope': 'project'}).json()
+    assert created['row_count'] == 1
     assert client.get(created['download_path']).status_code == 200
 
     client.post('/api/v1/projects/exp_del/deletions', json={
