@@ -78,6 +78,15 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
         if not (os.getenv("EMBEDDING_MODEL") or os.getenv("MODEL_ID") or "").strip():
             errors.append(
                 "EMBEDDING_MODEL (or MODEL_ID) must be set when EMBEDDING_MODE=api")
+    # 身份:上面的闸门都在拦「演示默认值」,唯独漏了账号这一项,而它恰恰是生产部署
+    # 最容易留下的一个——不设任何账号变量就能用内置的 demo/demo、viewer/viewer 登录,
+    # 且启动日志里看不出任何异常。identity.load_local_accounts() 在 LOCAL_ACCOUNTS
+    # 未设时回落到 DEMO_ACCOUNTS,所以这里要求显式配置,或显式改走 oidc。
+    identity_provider = (os.getenv("IDENTITY_PROVIDER") or "local").strip().lower()
+    if identity_provider == "local" and not (os.getenv("LOCAL_ACCOUNTS") or "").strip():
+        errors.append(
+            "LOCAL_ACCOUNTS must be set when IDENTITY_PROVIDER=local in production "
+            "(built-in demo/demo and viewer/viewer accounts would otherwise be active)")
     if errors:
         raise RuntimeError("Invalid production settings: " + "; ".join(errors))
     return cfg
