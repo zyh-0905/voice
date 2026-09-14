@@ -58,7 +58,10 @@ async function importAndAnalyze(page: import('@playwright/test').Page) {
   // (这是当前的实现:按钮文案承诺了分析,实际只跳转——见报告中的说明。)
   await expect(page.getByTestId('analysis-page')).toBeVisible()
   await page.getByRole('button', { name: '开始分析' }).click()
-  await expect(page.getByTestId('analysis-page')).toContainText('done', { timeout: 30_000 })
+  // 断言的是界面文案,不是原始 status 值:此前页面直接把 POST 返回的 status
+  // 印出来,而 POST 返回的是那一刻的排队态——所以「页面显示 done」这件事只说明
+  // POST 回来了,不说明页面看得到作业结束。
+  await expect(page.getByTestId('analysis-status')).toHaveText('已完成', { timeout: 30_000 })
 }
 
 test('真实后端:四步向导走通,工作台渲染服务端算出的指标与主题', async ({ page }) => {
@@ -71,6 +74,12 @@ test('真实后端:四步向导走通,工作台渲染服务端算出的指标与
   await expect(page.getByTestId('topic-table')).toBeVisible({ timeout: 30_000 })
   // 上传前这里是空态;有数据后不应再出现
   await expect(page.getByText('还没有导入客户反馈')).toHaveCount(0)
+
+  // CPI 是真算出来的,不是占位。此前 GET /topics 两项都写死 null,于是这一列恒为
+  // 「—」、证据面板恒为「暂无 CPI 数据」——而 compute_cpi 的单元测试一直是绿的。
+  const cpi = page.getByTestId('topic-cpi').first()
+  await expect(cpi).not.toHaveText('—')
+  await expect(cpi).toHaveText(/^\d+$/)
 })
 
 test('真实后端:扫描出的风险进入复核队列(而非只留在 run 里)', async ({ page }) => {
@@ -101,3 +110,31 @@ test('真实后端:主题证据引文可在源反馈正文里定位', async ({ p
   await expect(page.getByTestId('evidence-source')).toBeVisible()
   await expect(page.getByTestId('evidence-source')).toContainText('源行')
 })
+
+test('真实后端:分析进度以服务端为准,换一个干净的浏览器也能还原', async ({ page, browser }) => {
+  await login(page)
+  await importAndAnalyze(page)
+  await expect(page.getByTestId('analysis-status')).toHaveText('已完成', { timeout: 30_000 })
+
+  // run id 必须在 URL 里:刷新与分享回到的是同一个作业,而不是浏览器的残留
+  const url = page.url()
+  expect(url).toContain('run=')
+
+  // **关键的一步:换一个全新的浏览器上下文。** 那里没有 sessionStorage。
+  // 旧实现把 run 存进 sessionStorage 且只读它,新上下文会让这一屏退回「尚未开始」;
+  // 状态若来自 GET /analyses/{id},同一个 URL 应当照样还原成终态。
+  // 也就是说:这条用例区分的是「服务端状态」与「浏览器里存的字符串」,
+  // 而不是「页面能显示 done」——后者在旧实现下也是绿的。
+  const fresh = await browser.newContext()
+  const freshPage = await fresh.newPage()
+  await login(freshPage)
+  await freshPage.goto(url)
+  await expect(freshPage.getByTestId('analysis-status')).toHaveText('已完成', { timeout: 30_000 })
+  await fresh.close()
+})
+
+// 「终态后停止轮询」不在这里测,原因是实测出来的:本套件带 RUN_WORKER_INLINE=1,
+// POST 返回时作业已经是终态,页面根本不会排期第一次轮询——在这里数请求数恒为 0,
+// 是一条永远通过的假闸门(我照这个思路写过一条,它确实「通过」了,而通过的
+// 原因是轮询压根没发生)。那一条改由 tests/unit/analysis-progress.spec.ts 用
+// 假定时器直接驱动页面来证明,并且验证过:去掉收敛条件它会失败。

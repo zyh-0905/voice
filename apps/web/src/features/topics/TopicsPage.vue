@@ -53,7 +53,7 @@
                 </span>
               </td>
               <td><span class="vl-topic-table__trend vl-number">{{ trendLabel(topic.trend) }}</span></td>
-              <td class="vl-table__num">{{ topic.cpiDisplayValue ?? '—' }}</td>
+              <td class="vl-table__num" data-testid="topic-cpi">{{ topic.cpiDisplayValue ?? '—' }}</td>
               <td><StatusBadge kind="review" :state="topic.reviewState" /></td>
               <td class="vl-topic-table__actions">
                 <RouterLink class="vl-topic-table__link" :to="`/p/${projectId}/topics/${topic.id}`" data-testid="topic-open">

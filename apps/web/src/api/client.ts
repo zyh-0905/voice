@@ -1,5 +1,6 @@
 import type {
   AnalysisRun,
+  CpiResult,
   DatasetRow,
   ValidateBody,
   DatasetBatch,
@@ -41,7 +42,8 @@ export interface CorrectionBody {
 }
 
 export interface TopicDetailResponse {
-  topic: { topic_id: string; name: string; summary: string; severity: string; feedback_count: number; summary_revalidated?: boolean }
+  /** cpi 为 null 表示该主题算不出指数(如 N1=0),界面显示「暂无 CPI 数据」而不是 0 */
+  topic: { topic_id: string; name: string; summary: string; severity: string; feedback_count: number; summary_revalidated?: boolean; cpi?: CpiResult | null }
   evidence: Array<{ feedback_id: string; source_row: number; quote: string; quote_start: number; quote_end: number }>
   revision: number
 }
@@ -209,6 +211,16 @@ export interface ApiClient {
   health(projectId: string, id: string, body?: ValidateBody, signal?: AbortSignal): Promise<ImportHealthView>
   runAnalysis(id: string, signal?: AbortSignal): Promise<AnalysisRun>
   runAnalysis(projectId: string, id: string, signal?: AbortSignal): Promise<AnalysisRun>
+  /**
+   * 查询单个作业的当前状态。
+   *
+   * 后端一直有这个接口(7.3),但前端此前没有任何调用方——分析进度页把状态存进
+   * sessionStorage 并一直读它,于是 POST 之后页面再也看不到服务端发生了什么:
+   * 状态永远停在 POST 那一刻的返回值,刷新也只是把那个字符串读回来。
+   */
+  getAnalysis(projectId: string, analysisId: string, signal?: AbortSignal): Promise<AnalysisRun>
+  /** 列出项目的作业。刷新后没有 run id 时,靠它把 URL 里的批次认回对应的 run。 */
+  listAnalyses(projectId: string, signal?: AbortSignal): Promise<AnalysisRun[]>
   /** POST /auth/login,返回真实 access_token 与用户 */
   login(username: string, password: string): Promise<LoginResponse>
   /** POST /auth/logout,服务端撤销会话并清除 Cookie */
@@ -414,6 +426,15 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       const id = typeof idOrSignal === 'string' ? idOrSignal : projectOrId
       const signal = typeof idOrSignal === 'string' ? maybeSignal : idOrSignal
       return request<AnalysisRun>(`${project(projectId)}/analyses`, { method: 'POST', body: JSON.stringify({ dataset_ids: [id] }), headers: { 'Content-Type': 'application/json' }, signal })
+    },
+    getAnalysis(projectId: string, analysisId: string, signal?: AbortSignal) {
+      return request<AnalysisRun>(
+        `${project(projectId)}/analyses/${encodeURIComponent(analysisId)}`, { signal },
+      )
+    },
+    async listAnalyses(projectId: string, signal?: AbortSignal) {
+      const page = await request<{ items: AnalysisRun[] }>(`${project(projectId)}/analyses`, { signal })
+      return page.items ?? []
     },
     login(username: string, password: string) {
       return request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), headers: { 'Content-Type': 'application/json' } })

@@ -155,7 +155,7 @@
                       </span>
                     </td>
                     <td><span class="vl-topic-table__trend">{{ trendLabel(topic.trend) }}</span></td>
-                    <td class="vl-table__num">{{ topic.cpiDisplayValue ?? '—' }}</td>
+                    <td class="vl-table__num" data-testid="topic-cpi">{{ topic.cpiDisplayValue ?? '—' }}</td>
                     <td><StatusBadge kind="review" :state="topic.reviewState" /></td>
                     <td>
                       <VlButton variant="ghost" size="small" @click="openEvidence(topic, $event)">查看证据</VlButton>
