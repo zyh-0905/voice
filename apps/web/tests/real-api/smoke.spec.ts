@@ -74,6 +74,12 @@ test('真实后端:四步向导走通,工作台渲染服务端算出的指标与
   await expect(page.getByTestId('topic-table')).toBeVisible({ timeout: 30_000 })
   // 上传前这里是空态;有数据后不应再出现
   await expect(page.getByText('还没有导入客户反馈')).toHaveCount(0)
+
+  // CPI 是真算出来的,不是占位。此前 GET /topics 两项都写死 null,于是这一列恒为
+  // 「—」、证据面板恒为「暂无 CPI 数据」——而 compute_cpi 的单元测试一直是绿的。
+  const cpi = page.getByTestId('topic-cpi').first()
+  await expect(cpi).not.toHaveText('—')
+  await expect(cpi).toHaveText(/^\d+$/)
 })
 
 test('真实后端:扫描出的风险进入复核队列(而非只留在 run 里)', async ({ page }) => {

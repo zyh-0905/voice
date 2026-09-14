@@ -2,6 +2,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
+from typing import Mapping
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .ingestion import (DecodeError, MappingError, STANDARD_FIELDS, UnsupportedEncoding, apply_mapping,
@@ -596,6 +597,64 @@ def project_summary(
         )
     except SummaryRequestError as exc:
         raise HTTPException(exc.status_code, detail={'code': exc.code})
+# —— CPI 出站视图(8.6)——
+
+# 四个分项的名字与顺序取自 8.6 的公式:0.25×数量 + 0.30×增长 + 0.30×严重度 + 0.15×业务影响。
+_CPI_COMPONENT_LABELS = (
+    ('volume', '数量'), ('growth', '增长'), ('severity', '严重度'), ('business', '业务影响'),
+)
+
+
+def _cpi_view(result) -> dict | None:
+    """把 CpiResult 映射成前端契约(types/domain.ts 的 CpiResult)。
+
+    整数显示必须是十进制的 HALF_UP(8.6)——`str(round(x))` 走的是 Python 的
+    银行家舍入,168/1000 这类值上会与规格给的黄金值 68 差一。取整统一由
+    scoring 里的 display_value 负责,这里只做字符串化。
+    """
+    if result is None or result.value is None:
+        return None
+    components = []
+    for key, label in _CPI_COMPONENT_LABELS:
+        value = result.components.get(key)
+        components.append({
+            'label': label,
+            # 缺失分项写「缺失」而不是 0:0 是「算出来就是 0」,与「这一项没有数据」
+            # 在界面上长得一样,而它们该引发的判断完全不同。
+            'displayValue': '缺失' if value is None else str(round(value)),
+            # 8.6 只定义整体覆盖率;分项覆盖率没有定义,不编一个出来。
+            'coverage': None,
+        })
+    return {
+        'display_value': str(result.display_value),
+        'components': components,
+        'coverage': round(result.coverage * 100),
+        'provisional': result.provisional,
+    }
+
+
+def _topic_cpi(topic: Mapping, total: int) -> dict | None:
+    """一个主题在当前 revision 上的 CPI。
+
+    输入口径(8.6):n1 是该主题的证据条数,N1 是本 run 的有效反馈总数。
+    没有「等长可比前期窗口」这回事——G 需要前后两个窗口的计数与分母,由复盘流程
+    (8.7)按人工选定的窗口计算。这里如实传 None,让分项记 growth_missing_history,
+    而不是编一个 0:0 会被读成「没增长」,而真相是「这次没算」。
+    """
+    from .scoring import compute_cpi
+    result = compute_cpi(
+        n1=int(topic.get('feedback_count') or 0),
+        N1=total,
+        n0=None, N0=None,
+        severity=topic.get('severity'),
+        # 业务影响由企业配置或人员输入(8.6)。首版没有这个配置项,所以缺省 50
+        # 并把 business_assumed 记进 assumptions——界面据此显示「暂定」与覆盖率,
+        # 而不是把一个假定的 50 当成实测值展示。
+        business=None,
+    )
+    return _cpi_view(result)
+
+
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
@@ -607,22 +666,27 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
         total = int(snapshot.get('unassigned_count') or 0) + sum(
             int(t.get('feedback_count') or 0) for t in snapshot.get('topics') or []
         )
-        rows = [
-            {
+        rows = []
+        for t in snapshot.get('topics') or []:
+            # CPI 按 8.6 现算:此前这里是写死的 None,于是 compute_cpi 只有单元测试
+            # 在调、界面上永远是「暂无 CPI 数据」——一个二十来条断言护着的函数,
+            # 生产路径上一次都没跑过。
+            cpi = _topic_cpi(t, total)
+            rows.append({
                 'id': t['topic_id'], 'title': t['name'], 'feedbackCount': t['feedback_count'],
                 'denominator': total, 'ratio': round((t['feedback_count'] / total) * 100, 1) if total else 0,
-                'trend': None, 'cpiDisplayValue': None, 'reviewState': 'pending',
+                'trend': None,
+                'cpiDisplayValue': (cpi or {}).get('display_value'),
+                'reviewState': 'pending',
                 'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
                              'revision': snapshot['revision'], 'summary': t.get('summary', ''),
-                             'cpi': None,
+                             'cpi': cpi,
                              # 引文必须来自本 run 发布的证据。此前这里是硬编码的空数组,
                              # 于是真实模式下证据面板的「原文与来源」永远空白,而 mock 有内容——
                              # 前端契约与后端实现各说各话,只有真连一次才看得出来。
                              'quotes': _evidence_quotes(published, t['topic_id'], snapshot.get('revision')),
                              'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
-            }
-            for t in snapshot.get('topics') or []
-        ]
+            })
         return {'items': rows, 'total': len(rows)}
     rows = [
         {'id': 'delivery', 'title': '物流体验', 'feedbackCount': 218, 'denominator': 1000, 'ratio': 21.8, 'trend': 'down', 'cpiDisplayValue': '68', 'reviewState': 'confirmed', 'evidence': {'topicId': 'delivery', 'topicTitle': '物流体验', 'runId': 'run_demo_001', 'revision': 1, 'summary': '配送等待与物流信息更新是主要关注点。', 'cpi': None, 'quotes': [], 'aiProvenance': {'origin': 'ai', 'needsReview': False, 'reviewRecord': None}}},
@@ -762,7 +826,14 @@ def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | Non
     topic = next((t for t in snapshot.get('topics') or [] if t['topic_id'] == topic_id), None)
     if topic is None:
         raise HTTPException(404, detail={'code': 'topic_not_found'})
-    return {'topic': topic, 'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []), 'revision': snapshot.get('revision')}
+    # 7.4:主题详情要给「名称、摘要、claims、分项、证据第一页」——分项即 CPI 的四项。
+    # 分母口径与列表接口一致,否则同一主题在两处会显示两个数。
+    total = int(snapshot.get('unassigned_count') or 0) + sum(
+        int(t.get('feedback_count') or 0) for t in snapshot.get('topics') or []
+    )
+    return {'topic': {**topic, 'cpi': _topic_cpi(topic, total)},
+            'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []),
+            'revision': snapshot.get('revision')}
 @app.get('/api/v1/projects/{project_id}/trend')
 def list_trend(project_id: str, user: dict = Depends(require_project_access)):
     """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
