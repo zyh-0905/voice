@@ -43,11 +43,23 @@ export interface ImportHealthView {
   redactedRows: number
   undatedRows: number
 }
+/** worker.py 的状态机:queued→running→done/error,cancel 可落在任一非终态。 */
+export type AnalysisRunStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+
+/** 轮询只在非终态继续;终态必须停下来,否则页面会一直打后端。 */
+export const TERMINAL_RUN_STATUSES: readonly AnalysisRunStatus[] = ['done', 'error', 'cancelled']
+
 export interface AnalysisRun {
   id: string
-  status: 'queued' | 'running' | 'done' | 'error'
+  status: AnalysisRunStatus
+  /** 服务端阶段名(analyzing/completed/…),仅用于展示细粒度文案 */
+  stage?: string
+  /** 本次 run 冻结的反馈条数(5.3「输入固定」),进度分母 */
   total?: number
   progress?: number
+  error?: string
+  /** 创建时冻结的批次;刷新后据此把 URL 里的 dataset 认回它对应的 run */
+  dataset_ids?: string[]
 }
 
 // —— 工程计划 7.7:行动首页只读聚合契约 ——

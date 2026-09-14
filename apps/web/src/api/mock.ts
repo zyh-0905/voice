@@ -17,6 +17,7 @@ import {
 } from './client'
 import type {
   AiProvenance,
+  AnalysisRun,
   CpiResult,
   DatasetBatch,
   DatasetPreview,
@@ -430,6 +431,64 @@ const MOCK_RISK_STORE = new MockRiskStore()
 
 const MOCK_TASK_STORE = new MockTaskStore()
 
+/**
+ * 演示分析作业。**它会真的推进**——POST 建一个 queued 的 run,此后每次查询前进一档。
+ *
+ * 早先 mock 的 runAnalysis 直接返回 done,于是「终态停止轮询」和「刷新后从服务端
+ * 恢复」这两条——也就是这个页面唯一要做的事——在 mock 模式下永远不会被执行到;
+ * 而 E2E 默认跑 mock,所以它们连一次都不会被跨过。让 mock 走同一套状态机,
+ * 前端代码才有机会在两种模式下表现一致。
+ */
+class MockRunStore {
+  private runs = new Map<string, { run: AnalysisRun; polls: number; projectId: string }>()
+  private counter = 0
+
+  /** 第 1 次查询转 running,第 3 次转 done。比真实流水线快得多,但走的是同一条路径。 */
+  private static readonly POLLS_TO_DONE = 3
+  private static readonly DEMO_TOTAL = 1248
+
+  create(projectId: string, datasetId: string): AnalysisRun {
+    this.counter += 1
+    const run: AnalysisRun = {
+      id: `run-${this.counter}`,
+      status: 'queued',
+      stage: 'queued',
+      total: MockRunStore.DEMO_TOTAL,
+      progress: 0,
+      dataset_ids: [datasetId],
+    }
+    this.runs.set(run.id, { run, polls: 0, projectId })
+    return { ...run }
+  }
+
+  advance(analysisId: string): AnalysisRun | null {
+    const entry = this.runs.get(analysisId)
+    if (!entry) return null
+    entry.polls += 1
+    // 终态之后不再变化:再查还是 done,而不是每次查询都往前跳一格
+    if (entry.run.status === 'queued') {
+      entry.run.status = 'running'
+      entry.run.stage = 'analyzing'
+      entry.run.progress = Math.floor(MockRunStore.DEMO_TOTAL / 2)
+    } else if (entry.run.status === 'running' && entry.polls >= MockRunStore.POLLS_TO_DONE) {
+      entry.run.status = 'done'
+      entry.run.stage = 'completed'
+      entry.run.progress = MockRunStore.DEMO_TOTAL
+    }
+    return { ...entry.run }
+  }
+
+  /** 与后端 list_analyses 同口径:只返回本项目的作业,新的在前。 */
+  list(projectId: string): AnalysisRun[] {
+    return [...this.runs.entries()]
+      .filter(([, entry]) => entry.projectId === projectId)
+      .map(([, entry]) => ({ ...entry.run }))
+      .reverse()
+  }
+}
+
+const MOCK_RUN_STORE = new MockRunStore()
+
 /** 演示 run 与可识别主题:窗口外的一切按服务端口径拒绝或标记不可比 */
 const MOCK_RUN_REVISION = 1
 const MOCK_KNOWN_RUNS = new Set(['run_demo_001'])
@@ -693,9 +752,24 @@ export const mockApi: ApiClient = {
     await delay(200)
     return { inputRows: 1248, validRows: 1240, invalidRows: 3, duplicateRows: 5, redactedRows: 812, undatedRows: 12 }
   },
-  async runAnalysis() {
-    await delay(500)
-    return { id: 'run-1', status: 'done', total: 1248, progress: 1248 }
+  async runAnalysis(projectOrId?: string, idOrSignal?: string | AbortSignal) {
+    await delay(300)
+    // 与真实实现同样的重载处理:两参形式是 (projectId, datasetId),单参形式没有项目,
+    // 落到演示项目上。
+    const projectId = typeof idOrSignal === 'string' ? String(projectOrId) : 'demo-project'
+    const datasetId = typeof idOrSignal === 'string' ? idOrSignal : String(projectOrId ?? 'demo-1')
+    return MOCK_RUN_STORE.create(projectId, datasetId)
+  },
+  async getAnalysis(_projectId: string, analysisId: string) {
+    await delay(150)
+    // 未知 run 与后端一致地报 404,而不是编一个 done 出来
+    const run = MOCK_RUN_STORE.advance(analysisId)
+    if (!run) throw new ApiHttpError(404, 'analysis_not_found')
+    return run
+  },
+  async listAnalyses(projectId: string) {
+    await delay(150)
+    return MOCK_RUN_STORE.list(projectId)
   },
   async logout() {
     await delay(100)
