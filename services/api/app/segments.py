@@ -48,6 +48,14 @@ class SegmentSpan:
     text: str
 
 
+def segment_id(feedback_id: str, index: int) -> str:
+    """分块行的稳定 id:仓储写入与证据引用共用同一格式。
+
+    格式此前在两个仓储各自硬编码一份(写),而证据侧想引用时无处可取——
+    三处同源才不会漂移。"""
+    return f'seg_{feedback_id}_{index}'
+
+
 def split_redacted(
     text: str,
     tokenizer: TokenCounter | None = None,

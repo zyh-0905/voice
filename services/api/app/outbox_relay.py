@@ -20,7 +20,9 @@ class OutboxRelay:
             try:
                 payload = event.get("payload") or {}
                 analysis_id = payload.get("analysis_id")
-                if event.get("event_type") == "analysis.created" and analysis_id:
+                # analysis.retry 与 analysis.created 派发到同一个任务:
+                # 两者唯一区别是事件从哪来(创建路径 / retry 端点)。
+                if event.get("event_type") in ("analysis.created", "analysis.retry") and analysis_id:
                     # Celery tasks expose delay; direct callables are useful in tests.
                     if hasattr(self.publisher, "delay"):
                         self.publisher.delay(analysis_id)

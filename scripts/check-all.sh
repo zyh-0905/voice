@@ -11,12 +11,13 @@
 #
 # 用法:
 #     bash scripts/check-all.sh              # 全部
-#     bash scripts/check-all.sh backend      # 只跑后端
+#     bash scripts/check-all.sh backend      # 只跑后端(另有 schema/frontend/e2e/
+#                                            #        real_api/production_render)
 #     FAST=1 bash scripts/check-all.sh       # 跳过需要浏览器的 E2E
 #
 # 前置:
 #   - 后端:`.venv`(见下)或 Docker
-#   - 真库用例与 real-api 套件:需要一个可达的 PostgreSQL:
+#   - 真库用例、schema 闸门与 real-api 套件:需要一个可达的 PostgreSQL:
 #       docker compose -f compose.yaml -f compose.e2e.yaml up -d postgres
 set -uo pipefail
 
@@ -134,6 +135,63 @@ real_api() {
   fi
 }
 
+# 全新库迁移闸门:此前只在 CI 里跑。「模型有列、迁移没有」这类缺陷,内存仓储与
+# create_all 都看不见(前者不校验约束,后者直接按模型补表),只有真升一次
+# alembic 才会炸——历史上「全新库无法迁移」正是阻断级缺陷,本地一键门禁却是绿的。
+schema_gate() {
+  say "全新库 schema 闸门(alembic upgrade head)"
+  if [ -z "$PY" ]; then skip "schema 闸门(无本地 Python 解释器)"; return; fi
+  if ! docker compose -f compose.yaml -f compose.e2e.yaml exec -T postgres \
+       pg_isready -U voicelens >/dev/null 2>&1; then
+    skip "schema 闸门(PostgreSQL 不可达;起库见本脚本头部说明)"; return
+  fi
+  local admin="postgresql+psycopg://voicelens:voicelens@127.0.0.1:${PG_PORT}"
+  # 库名沿用测试前缀约定(conftest / e2e_server):即使连到不相干的实例也拦得住
+  local db="voicelens_test_checkall"
+  docker compose -f compose.yaml -f compose.e2e.yaml exec -T postgres \
+    psql -U voicelens -d postgres \
+    -c "DROP DATABASE IF EXISTS $db" -c "CREATE DATABASE $db" >/dev/null 2>&1 \
+    || { bad "schema 闸门:建库失败"; return; }
+  local out current
+  out="$( (cd services/api && env DATABASE_URL="$admin/$db" "$PY" -m alembic -c alembic.ini upgrade head) 2>&1 )"
+  current="$( (cd services/api && env DATABASE_URL="$admin/$db" "$PY" -m alembic -c alembic.ini current) 2>/dev/null )"
+  if [ -z "$out" ] && printf '%s' "$current" | grep -q '(head)'; then
+    ok "schema 闸门:全新库升到 head"
+  else
+    printf '%s\n' "$out" | tail -10
+    bad "schema 闸门:全新库升不到 head"
+  fi
+  docker compose -f compose.yaml -f compose.e2e.yaml exec -T postgres \
+    psql -U voicelens -d postgres -c "DROP DATABASE IF EXISTS $db" >/dev/null 2>&1 || true
+}
+
+# 生产口径渲染冒烟:用 .env.production.example 插值渲染 compose,断言生产闸门
+# 真的到达容器。这是「VOICELENS_ENV=development 被钉死、闸门整体旁路」那类
+# 缺陷的正向检查——静态看得到开关,渲染才知道值到了哪。
+production_render() {
+  say "生产渲染冒烟(--env-file .env.production.example)"
+  if ! docker compose config --quiet >/dev/null 2>&1; then
+    skip "生产渲染(Docker/compose 不可用)"; return
+  fi
+  local rendered
+  rendered="$(docker compose --env-file .env.production.example config --format json 2>/dev/null)" \
+    || { bad "生产渲染:docker compose config 失败"; return; }
+  if printf '%s' "$rendered" | python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+api = cfg["services"]["api"]["environment"]
+worker = cfg["services"]["worker"]["environment"]
+assert api.get("VOICELENS_ENV") == "production", "api VOICELENS_ENV did not render to production"
+assert api.get("NAMING_MODE") == "provider", "api NAMING_MODE did not render to provider"
+assert "MODEL_API_KEY" not in api, "api container must not hold the model key (14.1)"
+assert "MODEL_API_KEY" in worker, "worker must inject the model key (14.1)"
+'; then
+    ok "生产渲染:闸门口径到达容器,密钥只在 worker"
+  else
+    bad "生产渲染:生产口径没有到达容器"
+  fi
+}
+
 say "compose 契约"
 if python3 scripts/validate-compose.py >/dev/null 2>&1 && docker compose config --quiet 2>/dev/null; then
   ok "validate-compose + docker compose config"
@@ -142,9 +200,11 @@ else
 fi
 
 want backend  && backend
+want schema   && schema_gate
 want frontend && frontend
 want e2e      && e2e
 want real_api && real_api
+want production_render && production_render
 
 say "汇总"
 printf '  失败 %d 项' "${#FAILED[@]}"

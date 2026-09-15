@@ -28,10 +28,34 @@
       - .env.example
     environment:
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
-      REDIS_URL: redis://redis:6379/0
-      AUTH_REQUIRED: "true"
-      AUTH_INSECURE_DEV: "true"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       USE_DATABASE: "1"
+      # 队列是这套栈的事实组件(celery + relay),readiness 如实报告;
+      # 调度统一走 outbox,这一键只影响 /health/ready 的 queue 字段。
+      USE_CELERY: "1"
+      # 闸门相关开关全部走插值:开发默认保持演示口径,生产用根目录 .env 覆盖
+      # (docker compose 自动读取该文件做插值)。把它们钉成字面量等于焊死
+      # VOICELENS_ENV=production 的覆盖入口——生产闸门(settings.py)就永远咬不上。
+      VOICELENS_ENV: ${VOICELENS_ENV:-development}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-true}
+      AUTH_INSECURE_DEV: ${AUTH_INSECURE_DEV:-true}
+      SESSION_STORE: ${SESSION_STORE:-db}
+      DEDUPE_HMAC_SECRET: ${DEDUPE_HMAC_SECRET:-}
+      IDENTITY_PROVIDER: ${IDENTITY_PROVIDER:-local}
+      LOCAL_ACCOUNTS: ${LOCAL_ACCOUNTS:-}
+      NAMING_MODE: ${NAMING_MODE:-mock}
+      EMBEDDING_MODE: ${EMBEDDING_MODE:-hashing}
+      # 校验(settings.py)需要知道 provider 的端点/模型/价格,但密钥只进 worker(14.1):
+      # MODEL_API_KEY / EMBEDDING_API_KEY 有意不出现在 api 服务里。
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-http}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_ENDPOINT: ${MODEL_ENDPOINT:-}
+      MODEL_ID: ${MODEL_ID:-}
+      MODEL_PRICE_IN: ${MODEL_PRICE_IN:-}
+      MODEL_PRICE_OUT: ${MODEL_PRICE_OUT:-}
+      DAILY_MODEL_BUDGET: ${DAILY_MODEL_BUDGET:-}
+      EMBEDDING_ENDPOINT: ${EMBEDDING_ENDPOINT:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -52,6 +76,11 @@
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # compose 栈默认真实 API 模式:8080 的演示走真后端/真库/真 worker,
+        # 不再是前端自演(mock bundle 连一次后端都不会调)。mock 演示保留在
+        # npm run dev。VITE_USE_MOCK 是构建期变量,由 Dockerfile 烘进镜像。
+        VITE_USE_MOCK: "${VOICELENS_WEB_USE_MOCK:-false}"
     ports:
       - "8080:8080"
     depends_on:
@@ -90,10 +119,28 @@
       - .env.example
     environment:
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
-      REDIS_URL: redis://redis:6379/0
-      AUTH_REQUIRED: "true"
-      AUTH_INSECURE_DEV: "true"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       USE_DATABASE: "1"
+      # 14.1:模型密钥只在 worker 进程注入——api 容器不持有。
+      # 命名/向量 provider 全部在 worker 里跑(pipeline);这些键此前不在任何
+      # 注入面上,NAMING_MODE=provider 也拿不到端点,llm.py 会静默降级 manual。
+      # 空字符串与未设置等价:下游一律 (os.getenv(...) or '').strip()。
+      NAMING_MODE: ${NAMING_MODE:-mock}
+      EMBEDDING_MODE: ${EMBEDDING_MODE:-hashing}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_ENDPOINT: ${MODEL_ENDPOINT:-}
+      MODEL_ID: ${MODEL_ID:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-}
+      MODEL_PRICE_IN: ${MODEL_PRICE_IN:-}
+      MODEL_PRICE_OUT: ${MODEL_PRICE_OUT:-}
+      DAILY_MODEL_BUDGET: ${DAILY_MODEL_BUDGET:-}
+      EMBEDDING_ENDPOINT: ${EMBEDDING_ENDPOINT:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_REVISION: ${EMBEDDING_REVISION:-}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -112,11 +159,9 @@
       - .env.example
     environment:
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
-      REDIS_URL: redis://redis:6379/0
-      AUTH_REQUIRED: "true"
-      AUTH_INSECURE_DEV: "true"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       USE_DATABASE: "1"
-      OUTBOX_RELAY_INTERVAL_SECONDS: "5"
+      OUTBOX_RELAY_INTERVAL_SECONDS: ${OUTBOX_RELAY_INTERVAL_SECONDS:-5}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -174,11 +219,9 @@
       - .env.example
     environment:
       DATABASE_URL: postgresql+psycopg://voicelens:voicelens@postgres:5432/voicelens
-      REDIS_URL: redis://redis:6379/0
-      AUTH_REQUIRED: "true"
-      AUTH_INSECURE_DEV: "true"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       USE_DATABASE: "1"
-      WATCHDOG_INTERVAL_SECONDS: "30"
+      WATCHDOG_INTERVAL_SECONDS: ${WATCHDOG_INTERVAL_SECONDS:-30}
     depends_on:
       migrate:
         condition: service_completed_successfully

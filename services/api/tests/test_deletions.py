@@ -220,3 +220,64 @@ def test_project_deletion_purges_idempotency_records():
     assert verify['remaining']['idempotency'] == 0
     # 别的项目的幂等记录不受影响:删除必须是项目范围的
     assert repository.get_idempotency('idem-other') is not None
+
+
+def test_dataset_deletion_purges_run_data_and_task_evidence():
+    """10.4/5.2:删批次要连带清受影响 run 的阶段与模型调用、反馈上的任务证据。
+
+    此前数据集级删除清到 feedback/segments/findings 为止:stages 与 model_calls
+    没有任何外键挂在 run 上,run 行删掉后它们原地成为孤儿(项目级删除清它们,
+    数据集级漏了);task_evidence 删是删了,但核验不查它。这些都是
+    「删除说清了、实际没做干净」的藏身处。
+    """
+    project_id, name = _project('run数据清理')
+    upload = client.post(
+        f'/api/v1/projects/{project_id}/datasets',
+        files={'file': ('rd.csv', 'msg,fid\n物流很慢,ext-1\n'.encode())},
+        data={'consent': 'true'},
+    )
+    assert upload.status_code == 201, upload.text
+    dataset_id = upload.json()['id']
+    validated = client.post(
+        f'/api/v1/projects/{project_id}/datasets/{dataset_id}/validate',
+        json={'mapping': {'msg': 'content', 'fid': 'feedback_id'}},
+    )
+    assert validated.status_code == 202, validated.text
+    feedback = repository.list_feedback(project_id, [dataset_id])
+    assert len(feedback) == 1
+
+    repository.create_analysis({
+        'id': 'run_rd', 'project_id': project_id, 'dataset_ids': [dataset_id],
+        'datasets': [], 'status': 'done', 'stage': 'completed', 'total': 1,
+    })
+    repository.save_stages(project_id, 'run_rd', [
+        {'stage': 'CLUSTERING', 'state': 'SUCCEEDED', 'config_hash': 'h1'}])
+    repository.save_model_call(project_id, {
+        'id': 'mc_rd_1', 'run_id': 'run_rd', 'purpose': 'naming', 'provider': 'mock',
+        'state': 'MOCK', 'model': 'mock'})
+    repository.create_entity('tasks', {'id': 't_rd', 'project_id': project_id,
+                                        'title': '任务', 'state': 'OPEN'})
+    repository.save_task_evidence(project_id, 't_rd', [
+        {'feedback_id': feedback[0]['id'], 'quote_redacted': '物流很慢'}])
+    assert repository.count_run_data_for_run(project_id, 'run_rd') == 2
+    assert repository.count_task_evidence_for_feedback(project_id, [feedback[0]['id']]) == 1
+
+    preview = client.post(f'/api/v1/projects/{project_id}/deletions/preview', json={
+        'target_type': 'dataset', 'target_id': dataset_id,
+    }).json()
+    receipt = client.post(f'/api/v1/projects/{project_id}/deletions', json={
+        'target_type': 'dataset', 'target_id': dataset_id,
+        'confirm_name': preview['target_name'],
+    }).json()
+
+    assert receipt['state'] == 'DONE'
+    assert repository.count_run_data_for_run(project_id, 'run_rd') == 0
+    assert repository.count_task_evidence_for_feedback(project_id, [feedback[0]['id']]) == 0
+    assert repository.list_task_evidence(project_id, 't_rd') == []
+    assert 'run_rd' not in repository.analyses
+    # 任务本体保留:它属于项目,删的只是指向已删反馈的证据快照(10.4)
+    assert any(t['id'] == 't_rd' for t in repository.list_entities('tasks', project_id))
+    # 核验覆盖新键:remaining 里必须能看见 task_evidence 与 run_data
+    verify = next(step for step in receipt['steps'] if step['name'] == 'verify')
+    assert {'task_evidence', 'run_data'} <= set(verify['remaining'])
+    assert not any(verify['remaining'].values())

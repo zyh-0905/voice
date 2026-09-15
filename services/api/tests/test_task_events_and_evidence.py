@@ -202,3 +202,44 @@ def test_source_pointer_and_snapshot_are_separate_fields():
     body = client.get(f'/api/v1/projects/{project_id}/tasks/t_f').json()
     assert body['source'] == 'manual'
     assert body['evidence_snapshot'] == []
+
+
+def test_segment_id_survives_the_sql_roundtrip(schema_session_factory):
+    """真 PG 上钉住 segment_id 落库:SQL 仓储按列过滤字段,内存仓储照收——
+    字段如果不在映射里,只有真实表会静默丢(本仓库历史上的主要缺陷形态)。
+    """
+    from app.sql_repository import SQLAlchemyRepository
+
+    repo = SQLAlchemyRepository(create_schema=False, session_factory=schema_session_factory)
+    project_id = _project('segid')
+    repo.create_project({'id': project_id, 'name': '分块引用'})
+    feedback_id = 'fb_seg_0'
+    repo.save_feedback_rows(project_id, 'ds_seg', [
+        {'id': feedback_id, 'event_key': 'k-seg', 'content_redacted': '重复扣款了两次',
+         'content_hash': 'hs', 'source_row': 0, 'channel': 'unknown', 'product': 'unknown',
+         'time_quality': 'missing', 'identity_quality': 'source_id', 'redaction_version': 'v1'}])
+
+    plan = {
+        'revision': {'id': 'rev_seg_1', 'project_id': project_id, 'run_id': 'run_seg',
+                     'revision': 1, 'topic_manifest_json': {'t1': 'tv_run_seg_t1_1'},
+                     'unassigned_count': 0, 'reason': None, 'actor_id': None},
+        'topics': [{'project_id': project_id, 'run_id': 'run_seg', 'id': 'tp_run_seg_t1',
+                    'topic_id': 't1', 'current_version_id': 'tv_run_seg_t1_1',
+                    'state': 'ACTIVE'}],
+        'versions': [{'id': 'tv_run_seg_t1_1', 'project_id': project_id, 'run_id': 'run_seg',
+                      'topic_id': 't1', 'topic_row_id': 'tp_run_seg_t1', 'version': 1,
+                      'revision': 1, 'name': '重复扣款', 'summary': '', 'severity': 'high',
+                      'department': None, 'claims': [], 'suggested_action': None,
+                      'needs_review': True, 'summary_revalidated': True, 'limitations': [],
+                      'origin': None}],
+        'evidence': [{'id': 'te_seg_1', 'project_id': project_id,
+                      'topic_version_id': 'tv_run_seg_t1_1', 'feedback_id': feedback_id,
+                      'segment_id': f'seg_{feedback_id}_0', 'source_row': 0,
+                      'quote': '重复扣款', 'quote_start': 0, 'quote_end': 4,
+                      'similarity': None, 'is_representative': True}],
+    }
+    repo.save_revision(project_id, 'run_seg', plan)
+
+    rows = repo.list_topic_evidence(project_id, 'tv_run_seg_t1_1')
+    assert len(rows) == 1
+    assert rows[0]['segment_id'] == f'seg_{feedback_id}_0'

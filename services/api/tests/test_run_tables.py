@@ -190,3 +190,36 @@ def test_pipeline_records_stages_and_model_calls():
     # 没有可靠价格配置时留 NULL,不填 0——0 会让「免费」和「不知道多少钱」看起来一样
     assert all(call['cost_actual'] is None and call['cost_estimated'] is None for call in calls)
     assert all(call['provider'] for call in calls)
+
+
+def test_dataset_deletion_purges_the_runs_stages_and_model_calls(schema_session_factory):
+    """数据集删除要清受影响 run 的 stages/model_calls(真库)。
+
+    这两张表没有外键挂在 analysis_runs 上:run 行删掉后,旧实现留下孤儿行,
+    而内存仓储不建外键、发现不了——这正是要在真 PG 上钉住的一类。
+    """
+    from app.deletions import execute_deletion
+    from app.sql_repository import SQLAlchemyRepository
+
+    repo = SQLAlchemyRepository(create_schema=False, session_factory=schema_session_factory)
+    project_id = _project('delrundata')
+    repo.create_project({'id': project_id, 'name': 'run 数据清理'})
+    repo.save_feedback_rows(project_id, 'ds_r', [
+        {'id': 'fb_r_0', 'event_key': 'k-r', 'content_redacted': '重复扣款了两次',
+         'content_hash': 'hr', 'source_row': 0, 'channel': 'unknown', 'product': 'unknown',
+         'time_quality': 'missing', 'identity_quality': 'source_id', 'redaction_version': 'v1'}])
+    repo.create_analysis({'id': 'run_r', 'project_id': project_id, 'dataset_ids': ['ds_r'],
+                          'datasets': [], 'status': 'done', 'stage': 'completed', 'total': 1})
+    repo.save_stages(project_id, 'run_r', [
+        {'stage': 'CLUSTERING', 'state': 'SUCCEEDED', 'config_hash': 'h'}])
+    repo.save_model_call(project_id, {'id': 'mc_r_1', 'run_id': 'run_r', 'purpose': 'naming',
+                                      'provider': 'mock', 'state': 'MOCK', 'model': 'mock'})
+    repo.create_dataset({'id': 'ds_r', 'project_id': project_id, 'name': '批次', 'rows': 1,
+                         'preview': {'rows': []}})
+    assert repo.count_run_data_for_run(project_id, 'run_r') == 2
+
+    receipt = execute_deletion(repo, project_id, 'dataset', 'ds_r', '批次', 'job_r', 'demo-user')
+
+    assert repo.count_run_data_for_run(project_id, 'run_r') == 0
+    verify = next(step for step in receipt['steps'] if step['name'] == 'verify')
+    assert verify['remaining']['run_data'] == 0

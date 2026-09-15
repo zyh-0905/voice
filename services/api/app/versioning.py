@@ -89,7 +89,10 @@ def apply_correction(
         for source_id in source_ids:
             evidence_by_topic.pop(source_id, None)
         topics.append({'topic_id': new_id, 'name': name, 'summary': '', 'severity': merged[0]['severity'],
-                       'feedback_count': len(merged_evidence), 'summary_revalidated': False})
+                       'feedback_count': len(merged_evidence), 'summary_revalidated': False,
+                       # 合并主题的来源随第一来源走:内容 provenance 不因操作改变,
+                       # 操作本身记录在 topic_corrections
+                       'origin': merged[0].get('origin'), 'needs_review': merged[0].get('needs_review', True)})
         evidence_by_topic[new_id] = merged_evidence
         affected = list(source_ids) + [new_id]
     elif operation == 'SPLIT':
@@ -111,7 +114,9 @@ def apply_correction(
         source['feedback_count'] = len(kept)
         new_id = f"topic-split-{current_revision + 1}-{len(topics) + 1}"
         topics.append({'topic_id': new_id, 'name': new_name, 'summary': '', 'severity': source['severity'],
-                       'feedback_count': len(moved), 'summary_revalidated': False})
+                       'feedback_count': len(moved), 'summary_revalidated': False,
+                       # 拆出来的部分与源主题同源;源主题本体保留原 origin/needs_review(dict 复制)
+                       'origin': source.get('origin'), 'needs_review': source.get('needs_review', True)})
         evidence_by_topic[new_id] = moved
         affected = [source['topic_id'], new_id]
     elif operation == 'CREATE':
@@ -134,7 +139,9 @@ def apply_correction(
                          'quote': text[:min(24, len(text))], 'quote_start': 0, 'quote_end': min(24, len(text))})
         new_id = f"topic-created-{current_revision + 1}-{len(topics) + 1}"
         topics.append({'topic_id': new_id, 'name': name, 'summary': '', 'severity': 'medium',
-                       'feedback_count': len(rows), 'summary_revalidated': False})
+                       'feedback_count': len(rows), 'summary_revalidated': False,
+                       # 人工从待归类反馈建题:来源是人,不是模型也不是规则降级
+                       'origin': 'human', 'needs_review': False})
         evidence_by_topic[new_id] = rows
         unassigned = max(0, unassigned - len(feedback_ids))
         affected = [new_id]

@@ -408,10 +408,17 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
     a=get_analysis(project_id, analysis_id)
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
-    if os.getenv('USE_CELERY', '').lower() in ('1','true','yes'):
-        from .celery_tasks import run_analysis_task
-        if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
-    elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
+    # 与创建路径同一投递机制:outbox + relay(5 秒轮询 + 退避重投)。直接 .delay
+    # 会绕过重投保障——broker 瞬断的那次重试会让 run 永远停在 queued。此前的
+    # USE_CELERY 分支正是这样,而该键没有任何注入方:compose 栈上 retry 只改
+    # 状态不派发,run 停在 queued 永远不再执行。
+    if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'):
+        worker.run(analysis_id)
+    else:
+        # event_key 必须每次唯一(outbox_events.event_key 有唯一约束):
+        # 两次重试各写一把新钥匙;event_type 走 analysis.retry,relay 与
+        # analysis.created 同样派发。
+        repository.create_outbox_event({'event_key': f'analysis.retry:{analysis_id}:{uuid4().hex[:8]}', 'event_type':'analysis.retry', 'payload': {'analysis_id': analysis_id, 'project_id': project_id}})
     return _redacted_out(analyses[analysis_id])
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
 def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
@@ -655,6 +662,23 @@ def _topic_cpi(topic: Mapping, total: int) -> dict | None:
     return _cpi_view(result)
 
 
+def _ai_origin_label(raw_origin) -> str:
+    """topic_versions.origin 的原始值 → 前端契约的 AiOrigin(ai/rule/human/unknown)。
+
+    库里存的是审计事实(provider 声明:http/自定义 provider 名/mock/rule_fallback/
+    human);接口说的是展示词汇。此前接口硬编码 'rule',与真实命名来源无关。
+    """
+    value = str(raw_origin or '').strip().lower()
+    if value == 'rule_fallback':
+        return 'rule'
+    if value == 'human':
+        return 'human'
+    if value in ('', 'mock', 'unknown'):
+        # mock 是演示路径(DemoNotice 已标注),归入 unknown 而不是冒充 ai/rule
+        return 'unknown'
+    return 'ai'
+
+
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
@@ -685,7 +709,12 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
                              # 于是真实模式下证据面板的「原文与来源」永远空白,而 mock 有内容——
                              # 前端契约与后端实现各说各话,只有真连一次才看得出来。
                              'quotes': _evidence_quotes(published, t['topic_id'], snapshot.get('revision')),
-                             'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
+                             # AI 来源从 topic_versions 现算:此前硬编码
+                             # origin='rule'/needsReview=True,与真实命名来源无关
+                             # (UI-09:候选冒充确认)。
+                             'aiProvenance': {'origin': _ai_origin_label(t.get('origin')),
+                                              'needsReview': bool(t.get('needs_review', True)),
+                                              'reviewRecord': None}},
             })
         return {'items': rows, 'total': len(rows)}
     rows = [
@@ -1385,12 +1414,12 @@ def download_project_export(project_id: str, export_id: str, user: dict = Depend
     )
 
 
-@app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
-def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_analyst)):
-    dataset = datasets.get(dataset_id)
-    if not dataset or dataset.get('project_id') != project_id:
-        raise HTTPException(404, detail={'code': 'dataset_not_found'})
-    repository.delete_dataset(dataset_id)
-    return Response(status_code=204)
+# 数据集删除**没有**直接 DELETE 端点(工程计划 7.5):唯一删除路径是
+# POST /deletions(preview + confirm_name + Idempotency-Key + OWNER + tombstone +
+# 级联清理 + 核验为零)。此前这里还有一个 DELETE /datasets/{id},直接调
+# repository.delete_dataset 只删数据集行本身——feedback/segments/risk_findings/
+# topic_evidence/task_evidence 全部残留,不写 tombstone、不失效导出、不取消作业,
+# 权限还只是 analyst 而非 OWNER。datasets 表没有任何外键指向它,数据库层
+# 完全不拦;规格里也从来没有这个端点。规格外的第二删除路径就是给 10.4 留后门。
 
 

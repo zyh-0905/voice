@@ -23,6 +23,9 @@ class EvidenceRef:
     quote: str
     quote_start: int
     quote_end: int
+    # 引文所在分块 id(与 segments 表同格式);空串=反馈级关联。
+    # 恒空时 segments 表形同虚设:写入了数据,却没有任何证据行引用它。
+    segment_id: str = ''
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,13 @@ class TopicDraft:
     summary: str
     severity: str
     evidence: list[EvidenceRef] = field(default_factory=list)
+    # 命名来源的原始标记(llm 的 provider 声明:http/mock/rule_fallback)。
+    # 存库保持原值,API 层再映射到前端契约的 ai/rule/human/unknown——
+    # 库里留的是审计事实,接口说的是展示词汇。
+    origin: str | None = None
+    # 命名器自报的待复核标记(8.5 契约字段);降级候选恒为 True。
+    # 此前这个字段在 draft 就丢了,topic_versions.needs_review 只能吃默认值。
+    needs_review: bool = True
 
 
 class AnalysisStore(Protocol):
@@ -71,6 +81,8 @@ def build_revision_snapshot(
             'summary': draft.summary,
             'severity': draft.severity,
             'feedback_count': len(draft.evidence),
+            'origin': draft.origin,
+            'needs_review': draft.needs_review,
         }
         evidence_by_topic[draft.topic_id] = [
             {
@@ -79,6 +91,7 @@ def build_revision_snapshot(
                 'quote': ref.quote,
                 'quote_start': ref.quote_start,
                 'quote_end': ref.quote_end,
+                'segment_id': ref.segment_id,
             }
             for ref in draft.evidence
         ]

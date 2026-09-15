@@ -81,8 +81,12 @@ jobs:
         run: npm run typecheck
       - working-directory: apps/web
         run: npm run test:unit -- --run
+      # build 与生产镜像同口径(真实 API bundle):mock 口径的 bundle 从不调用
+      # 后端,类型错误只会在两种口径都存在时暴露一半。
       - working-directory: apps/web
         run: npm run build
+        env:
+          VITE_USE_MOCK: "false"
       # E2E(含视觉基线)**在 Playwright 官方镜像里跑**。
       #
       # 基线是渲染环境的函数,不只是平台的:同一份 linux 基线,官方镜像里页面高

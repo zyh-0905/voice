@@ -135,11 +135,17 @@ def load_revision_snapshot(repository, run: Mapping, revision: int | None = None
             'summary_revalidated': version['summary_revalidated'],
             'version_id': version_id,
             'topic_version': version['version'],
+            # AI 来源链的读侧:仓储的 _topic_version_dict 本来就带这两个字段,
+            # 此前重建快照时被丢掉,校正路径也因此无法继承
+            'origin': version.get('origin'),
+            'needs_review': bool(version.get('needs_review', True)),
         })
         evidence_by_topic[topic_id] = [
             {'feedback_id': item['feedback_id'], 'source_row': item['source_row'],
              'quote': item['quote'], 'quote_start': item['quote_start'],
-             'quote_end': item['quote_end']}
+             'quote_end': item['quote_end'],
+             # 读侧带出 segment_id:证据→分块→offset→脱敏正文的链路要能走通
+             'segment_id': item.get('segment_id') or FEEDBACK_LEVEL_SEGMENT}
             for item in evidence
         ]
     return {
