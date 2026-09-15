@@ -696,6 +696,44 @@ class SQLAlchemyRepository:
             s.query(ModelCall).filter(ModelCall.project_id == project_id).delete()
             return removed
 
+    def delete_run_data_for_run(self, project_id, run_id):
+        """run 级:数据集删除清掉受影响 run 的阶段与模型调用,不留孤儿行。"""
+        with self.session() as s, s.begin():
+            removed = s.query(AnalysisStage).filter(
+                AnalysisStage.project_id == project_id,
+                AnalysisStage.run_id == run_id).delete()
+            s.query(ModelCall).filter(
+                ModelCall.project_id == project_id,
+                ModelCall.run_id == run_id).delete()
+            return removed
+
+    def count_run_data_for_run(self, project_id, run_id):
+        with self.session() as s:
+            stages = s.query(AnalysisStage).filter(
+                AnalysisStage.project_id == project_id,
+                AnalysisStage.run_id == run_id).count()
+            calls = s.query(ModelCall).filter(
+                ModelCall.project_id == project_id,
+                ModelCall.run_id == run_id).count()
+            return stages + calls
+
+    def count_run_data_for_project(self, project_id):
+        with self.session() as s:
+            stages = s.query(AnalysisStage).filter(
+                AnalysisStage.project_id == project_id).count()
+            calls = s.query(ModelCall).filter(
+                ModelCall.project_id == project_id).count()
+            return stages + calls
+
+    def count_task_evidence_for_feedback(self, project_id, feedback_ids):
+        ids = [str(item) for item in feedback_ids]
+        if not ids:
+            return 0
+        with self.session() as s:
+            return s.query(TaskEvidence).filter(
+                TaskEvidence.project_id == project_id,
+                TaskEvidence.feedback_id.in_(ids)).count()
+
     def count_topics_for_run(self, project_id, run_id):
         """删除与隔离核验用:某个 run 自己有多少个主题行。"""
         with self.session() as s:

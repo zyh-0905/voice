@@ -133,6 +133,10 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
         repository.delete_run_feedbacks_for_run(project_id, run['id'])
         # 主题版本与证据先走:它们引用 feedback,而 feedback 稍后才删
         repository.delete_topics_for_run(project_id, run['id'])
+        # 阶段与模型调用没有外键挂在 analysis_runs 上,run 行一删它们就成了
+        # 孤儿——项目级删除早就清(delete_run_data_for_project),数据集级
+        # 此前漏了:受影响 run 的 stages/model_calls 原地残留。
+        repository.delete_run_data_for_run(project_id, run['id'])
         _safe_delete(repository, repository.delete_analysis, run['id'])
     steps.append({'name': 'purge_runs', 'status': 'done', 'runs': len(runs)})
 
@@ -210,12 +214,18 @@ def execute_deletion(repository, project_id: str, target_type: str, target_id: s
             'feedback': len(repository.list_feedback(project_id)),
             'segments': repository.count_segments(project_id),
             'idempotency': repository.count_idempotency(project_id),
+            # 此前核验不覆盖这两张:删是删了,但「核验为零」对它们是空话
+            'run_data': repository.count_run_data_for_project(project_id),
         }
     else:
         remaining = {
             'datasets': int(target_id in repository.datasets),
             'feedback': len(repository.list_feedback(project_id, [target_id])),
             'segments': repository.count_segments_for_feedback(project_id, affected_feedback),
+            'task_evidence': repository.count_task_evidence_for_feedback(project_id, affected_feedback),
+            # run 行已在 purge_runs 删掉,这里按 run_id 反查孤儿行
+            'run_data': sum(repository.count_run_data_for_run(project_id, run['id'])
+                            for run in runs),
         }
     steps.append({'name': 'verify', 'status': 'done', 'remaining': remaining})
     if any(remaining.values()):

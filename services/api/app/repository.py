@@ -99,6 +99,10 @@ class Repository(Protocol):
     def delete_task_evidence_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
     def delete_task_data_for_project(self, project_id: str) -> int: ...
     def delete_run_data_for_project(self, project_id: str) -> int: ...
+    def count_run_data_for_project(self, project_id: str) -> int: ...
+    def delete_run_data_for_run(self, project_id: str, run_id: str) -> int: ...
+    def count_run_data_for_run(self, project_id: str, run_id: str) -> int: ...
+    def count_task_evidence_for_feedback(self, project_id: str, feedback_ids: list[str]) -> int: ...
     def list_entities(self, kind: str, project_id: str) -> list[dict]: ...
     def create_entity(self, kind: str, value: dict) -> dict: ...
     def update_entity(self, kind: str, key: str, changes: dict) -> dict: ...
@@ -481,6 +485,35 @@ class InMemoryRepository:
             removed += 1
         self.model_calls = [item for item in self.model_calls if item['project_id'] != project_id]
         return removed
+
+    def delete_run_data_for_run(self, project_id, run_id):
+        """run 级:数据集删除清掉受影响 run 的阶段与模型调用,不留孤儿行。"""
+        removed = 0
+        for key in [k for k in self.analysis_stages
+                    if k[0] == project_id and k[1] == run_id]:
+            del self.analysis_stages[key]
+            removed += 1
+        self.model_calls = [item for item in self.model_calls
+                            if not (item['project_id'] == project_id
+                                    and item.get('run_id') == run_id)]
+        return removed
+
+    def count_run_data_for_run(self, project_id, run_id):
+        return (sum(1 for k in self.analysis_stages
+                    if k[0] == project_id and k[1] == run_id)
+                + sum(1 for item in self.model_calls
+                      if item['project_id'] == project_id and item.get('run_id') == run_id))
+
+    def count_run_data_for_project(self, project_id):
+        return (sum(1 for k in self.analysis_stages if k[0] == project_id)
+                + sum(1 for item in self.model_calls
+                      if item['project_id'] == project_id))
+
+    def count_task_evidence_for_feedback(self, project_id, feedback_ids):
+        wanted = {str(item) for item in feedback_ids}
+        return sum(1 for key, rows in self.task_evidence.items()
+                   if key[0] == project_id
+                   for row in rows if str(row.get('feedback_id')) in wanted)
 
     def delete_topics_for_run(self, project_id, run_id):
         """删 run 的主题与修订:版本与证据随主题走,不留孤儿行。"""
