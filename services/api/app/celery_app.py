@@ -3,8 +3,11 @@ try:
  from celery import Celery
 except ImportError:
  Celery=None
-broker_url=os.getenv('CELERY_BROKER_URL','redis://redis:6379/0')
-result_backend=os.getenv('CELERY_RESULT_BACKEND',broker_url)
+# REDIS_URL 是 14 的部署配置键,此前只出现在 .env.example/compose/CI 里、
+# 没有任何代码读它(CELERY_BROKER_URL 的默认值恰好相同,哑得看不出来)。
+# 优先级:显式 CELERY_BROKER_URL > REDIS_URL > 栈内默认。
+broker_url=os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL') or 'redis://redis:6379/0'
+result_backend=os.getenv('CELERY_RESULT_BACKEND') or broker_url
 celery_app=Celery('voicelens',broker=broker_url,backend=result_backend) if Celery else None
 if celery_app: celery_app.conf.update(
     task_track_started=True,

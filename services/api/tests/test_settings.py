@@ -134,3 +134,44 @@ def test_production_accepts_oidc_without_local_accounts(monkeypatch):
     monkeypatch.delenv("LOCAL_ACCOUNTS", raising=False)
     assert validate_production_settings().environment == "production"
 
+
+
+# —— .env.production.example 模板契约 ——
+# 模板是「生产闸门要求的最小集」的镜像:settings.py 每新增一条闸门,模板就必须
+# 跟着加键,否则部署方照抄模板仍被拦、而且拦在「模板漏键」而不是「值待填」。
+
+def _load_production_template() -> dict[str, str]:
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[3] / ".env.production.example"
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
+def test_production_template_satisfies_every_gate(monkeypatch):
+    """模板键必须足以通过全部生产闸门:空值全填占位串后校验应当通过。"""
+    template = _load_production_template()
+    assert template["VOICELENS_ENV"] == "production", "模板必须以生产口径为默认"
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    for key, value in template.items():
+        # 只填空值;模板里已有的语义值(production/api/provider/...)原样生效
+        monkeypatch.setenv(key, value or "placeholder-value")
+    assert validate_production_settings().environment == "production"
+
+
+def test_production_template_blank_secrets_fail_loudly(monkeypatch):
+    """按原样(空值)部署必须被拦,且拦截点是待填的密钥项——这是刻意的。"""
+    template = _load_production_template()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    for key, value in template.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError) as excinfo:
+        validate_production_settings()
+    message = str(excinfo.value)
+    assert "DEDUPE_HMAC_SECRET" in message
+    assert "LOCAL_ACCOUNTS" in message
