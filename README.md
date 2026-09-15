@@ -266,7 +266,7 @@ python services/api/evaluation/evaluate_analysis.py
 - `POST /projects/{project_id}/datasets`
 - `GET /projects/{project_id}/datasets/{dataset_id}`
 - `POST /projects/{project_id}/datasets/{dataset_id}/validate`
-- `DELETE /projects/{project_id}/datasets/{dataset_id}`
+- `POST /projects/{project_id}/deletions/preview`、`POST /projects/{project_id}/deletions`（数据集与项目删除的唯一路径：确认名 + OWNER + 幂等 + tombstone + 级联清理；没有直接的 DELETE /datasets 端点）
 - `POST /projects/{project_id}/analyses`
 - `GET /projects/{project_id}/analyses/{analysis_id}`
 - `GET /projects/{project_id}/feedback/{feedback_id}`

@@ -1392,12 +1392,12 @@ def download_project_export(project_id: str, export_id: str, user: dict = Depend
     )
 
 
-@app.delete('/api/v1/projects/{project_id}/datasets/{dataset_id}', status_code=204)
-def delete_dataset(project_id: str, dataset_id: str, user: dict = Depends(require_project_analyst)):
-    dataset = datasets.get(dataset_id)
-    if not dataset or dataset.get('project_id') != project_id:
-        raise HTTPException(404, detail={'code': 'dataset_not_found'})
-    repository.delete_dataset(dataset_id)
-    return Response(status_code=204)
+# 数据集删除**没有**直接 DELETE 端点(工程计划 7.5):唯一删除路径是
+# POST /deletions(preview + confirm_name + Idempotency-Key + OWNER + tombstone +
+# 级联清理 + 核验为零)。此前这里还有一个 DELETE /datasets/{id},直接调
+# repository.delete_dataset 只删数据集行本身——feedback/segments/risk_findings/
+# topic_evidence/task_evidence 全部残留,不写 tombstone、不失效导出、不取消作业,
+# 权限还只是 analyst 而非 OWNER。datasets 表没有任何外键指向它,数据库层
+# 完全不拦;规格里也从来没有这个端点。规格外的第二删除路径就是给 10.4 留后门。
 
 
