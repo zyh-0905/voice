@@ -290,6 +290,11 @@ class InMemoryRepository:
 
     def save_topic_correction(self, project_id, record):
         value = deepcopy(record)
+        # project_id 是调用方传的参数,不在 record 里:SQL 版在构造时盖章,
+        # 内存版此前不盖——于是 delete_topics_for_run 按 item['project_id']
+        # 过滤时直接 KeyError。此前没炸只是因为删除用例从未在同一个仓储里
+        # 先执行过校正(测试文件按字母序,corrections 排在 deletions 之后)。
+        value['project_id'] = project_id
         self.topic_corrections.append(value)
         return value
 

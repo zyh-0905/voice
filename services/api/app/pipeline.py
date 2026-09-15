@@ -131,6 +131,10 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
             summary=candidate.summary,
             severity=candidate.severity,
             evidence=evidence,
+            # origin/needs_review 从命名候选带过来:此前 draft 不收这两个字段,
+            # topic_versions 的对应列只能吃 None/默认值——AI 来源链整条是断的。
+            origin=getattr(candidate, 'origin', None),
+            needs_review=bool(getattr(candidate, 'needs_review', True)),
         ))
     return drafts
 

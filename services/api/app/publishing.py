@@ -32,6 +32,13 @@ class TopicDraft:
     summary: str
     severity: str
     evidence: list[EvidenceRef] = field(default_factory=list)
+    # 命名来源的原始标记(llm 的 provider 声明:http/mock/rule_fallback)。
+    # 存库保持原值,API 层再映射到前端契约的 ai/rule/human/unknown——
+    # 库里留的是审计事实,接口说的是展示词汇。
+    origin: str | None = None
+    # 命名器自报的待复核标记(8.5 契约字段);降级候选恒为 True。
+    # 此前这个字段在 draft 就丢了,topic_versions.needs_review 只能吃默认值。
+    needs_review: bool = True
 
 
 class AnalysisStore(Protocol):
@@ -71,6 +78,8 @@ def build_revision_snapshot(
             'summary': draft.summary,
             'severity': draft.severity,
             'feedback_count': len(draft.evidence),
+            'origin': draft.origin,
+            'needs_review': draft.needs_review,
         }
         evidence_by_topic[draft.topic_id] = [
             {

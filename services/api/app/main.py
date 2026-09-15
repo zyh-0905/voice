@@ -662,6 +662,23 @@ def _topic_cpi(topic: Mapping, total: int) -> dict | None:
     return _cpi_view(result)
 
 
+def _ai_origin_label(raw_origin) -> str:
+    """topic_versions.origin 的原始值 → 前端契约的 AiOrigin(ai/rule/human/unknown)。
+
+    库里存的是审计事实(provider 声明:http/自定义 provider 名/mock/rule_fallback/
+    human);接口说的是展示词汇。此前接口硬编码 'rule',与真实命名来源无关。
+    """
+    value = str(raw_origin or '').strip().lower()
+    if value == 'rule_fallback':
+        return 'rule'
+    if value == 'human':
+        return 'human'
+    if value in ('', 'mock', 'unknown'):
+        # mock 是演示路径(DemoNotice 已标注),归入 unknown 而不是冒充 ai/rule
+        return 'unknown'
+    return 'ai'
+
+
 @app.get('/api/v1/projects/{project_id}/topics')
 def list_topics(project_id: str, user: dict = Depends(require_project_access)):
     """主题洞察列表:优先返回已发布 revision(W11),无发布时回退合成演示数据。"""
@@ -692,7 +709,12 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
                              # 于是真实模式下证据面板的「原文与来源」永远空白,而 mock 有内容——
                              # 前端契约与后端实现各说各话,只有真连一次才看得出来。
                              'quotes': _evidence_quotes(published, t['topic_id'], snapshot.get('revision')),
-                             'aiProvenance': {'origin': 'rule', 'needsReview': True, 'reviewRecord': None}},
+                             # AI 来源从 topic_versions 现算:此前硬编码
+                             # origin='rule'/needsReview=True,与真实命名来源无关
+                             # (UI-09:候选冒充确认)。
+                             'aiProvenance': {'origin': _ai_origin_label(t.get('origin')),
+                                              'needsReview': bool(t.get('needs_review', True)),
+                                              'reviewRecord': None}},
             })
         return {'items': rows, 'total': len(rows)}
     rows = [
