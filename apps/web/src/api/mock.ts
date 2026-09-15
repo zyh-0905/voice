@@ -28,6 +28,7 @@ import type {
   ReviewRecord,
   ReviewWindow,
   RiskItem,
+  SummaryFilters,
   SummaryResponse,
   TaskEvent,
   TaskStatus,
@@ -822,17 +823,29 @@ export const mockApi: ApiClient = {
     }
     return `${lines.join('\n')}\n`
   },
-  async summary(projectId: string) {
+  async summary(projectId: string, filters?: SummaryFilters) {
     await delay(300)
-    // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)
-    return { ...SYNTHETIC_SUMMARY, project_id: projectId }
+    // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)。
+    // 接受筛选(接口与真实 client 同面)但数值不随之变化——mock 数据本就是合成
+    // 常数;回显请求的 filters,让「筛选在表单里生效」的联动与真实模式一致。
+    return {
+      ...SYNTHETIC_SUMMARY,
+      project_id: projectId,
+      filters: {
+        start: filters?.start ?? SYNTHETIC_SUMMARY.filters.start,
+        end: filters?.end ?? SYNTHETIC_SUMMARY.filters.end,
+        channel: filters?.channel ?? null,
+        product: filters?.product ?? null,
+      },
+    }
   },
   async topics() {
     await delay(300)
     return SYNTHETIC_TOPICS.map(topicRow)
   },
-  async trend() {
+  async trend(_projectId: string, _filters?: SummaryFilters) {
     await delay(300)
+    // 合成点列不随筛选变化(与 summary 同口径:接口同面,数值是合成常数)
     return SYNTHETIC_TREND
   },
   async taskSummaries() {

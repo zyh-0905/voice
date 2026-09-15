@@ -601,7 +601,8 @@ def project_summary(
     指定不存在或外项目 run 返回 404,不悄悄换成默认 run。
     """
     from .summary import SummaryRequestError, build_summary
-    if not repository.get_project(project_id):
+    project = repository.get_project(project_id)
+    if not project:
         raise HTTPException(404, detail={'code': 'project_not_found'})
     try:
         return build_summary(
@@ -609,6 +610,8 @@ def project_summary(
             run_id=run_id, revision=revision,
             filters={'start': start, 'end': end, 'channel': channel, 'product': product},
             repository=repository,
+            # 裸日期筛选按项目时区解释(此前一律按 UTC,+08:00 数据跨日边界偏 8 小时)
+            timezone_name=project.get('timezone'),
         )
     except SummaryRequestError as exc:
         raise HTTPException(exc.status_code, detail={'code': exc.code})
@@ -872,17 +875,30 @@ def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | Non
             'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []),
             'revision': snapshot.get('revision')}
 @app.get('/api/v1/projects/{project_id}/trend')
-def list_trend(project_id: str, user: dict = Depends(require_project_access)):
-    """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
-    if not repository.get_project(project_id):
+def list_trend(
+    project_id: str,
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    channel: str | None = Query(None),
+    product: str | None = Query(None),
+    user: dict = Depends(require_project_access),
+):
+    """反馈趋势:有已发布 run 时按冻结输入的 occurred_at 聚合每日计数。
+
+    此前这里返回硬编码的合成点列——真实模式下趋势图与上传数据无关,
+    却看起来完全是真数据。无已发布 run 时仍回退合成点列(演示路径,
+    含一个缺失断点);窗口/渠道/产品筛选与 summary 同口径。
+    """
+    from .summary import build_trend
+    project = repository.get_project(project_id)
+    if not project:
         raise HTTPException(404, detail={'code': 'project_not_found'})
-    points = [
-        {'date': '08-26', 'value': 142}, {'date': '08-27', 'value': 151},
-        {'date': '08-28', 'value': None}, {'date': '08-29', 'value': 158},
-        {'date': '08-30', 'value': 149}, {'date': '08-31', 'value': 161},
-        {'date': '09-01', 'value': 155},
-    ]
-    return {'items': points, 'total': len(points)}
+    return build_trend(
+        list(analyses.values()), project_id,
+        start=start, end=end, channel=channel, product=product,
+        repository=repository,
+        timezone_name=project.get('timezone'),
+    )
 def _risk_view(finding: dict) -> dict:
     """风险候选的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。
 

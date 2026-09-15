@@ -254,9 +254,6 @@ const session = useSessionStore()
 const project = useProjectStore()
 
 const projectId = computed(() => String(route.params.p || project.selectedProjectId))
-const { summary, topics, trend, taskSummaries, recentBatches, risks, status, refreshing, stale, staleAt, error, reload } = useOverviewData(projectId)
-const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
-
 // —— 筛选:URL 只保存 ID、时间和枚举(风格规范 9.3) ——
 function readFiltersFromQuery(): FilterValues {
   return {
@@ -268,6 +265,16 @@ function readFiltersFromQuery(): FilterValues {
   }
 }
 const filters = ref<FilterValues>(readFiltersFromQuery())
+// 服务端筛选只认 start/end/channel/product(7.7);run 选择当前只有本 run 一项,
+// 进不了请求参数(URL 状态保留,供主题表后续接 run 维度)
+const summaryFilters = computed(() => ({
+  start: filters.value.start,
+  end: filters.value.end,
+  channel: filters.value.channel,
+  product: filters.value.product,
+}))
+const { summary, topics, trend, taskSummaries, recentBatches, risks, status, refreshing, stale, staleAt, error, reload } = useOverviewData(projectId, { filters: summaryFilters })
+const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
 
 const runs = computed(() => {
   const current = summary.value
@@ -294,12 +301,19 @@ function applyFilters(next: FilterValues) {
   if (next.channel) query.channel = next.channel
   if (next.product) query.product = next.product
   void router.replace({ query })
-  // 筛选变化须取消旧请求并按新条件重载(风格规范 9.3)
-  reload()
+  // 重载由 useOverviewData 的 filters watch 触发(取消旧请求 + 按新条件请求,
+  // 风格规范 9.3);此前在这里手动 reload() 却不带筛选——四卡从不随筛选变化。
 }
 function clearFilters() {
   applyFilters({ runId: null, start: null, end: null, channel: null, product: null })
 }
+// 浏览器前进/后退:URL 变了但 applyFilters 不会被调,筛选必须从 query 重放
+watch(() => route.query, () => {
+  const fromQuery = readFiltersFromQuery()
+  if (JSON.stringify(fromQuery) !== JSON.stringify(filters.value)) {
+    filters.value = fromQuery
+  }
+})
 
 function metricHref(base: string, extra: string): string {
   const query = new URLSearchParams()

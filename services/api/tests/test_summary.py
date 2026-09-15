@@ -168,3 +168,72 @@ def test_endpoint_requires_project_access():
     body = response.json()
     assert body['insight_metrics']['scope'] == 'selected_analysis'
     assert body['action_metrics']['scope'] == 'project_all_runs'
+
+
+def test_bare_dates_use_the_project_timezone():
+    """裸日期按项目时区解释:前端日期选择器发 YYYY-MM-DD。
+
+    按 UTC 解释时「9 月 1 日」不含 +08:00 的 1 日 0~8 点——同一天筛选
+    偏 8 小时。这里的行落在 UTC 8 月 31 日 20 点(= +08:00 的 9 月 1 日):
+    旧口径(UTC)会把它挡在 start 之外,新口径按项目时区应算进去。
+    end 同理取次日零点,所选日期含当日。
+    """
+    rows = [
+        {'text': 'utc-aug31-20h', 'occurred_at': '2026-08-31T20:00:00+00:00'},
+        {'text': 'sept1-morning', 'occurred_at': '2026-09-01T02:00:00+08:00'},
+    ]
+    summary = _summary([_run(rows=rows)], [], 'p',
+                       filters={'start': '2026-09-01', 'end': '2026-09-01'},
+                       now=AS_OF, timezone_name='Asia/Shanghai')
+    assert summary['denominator'] == 2  # [9-01 00:00, 9-02 00:00) 项目本地
+
+
+def test_bare_dates_still_utc_without_timezone():
+    """不传项目时区时保持旧口径(UTC),显式完整时间戳也原样解析。"""
+    rows = [{'text': 'utc-aug31-20h', 'occurred_at': '2026-08-31T20:00:00+00:00'}]
+    summary = _summary([_run(rows=rows)], [], 'p',
+                       filters={'start': '2026-09-01', 'end': '2026-09-01'},
+                       now=AS_OF)
+    assert summary['denominator'] == 0  # UTC 解释:行在 9-01 之前
+
+
+# —— /trend:真实聚合(此前是硬编码合成点列,真实模式也发假数据) ——
+
+def test_trend_aggregates_published_run_by_day():
+    rows = [
+        {'text': 'a', 'occurred_at': '2026-09-01T10:00:00+08:00'},
+        {'text': 'b', 'occurred_at': '2026-09-01T18:00:00+08:00'},
+        {'text': 'c', 'occurred_at': '2026-09-02T10:00:00+08:00'},
+        {'text': 'no-time'},  # 无时间行不进点列,不造 0
+    ]
+    from app.summary import build_trend
+    repository = new_repository()
+    run = _run(rows=rows)
+    seed_run_feedback(repository, run)
+    publish_revision_rows(repository, run)
+    trend = build_trend([run], 'p', repository=repository,
+                        timezone_name='Asia/Shanghai')
+    assert trend['items'] == [{'date': '09-01', 'value': 2}, {'date': '09-02', 'value': 1}]
+    assert trend['total'] == 2
+
+
+def test_trend_without_published_run_falls_back_to_synthetic():
+    from app.summary import build_trend, SYNTHETIC_TREND_POINTS
+    # 没有任何 run(_run 不播种 revision)→ 合成演示点列
+    trend = build_trend([], 'p', repository=new_repository())
+    assert trend['items'] == SYNTHETIC_TREND_POINTS
+
+
+def test_trend_respects_the_window_filter():
+    rows = [
+        {'text': 'in', 'occurred_at': '2026-09-02T10:00:00+08:00'},
+        {'text': 'out', 'occurred_at': '2026-09-05T10:00:00+08:00'},
+    ]
+    from app.summary import build_trend
+    repository = new_repository()
+    run = _run(rows=rows)
+    seed_run_feedback(repository, run)
+    publish_revision_rows(repository, run)
+    trend = build_trend([run], 'p', repository=repository,
+                        start='2026-09-01', end='2026-09-03', timezone_name='Asia/Shanghai')
+    assert trend['items'] == [{'date': '09-02', 'value': 1}]
