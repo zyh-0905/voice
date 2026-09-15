@@ -221,6 +221,13 @@ class Review(Base):
     metrics: Mapped[dict | None] = mapped_column(JSON)
     effect_status: Mapped[str | None] = mapped_column(String(32))
     limitations: Mapped[list | None] = mapped_column(JSON, default=list)
+    # W17 口径字段:POST 响应一直有,但这四列此前不在表里——SQL 仓储按列过滤,
+    # GET /reviews/{id} 于是永远丢字段,前端复盘详情直接 TypeError(缺列是
+    # SQL-only 缺陷,内存仓储照收,全套件绿)。
+    comparability: Mapped[str | None] = mapped_column(String(32))
+    reasons: Mapped[list | None] = mapped_column(JSON)
+    filters: Mapped[dict | None] = mapped_column(JSON)
+    alignment_confirmed: Mapped[bool | None] = mapped_column(Boolean, default=False)
 
 
 class Feedback(Base):

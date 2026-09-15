@@ -470,21 +470,29 @@ if not repository.list_entities('tasks', 'demo-project'):
     ):
         repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'idempotency_keys':[]})
 if not repository.list_entities('reviews', 'demo-project'):
-    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条
+    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条。
+    # comparability/reasons/filters/alignment_confirmed 也在种子里:这四列
+    # 落表之后(0020),种子不补字段的话演示库的复盘详情一样缺列。
     repository.create_entity('reviews', {
         'id':'review-001','project_id':'demo-project','run_id':'run_demo_001','revision':1,
         'topic_version_ids':['delivery'], 'task_id':None,
-        'before':{'n':168,'N':1000}, 'after':{'n':102,'N':1000},
+        'before':{'n':168,'N':1000,'start':'2026-08-01','end':'2026-08-31','untimed':False},
+        'after':{'n':102,'N':1000,'start':'2026-09-01','end':'2026-09-30','untimed':False},
         'metrics':{'count_change':-66,'share_before_pp':16.8,'share_after_pp':10.2,'share_delta_pp':-6.6,'relative_share_change':-0.3929,'comparable':True},
         'effect_status':'OBSERVED_CHANGE', 'limitations':[],
+        'comparability':'ok', 'reasons':[], 'filters':{},
+        'alignment_confirmed':True,
         'status':'pending','finding':'复盘:物流体验占比变化','confirmed_by':None,
     })
     repository.create_entity('reviews', {
         'id':'review-002','project_id':'demo-project','run_id':'run_demo_001','revision':1,
         'topic_version_ids':['refund'], 'task_id':None,
-        'before':{'n':0,'N':0}, 'after':{'n':12,'N':400},
+        'before':{'n':0,'N':0,'start':'2026-08-01','end':'2026-08-31','untimed':False},
+        'after':{'n':12,'N':400,'start':'2026-09-01','end':'2026-09-15','untimed':False},
         'metrics':{'count_change':12,'share_before_pp':None,'share_after_pp':None,'share_delta_pp':None,'relative_share_change':None,'comparable':False},
         'effect_status':'INSUFFICIENT_DATA', 'limitations':['数据不足,暂不输出变化结论'],
+        'comparability':'insufficient', 'reasons':['分母为 0,无前窗口可比数据'],
+        'filters':{}, 'alignment_confirmed':True,
         'status':'pending','finding':'复盘:退款进度(数据不足)','confirmed_by':None,
     })
 def _project(pid): return repository.get_project(pid)

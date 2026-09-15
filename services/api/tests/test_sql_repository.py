@@ -133,6 +133,30 @@ def test_review_metrics_persist(repo):
     assert stored['effect_status'] == 'OBSERVED_CHANGE'
 
 
+def test_review_comparability_fields_persist(repo):
+    """复盘口径四字段必须真的往返(0020 之前它们不在表里)。
+
+    POST /reviews 的响应一直带 comparability/reasons/filters/alignment_confirmed,
+    但列不在 reviews 表上——SQL 仓储按列过滤,GET 读回永远缺字段,前端复盘
+    详情 `reasons.length` 直接 TypeError。内存仓储照收,全套件绿:这是
+    「SQL-only 缺陷」的标准形态,只能这样钉住。
+    """
+    repo.create_entity('reviews', {
+        'id': 'rv2', 'project_id': 'p', 'run_id': 'run', 'revision': 1,
+        'topic_version_ids': ['t1'], 'before': {'n': 168, 'N': 1000},
+        'after': {'n': 102, 'N': 1000},
+        'metrics': {'comparable': False},
+        'effect_status': 'INSUFFICIENT_DATA', 'limitations': [], 'status': 'pending',
+        'comparability': 'insufficient', 'reasons': ['分母为 0'],
+        'filters': {'channel': 'phone'}, 'alignment_confirmed': True,
+    })
+    stored = repo.list_entities('reviews', 'p')[0]
+    assert stored['comparability'] == 'insufficient'
+    assert stored['reasons'] == ['分母为 0']
+    assert stored['filters'] == {'channel': 'phone'}
+    assert stored['alignment_confirmed'] is True
+
+
 # —— 迁移 0012:成员与项目设置与 InMemory 行为对齐 ——
 
 def test_memberships_round_trip(repo):
