@@ -66,6 +66,11 @@ def test_topics_report_the_real_naming_provenance():
         provenance = row['evidence']['aiProvenance']
         assert provenance['origin'] == 'unknown', provenance  # mock 命名
         assert provenance['needsReview'] is True  # mock 自报待复核
+        # 7.5 复盘契约要 topic_version_ids:主题行不带版本行 id 的话,
+        # 复盘向导只能写死(此前 revision=1、主题三条硬编码的根因)
+        assert row.get('versionId'), row
+        version = repository.get_topic_version(project_id, row['versionId'])
+        assert version is not None and version['topic_id'] == row['id']
 
 
 def test_correction_keeps_provenance_and_create_is_human():

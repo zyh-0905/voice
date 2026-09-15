@@ -2,7 +2,7 @@
   <div class="vl-page">
     <PageHeader :icon="TrendCharts" title="效果复盘" description="选择 run、revision 与两个时间窗,确认主题映射后生成固定口径的复盘结果。">
       <template #actions>
-        <VlButton v-if="canAct" variant="primary" data-testid="review-create" @click="wizardOpen = true">创建复盘</VlButton>
+        <VlButton v-if="canAct" variant="primary" data-testid="review-create" @click="openWizard">创建复盘</VlButton>
       </template>
     </PageHeader>
 
@@ -138,7 +138,7 @@
 // ReviewsPage — 工程计划 W18:记录表 + 创建向导;复盘结果不可变;
 // 向导只收两个等长不重叠的时间窗与人工映射确认,n/N 由服务端从 run 推导;
 // 不可比不显示任何变化数字,low_sample 只展示数量不给结论。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TrendCharts } from '@element-plus/icons-vue'
 import PageHeader from '../../components/common/PageHeader.vue'
@@ -148,7 +148,7 @@ import EmptyState from '../../components/common/EmptyState.vue'
 import { ApiHttpError, apiClient } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
 import { comparabilityLabel, effectStatusLabel } from '../../lib/ui-status'
-import type { ReviewRecord } from '../../types/domain'
+import type { AnalysisRun, ReviewRecord, TopicRow } from '../../types/domain'
 
 const route = useRoute()
 const router = useRouter()
@@ -165,7 +165,15 @@ const error = ref('')
 async function load() {
   status.value = 'loading'
   try {
-    records.value = await client.listReviews(projectId.value)
+    // 复盘向导的选项也从服务端取:run 列表与主题列表并行,失败不阻塞复盘记录表
+    const [reviewRecords, runList, topicRows] = await Promise.all([
+      client.listReviews(projectId.value),
+      client.listAnalyses(projectId.value).catch(() => [] as AnalysisRun[]),
+      client.topics(projectId.value).catch(() => [] as TopicRow[]),
+    ])
+    records.value = reviewRecords
+    runs.value = runList
+    topics.value = topicRows
     status.value = records.value.length ? 'success' : 'empty'
   } catch (err) {
     status.value = 'error'
@@ -174,24 +182,36 @@ async function load() {
 }
 onMounted(load)
 
-const runOptions = computed(() => [
-  { id: records.value[0]?.run_id ?? 'run_demo_001', label: `${records.value[0]?.run_id ?? 'run_demo_001'} · revision ${records.value[0]?.revision ?? 1}` },
-])
-const topicOptions = [
-  { id: 'delivery', title: '物流体验' },
-  { id: 'refund', title: '退款进度' },
-  { id: 'product', title: '产品使用' },
-]
+const runs = ref<AnalysisRun[]>([])
+const topics = ref<TopicRow[]>([])
+
+// 向导选项此前写死(run_demo_001/revision 1/三条主题),真实模式下提交必 404。
+// 现在:run 选项来自 listAnalyses(已完成的)+ 主题行自带的当前已发布 run;
+// 主题与 revision 以 listTopics 为准——它返回的就是最新已发布 run 的主题。
+const currentRun = computed(() => topics.value[0]?.evidence.runId ?? null)
+const currentRevision = computed(() => topics.value[0]?.evidence.revision ?? null)
+const runOptions = computed(() => {
+  const done = runs.value.filter(r => r.status === 'done').map(r => r.id)
+  const options: Array<{ id: string; revision: number | null }> = done
+    .filter(id => id !== currentRun.value)
+    .map(id => ({ id, revision: null }))
+  if (currentRun.value) {
+    options.unshift({ id: currentRun.value, revision: currentRevision.value })
+  }
+  return options.map(o => ({ id: o.id, label: `${o.id} · revision ${o.revision ?? '—'}` }))
+})
+const topicOptions = computed(() => topics.value)
 
 const wizardOpen = ref(false)
 const wizardStep = ref(1)
 const wizardError = ref('')
 const creating = ref(false)
-// 默认两窗等长且不重叠([08-01,08-31) 与 [09-01,10-01)),映射需人工勾选确认
+// 默认两窗等长且不重叠([08-01,08-31) 与 [09-01,10-01)),映射需人工勾选确认;
+// run/主题/revision 默认值在打开向导时按服务端状态填(openWizard)
 const wizard = ref({
-  runId: runOptions.value[0]?.id ?? 'run_demo_001',
+  runId: '',
   revision: 1,
-  topicId: 'delivery',
+  topicId: '',
   beforeStart: '2026-08-01',
   beforeEnd: '2026-08-31',
   afterStart: '2026-09-01',
@@ -199,7 +219,29 @@ const wizard = ref({
   alignmentConfirmed: false,
 })
 
-const selectedTopicTitle = computed(() => topicOptions.find(t => t.id === wizard.value.topicId)?.title ?? '—')
+function openWizard() {
+  wizard.value.alignmentConfirmed = false
+  wizardError.value = ''
+  wizardStep.value = 1
+  wizardOpen.value = true
+}
+
+// 默认值跟随服务端数据:run/主题列表是异步的,打开向导时可能还没到;
+// 用户已改过的字段不动,空值或失效值(该选项已不在列表里)回落到首项
+watch([currentRun, topicOptions], () => {
+  if (!wizard.value.runId || !runOptions.value.some(o => o.id === wizard.value.runId)) {
+    wizard.value.runId = currentRun.value ?? runOptions.value[0]?.id ?? ''
+  }
+  if (!wizard.value.topicId || !topicOptions.value.some(t => t.id === wizard.value.topicId)) {
+    wizard.value.topicId = topicOptions.value[0]?.id ?? ''
+  }
+}, { immediate: true })
+
+const selectedTopicTitle = computed(() =>
+  topicOptions.value.find(t => t.id === wizard.value.topicId)?.title ?? '—')
+/** 选中主题的版本行 id(7.5 复盘契约的 topic_version_ids);演示回退行可能没有 */
+const selectedTopicVersionId = computed(() =>
+  topicOptions.value.find(t => t.id === wizard.value.topicId)?.versionId ?? null)
 
 /** date 输入只到日:按 UTC 零点解释,避免本地时区把窗口端点移出等长 */
 function toIso(date: string): string {
@@ -224,6 +266,10 @@ const windowIssues = computed(() => {
 
 function goConfirm() {
   const w = wizard.value
+  if (!w.runId || !w.topicId) {
+    wizardError.value = '请先选择分析 run 与主题(尚无已发布的分析时无法创建复盘)。'
+    return
+  }
   if (!w.beforeStart || !w.beforeEnd || !w.afterStart || !w.afterEnd) {
     wizardError.value = '请完整选择两个窗口的起止日期'
     return
@@ -239,10 +285,13 @@ function goConfirm() {
 async function submitReview() {
   creating.value = true
   try {
+    // revision 与 topic_version_ids 都取自服务端返回的主题行——写死 revision=1
+    // 在真实模式下必 404(第二个 run 的 revision 不是 1)
+    const topicRow = topicOptions.value.find(t => t.id === wizard.value.topicId)
     const created = await client.createReview(projectId.value, {
       run_id: wizard.value.runId,
-      revision: wizard.value.revision,
-      topic_version_ids: [wizard.value.topicId],
+      revision: topicRow?.evidence.revision ?? wizard.value.revision,
+      topic_version_ids: topicRow?.versionId ? [topicRow.versionId] : [],
       before: { start: toIso(wizard.value.beforeStart), end: toIso(wizard.value.beforeEnd) },
       after: { start: toIso(wizard.value.afterStart), end: toIso(wizard.value.afterEnd) },
       alignment_confirmed: wizard.value.alignmentConfirmed,
@@ -266,8 +315,8 @@ function openReview(record: ReviewRecord) {
 }
 
 function topicLabel(record: ReviewRecord): string {
-  const id = record.topic_version_ids[0]
-  return topicOptions.find(t => t.id === id)?.title ?? '复盘主题'
+  const versionId = record.topic_version_ids[0]
+  return topics.value.find(t => t.versionId === versionId)?.title ?? '复盘主题'
 }
 /** 只有 ok 才允许出现变化数字:low_sample 保留数量但不给结论,insufficient 一律 '—' */
 function deltaLabel(record: ReviewRecord): string {

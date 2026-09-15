@@ -713,6 +713,9 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
                 'trend': None,
                 'cpiDisplayValue': (cpi or {}).get('display_value'),
                 'reviewState': 'pending',
+                # 复盘创建契约要 topic_version_ids(7.5):主题行不带版本 id 的话,
+                # 向导只能写死——这是复盘向导此前三处硬编码的根因之一。
+                'versionId': t.get('version_id'),
                 'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
                              'revision': snapshot['revision'], 'summary': t.get('summary', ''),
                              'cpi': cpi,

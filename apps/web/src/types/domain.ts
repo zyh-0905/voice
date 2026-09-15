@@ -157,6 +157,8 @@ export interface TopicRow {
   cpiDisplayValue: string | null
   reviewState: TopicReviewState
   evidence: EvidenceContext
+  /** 该主题当前 revision 的版本行 id(7.5 复盘契约的 topic_version_ids 来源);演示回退行可能缺省 */
+  versionId?: string | null
 }
 
 // —— 趋势、待办与批次 ——
