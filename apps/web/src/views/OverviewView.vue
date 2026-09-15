@@ -6,7 +6,7 @@
       </template>
     </PageHeader>
 
-    <DemoNotice source-kind="synthetic" :computed-at="displayComputedAt" />
+    <DemoNotice :source-kind="session.isDemo ? 'synthetic' : 'real'" :computed-at="displayComputedAt" />
 
     <div class="vl-overview__filters">
       <FilterBar
