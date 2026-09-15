@@ -935,6 +935,8 @@ def list_risks(project_id: str, user: dict = Depends(require_project_access)):
 class RiskReviewRequest(BaseModel):
     decision: str          # confirmed | excluded | reopened
     reason: str = Field(min_length=1)
+    # 6.5:可变对象的状态操作必须带乐观锁版本。此前可选且「不发就不查」——
+    # 客户端漏字段等于无保护地 last-write-wins。
     expected_version: int | None = None
 
 # 裁决动作 → 复核状态;重新审查回到待复核
@@ -945,6 +947,8 @@ def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dic
     """W14 风险裁决:确认/排除/重新审查;理由必填;版本冲突 409;写审计事件。
 
     候选不是既成事实:确认意味着人工核验通过,而不是系统判定事故。
+    版本检查与写入在同一事务内条件执行(见仓储 update_risk_finding):
+    端点先读后写的两段式在并发下两个裁决都能通过检查。
     """
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
@@ -953,20 +957,22 @@ def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dic
         raise HTTPException(422, detail={'code': 'invalid_decision', 'allowed': ['confirmed', 'excluded', 'reopened']})
     if not req.reason.strip():
         raise HTTPException(422, detail={'code': 'reason_required'})
+    if req.expected_version is None:
+        raise HTTPException(422, detail={'code': 'expected_version_required'})
     finding = repository.get_risk_finding(project_id, risk_id)
     if finding is None:
         raise HTTPException(404, detail={'code': 'risk_not_found'})
-    version = int(finding.get('version') or 1)
-    if req.expected_version is not None and int(req.expected_version) != version:
-        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    # CAS 成功即 expected == 行内当前版本(同事务带行锁校验),新版本据此递增
     updated = repository.update_risk_finding(project_id, risk_id, {
         'review_state': decision,
         'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else finding.get('status', 'OPEN'),
-        'version': version + 1,
+        'version': int(req.expected_version) + 1,
         'reviewer_id': user.get('id', 'demo-user'),
         'review_reason': req.reason.strip(),
         'reviewed_at': datetime.now(timezone.utc).isoformat(),
-    })
+    }, expected_version=int(req.expected_version))
+    if updated is None:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
     _record_audit(project_id, 'risk.review', user, {'risk_id': risk_id, 'decision': decision})
     return _risk_view(updated)
 

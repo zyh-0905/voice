@@ -262,6 +262,8 @@ export interface RiskItem {
   severity: string
   reviewState: 'pending' | 'confirmed' | 'excluded'
   status: string
+  /** 乐观锁版本(6.5):裁决必须带上,服务端按此条件更新;缺失即 422 */
+  version: number
 }
 
 export interface DatasetBatch {

@@ -216,9 +216,9 @@ const SYNTHETIC_TASKS: TaskSummary[] = [
 ]
 
 const SYNTHETIC_RISKS: RiskItem[] = [
-  { id: 'risk-001', title: '退款率异常', rule: 'R-204 · 近30天', severity: 'HIGH', reviewState: 'pending', status: 'OPEN' },
-  { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN' },
-  { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
+  { id: 'risk-001', title: '退款率异常', rule: 'R-204 · 近30天', severity: 'HIGH', reviewState: 'pending', status: 'OPEN', version: 1 },
+  { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN', version: 1 },
+  { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS', version: 2 },
 ]
 
 /** W16 合成项目成员:派发任务的负责人只能来自成员接口;owner-1 沿用既有 E2E 流程。 */
@@ -411,7 +411,11 @@ class MockRiskStore {
     if (!risk) throw new ApiHttpError(404, 'risk_not_found')
     if (!body.reason.trim()) throw new ApiHttpError(422, 'reason_required')
     const version = risk.version ?? 1
-    if (body.expected_version !== undefined && body.expected_version !== version) {
+    if (body.expected_version === undefined) {
+      // 与后端同口径(6.5):缺版本 = 422,而不是无锁静默覆盖
+      throw new ApiHttpError(422, 'expected_version_required')
+    }
+    if (body.expected_version !== version) {
       throw new ApiHttpError(409, 'VERSION_CONFLICT')
     }
     const next = body.decision === 'confirmed' ? 'confirmed' : body.decision === 'excluded' ? 'excluded' : 'pending'
