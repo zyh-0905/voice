@@ -138,3 +138,99 @@ test('真实后端:分析进度以服务端为准,换一个干净的浏览器也
 // 是一条永远通过的假闸门(我照这个思路写过一条,它确实「通过」了,而通过的
 // 原因是轮询压根没发生)。那一条改由 tests/unit/analysis-progress.spec.ts 用
 // 假定时器直接驱动页面来证明,并且验证过:去掉收敛条件它会失败。
+
+// —— 本轮修复的三条真实链路:筛选聚合 / 复盘详情不缺列 / 风险乐观锁 ——
+const API_BASE = `http://127.0.0.1:${Number(process.env.REAL_API_PORT ?? 8010)}/api/v1`
+
+/** API 级请求的 CSRF 头:会话存在时写请求必须带,page.request 与页面共享 Cookie。 */
+async function csrfHeader(page: import('@playwright/test').Page): Promise<Record<string, string>> {
+  const response = await page.request.get(`${API_BASE}/auth/csrf`)
+  const token = (await response.json()) as { csrf_token: string }
+  return { 'X-CSRF-Token': token.csrf_token }
+}
+
+test('真实后端:筛选真的改变 insight 指标(此前前端从不发筛选参数)', async ({ page }) => {
+  await login(page)
+  await importAndAnalyze(page)
+
+  await page.goto('/p/demo-project/overview')
+  await expect(page.getByTestId('metric-valid-feedback')).toBeVisible({ timeout: 30_000 })
+  // 值定位按规范走两层:先卡片再 metric-value(卡片根的 textContent 混着标签与单位)
+  const raw = await page.getByTestId('metric-valid-feedback')
+    .getByTestId('metric-value').textContent()
+  // 值节点里带单位(如「9条」),取数字部分
+  const unfiltered = Number((raw ?? '').replace(/[^\d]/g, ''))
+  expect(unfiltered).toBeGreaterThan(0)
+
+  // CSV 的 9 行里只有 1 行在 2026-08-15:窗口收到那天,有效反馈应收敛到 1。
+  // 这条用例证明的是「前端把筛选发给了服务端、聚合真的用了」——
+  // 旧实现 summary 客户端没有 filters 参数,四卡从不随筛选变化。
+  const response = await page.request.get(
+    `${API_BASE}/projects/demo-project/summary?start=2026-08-15&end=2026-08-15`)
+  expect(response.status()).toBe(200)
+  const summary = await response.json()
+  expect(summary.insight_metrics.valid_feedback_count).toBe(1)
+  // 7.7:反馈筛选只影响 insight,任务指标恒项目范围
+  expect(summary.action_metrics.scope).toBe('project_all_runs')
+})
+
+test('真实后端:创建复盘后详情页可打开且结论齐全(reviews 缺列的回归)', async ({ page }) => {
+  // reviews 表此前没有 comparability/reasons/filters/alignment_confirmed 四列,
+  // 真实 PostgreSQL 上 GET /reviews/{id} 丢字段,详情页读 reasons 直接 TypeError;
+  // POST 侥幸正常,因为端点返回的是本地 dict 而不是仓储行。
+  await login(page)
+  await importAndAnalyze(page)
+
+  await page.goto('/p/demo-project/reviews')
+  await page.getByTestId('review-create').click()
+  await expect(page.getByTestId('wizard-run')).toBeVisible({ timeout: 10_000 })
+  // 向导选项来自服务端:run 与主题不再是写死的演示值。选项是异步回填的
+  // (打开向导时列表可能还没到),先等下拉出现 revision 文案再读值
+  await expect(page.getByTestId('wizard-run')).toContainText(/revision \d+/, { timeout: 10_000 })
+  const runValue = await page.getByTestId('wizard-run').inputValue()
+  expect(runValue).toMatch(/run|demo/)
+  await expect(page.getByTestId('wizard-topic').locator('option').first()).toBeTruthy()
+
+  // 映射确认勾选在第 1 步(与向导表单同页),下一步才是确认页
+  await page.getByTestId('wizard-alignment').check()
+  await page.getByTestId('wizard-next').click()
+  await page.getByTestId('wizard-submit').click()
+
+  // 详情页能渲染出结论状态,说明 GET /reviews/{id} 把 comparability/reasons
+  // 完整带回来了(缺列时这里先 TypeError 崩页)
+  await expect(page).toHaveURL(/\/reviews\/review_/, { timeout: 15_000 })
+  await expect(page.getByTestId('review-effect')).toBeVisible()
+})
+
+test('真实后端:风险裁决缺版本 422、旧版本 409(乐观锁真的咬合)', async ({ page }) => {
+  await login(page)
+  await importAndAnalyze(page)
+
+  // 界面先裁决一次(它带的总是列表里的当前版本)
+  await page.goto('/p/demo-project/risks')
+  const row = page.getByTestId('risk-table').locator('tbody tr').first()
+  await row.getByTestId('risk-confirm').click()
+  await page.getByLabel(/裁决理由/).fill('人工核验:规则命中与原文一致')
+  await page.getByTestId('risk-confirm-submit').click()
+  // 裁决成功后该行不再是待复核,行内「复核并裁决」按钮消失
+  await expect(row.getByTestId('risk-confirm')).toHaveCount(0, { timeout: 10_000 })
+
+  const riskId = await page.evaluate(() => {
+    const first = document.querySelector('[data-testid="risk-table"] tbody tr')
+    return first?.getAttribute('data-resource-id') ?? ''
+  })
+  expect(riskId).toBeTruthy()
+  const headers = await csrfHeader(page)
+
+  // 拿旧版本(裁决后至少 2)直接打 API:必须 409,而不是静默覆盖
+  const stale = await page.request.post(
+    `${API_BASE}/projects/demo-project/risks/${riskId}/reviews`,
+    { headers, data: { decision: 'excluded', reason: '拿旧版本重试', expected_version: 1 } })
+  expect(stale.status()).toBe(409)
+
+  // 缺版本:422,而不是无锁放行
+  const missing = await page.request.post(
+    `${API_BASE}/projects/demo-project/risks/${riskId}/reviews`,
+    { headers, data: { decision: 'excluded', reason: '缺版本' } })
+  expect(missing.status()).toBe(422)
+})

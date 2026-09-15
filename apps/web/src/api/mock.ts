@@ -28,6 +28,7 @@ import type {
   ReviewRecord,
   ReviewWindow,
   RiskItem,
+  SummaryFilters,
   SummaryResponse,
   TaskEvent,
   TaskStatus,
@@ -108,6 +109,8 @@ function provenance(origin: AiProvenance['origin'], needsReview: boolean, review
 
 interface SyntheticTopic {
   id: string
+  /** 复盘契约要 topic_version_ids(7.5):与真实 topics 行的 versionId 同口径 */
+  versionId: string
   title: string
   feedbackCount: number
   ratio: number
@@ -122,49 +125,49 @@ interface SyntheticTopic {
 // 前 3 条沿用原 demoAnalysis 的物流/退款/产品主题(合成样本);其余为补充合成主题。
 const SYNTHETIC_TOPICS: SyntheticTopic[] = [
   {
-    id: 'delivery', title: '物流体验', feedbackCount: 218, ratio: 21.8, trend: 'down', cpiDisplayValue: '68', reviewState: 'confirmed',
+    id: 'delivery', versionId: 'tv-demo-delivery', title: '物流体验', feedbackCount: 218, ratio: 21.8, trend: 'down', cpiDisplayValue: '68', reviewState: 'confirmed',
     summary: '配送等待与物流信息更新是主要关注点。',
     quote: quote('fb_demo_001', '合成样本 DEMO-001:包裹等待了三天,物流信息一直没有更新。', 14, 32, '在线客服', '2026-08-26T09:12:00+08:00', 12),
     provenance: provenance('ai', false, 'demo-user'),
   },
   {
-    id: 'refund', title: '退款进度', feedbackCount: 164, ratio: 16.4, trend: 'up', cpiDisplayValue: '82', reviewState: 'pending',
+    id: 'refund', versionId: 'tv-demo-refund', title: '退款进度', feedbackCount: 164, ratio: 16.4, trend: 'up', cpiDisplayValue: '82', reviewState: 'pending',
     summary: '反馈关注退款处理时间和状态透明度。',
     quote: quote('fb_demo_002', '合成样本 DEMO-002:申请退款后,希望能看到预计到账时间。', 14, 31, '电话', '2026-08-27T14:30:00+08:00', 37),
     provenance: provenance('ai', true, null),
   },
   {
-    id: 'product', title: '产品使用', feedbackCount: 121, ratio: 12.1, trend: 'flat', cpiDisplayValue: '54', reviewState: 'pending',
+    id: 'product', versionId: 'tv-demo-product', title: '产品使用', feedbackCount: 121, ratio: 12.1, trend: 'flat', cpiDisplayValue: '54', reviewState: 'pending',
     summary: '使用引导与功能说明仍有改善空间。',
     quote: quote('fb_demo_003', '合成样本 DEMO-003:第一次使用时没有找到操作说明。', 14, 28, '邮件', '2026-08-28T11:05:00+08:00', 58),
     provenance: provenance('rule', true, null),
   },
   {
-    id: 'support', title: '客服响应', feedbackCount: 96, ratio: 9.6, trend: 'up', cpiDisplayValue: '77', reviewState: 'pending',
+    id: 'support', versionId: 'tv-demo-support', title: '客服响应', feedbackCount: 96, ratio: 9.6, trend: 'up', cpiDisplayValue: '77', reviewState: 'pending',
     summary: '响应速度与问题一次解决率受到关注。',
     quote: quote('fb_demo_004', '合成样本 DEMO-004:排队等待时间较长,转接后问题得到解决。', 14, 28, '在线客服', '2026-08-29T16:40:00+08:00', 81),
     provenance: provenance('ai', true, null),
   },
   {
-    id: 'billing', title: '价格与账单', feedbackCount: 87, ratio: 8.7, trend: 'flat', cpiDisplayValue: '61', reviewState: 'confirmed',
+    id: 'billing', versionId: 'tv-demo-billing', title: '价格与账单', feedbackCount: 87, ratio: 8.7, trend: 'flat', cpiDisplayValue: '61', reviewState: 'confirmed',
     summary: '账单明细与扣费说明需要更清晰。',
     quote: quote('fb_demo_005', '合成样本 DEMO-005:账单金额与预期不符,希望展示明细。', 14, 28, '邮件', '2026-08-30T10:20:00+08:00', 104),
     provenance: provenance('human', false, 'demo-user'),
   },
   {
-    id: 'stability', title: '应用稳定性', feedbackCount: 62, ratio: 6.2, trend: 'down', cpiDisplayValue: '73', reviewState: 'pending',
+    id: 'stability', versionId: 'tv-demo-stability', title: '应用稳定性', feedbackCount: 62, ratio: 6.2, trend: 'down', cpiDisplayValue: '73', reviewState: 'pending',
     summary: '闪退与加载失败集中在特定版本。',
     quote: quote('fb_demo_006', '合成样本 DEMO-006:打开应用时出现闪退,重装后恢复。', 14, 26, '在线客服', '2026-08-31T13:15:00+08:00', 129),
     provenance: provenance('ai', true, null),
   },
   {
-    id: 'account', title: '账号与登录', feedbackCount: 41, ratio: 4.1, trend: 'new', cpiDisplayValue: null, reviewState: 'pending',
+    id: 'account', versionId: 'tv-demo-account', title: '账号与登录', feedbackCount: 41, ratio: 4.1, trend: 'new', cpiDisplayValue: null, reviewState: 'pending',
     summary: '新主题,样本较少,待进一步归类。',
     quote: quote('fb_demo_007', '合成样本 DEMO-007:更换手机号后无法登录原有账号。', 14, 26, '电话', '2026-09-01T09:50:00+08:00', 142),
     provenance: provenance('unknown', true, null),
   },
   {
-    id: 'unclassified', title: '待归类', feedbackCount: 33, ratio: 3.3, trend: null, cpiDisplayValue: null, reviewState: 'pending',
+    id: 'unclassified', versionId: 'tv-demo-unclassified', title: '待归类', feedbackCount: 33, ratio: 3.3, trend: null, cpiDisplayValue: null, reviewState: 'pending',
     summary: '暂未归入已有主题的反馈,保留原文可查看。',
     quote: quote('fb_demo_008', '合成样本 DEMO-008:希望有更多配送方式可以选择。', 14, 24, '在线客服', '2026-09-01T18:25:00+08:00', 160),
     provenance: provenance('rule', true, null),
@@ -184,6 +187,7 @@ function topicRow(topic: SyntheticTopic): TopicRow {
   }
   return {
     id: topic.id,
+    versionId: topic.versionId,
     title: topic.title,
     feedbackCount: topic.feedbackCount,
     denominator: SYNTHETIC_SUMMARY.denominator ?? 1000,
@@ -212,9 +216,9 @@ const SYNTHETIC_TASKS: TaskSummary[] = [
 ]
 
 const SYNTHETIC_RISKS: RiskItem[] = [
-  { id: 'risk-001', title: '退款率异常', rule: 'R-204 · 近30天', severity: 'HIGH', reviewState: 'pending', status: 'OPEN' },
-  { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN' },
-  { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS' },
+  { id: 'risk-001', title: '退款率异常', rule: 'R-204 · 近30天', severity: 'HIGH', reviewState: 'pending', status: 'OPEN', version: 1 },
+  { id: 'risk-002', title: '支付失败率突增', rule: 'R-302 · 近24小时', severity: 'CRITICAL', reviewState: 'pending', status: 'OPEN', version: 1 },
+  { id: 'risk-003', title: '订单金额缺失', rule: 'R-101 · 完整性', severity: 'MEDIUM', reviewState: 'confirmed', status: 'IN_PROGRESS', version: 2 },
 ]
 
 /** W16 合成项目成员:派发任务的负责人只能来自成员接口;owner-1 沿用既有 E2E 流程。 */
@@ -407,7 +411,11 @@ class MockRiskStore {
     if (!risk) throw new ApiHttpError(404, 'risk_not_found')
     if (!body.reason.trim()) throw new ApiHttpError(422, 'reason_required')
     const version = risk.version ?? 1
-    if (body.expected_version !== undefined && body.expected_version !== version) {
+    if (body.expected_version === undefined) {
+      // 与后端同口径(6.5):缺版本 = 422,而不是无锁静默覆盖
+      throw new ApiHttpError(422, 'expected_version_required')
+    }
+    if (body.expected_version !== version) {
       throw new ApiHttpError(409, 'VERSION_CONFLICT')
     }
     const next = body.decision === 'confirmed' ? 'confirmed' : body.decision === 'excluded' ? 'excluded' : 'pending'
@@ -478,6 +486,11 @@ class MockRunStore {
     return { ...entry.run }
   }
 
+  /** 复盘向导用 listAnalyses 选 run;复盘存储要能认出这些 run(收敛 run id 空间) */
+  has(analysisId: string): boolean {
+    return this.runs.has(analysisId)
+  }
+
   /** 与后端 list_analyses 同口径:只返回本项目的作业,新的在前。 */
   list(projectId: string): AnalysisRun[] {
     return [...this.runs.entries()]
@@ -492,7 +505,10 @@ const MOCK_RUN_STORE = new MockRunStore()
 /** 演示 run 与可识别主题:窗口外的一切按服务端口径拒绝或标记不可比 */
 const MOCK_RUN_REVISION = 1
 const MOCK_KNOWN_RUNS = new Set(['run_demo_001'])
-const MOCK_TOPIC_IDS = new Set(['delivery', 'refund', 'product', 't1'])
+/** 复盘请求里的 run_id 必须可识别:演示种子 run 或分析页真实创建的 run-N */
+const isKnownMockRun = (runId: string) => MOCK_KNOWN_RUNS.has(runId) || MOCK_RUN_STORE.has(runId)
+/** 复盘请求里的 topic_version_ids:合成主题的版本行 id(与 topics 行 versionId 同源) */
+const MOCK_TOPIC_VERSION_IDS = new Set(SYNTHETIC_TOPICS.map(topic => topic.versionId))
 /** 演示口径:窗口每持续一天记 30 条反馈,前后窗口占比固定 */
 const MOCK_ROWS_PER_DAY = 30
 
@@ -595,12 +611,12 @@ class MockReviewStore {
 
   create(body: ReviewCreateBody): ReviewRecord {
     this.seed()
-    if (!MOCK_KNOWN_RUNS.has(body.run_id)) throw new ApiHttpError(404, 'analysis_not_found')
+    if (!isKnownMockRun(body.run_id)) throw new ApiHttpError(404, 'analysis_not_found')
     const before = this.queryWindow(body.before, 0.168)
     const after = this.queryWindow(body.after, 0.102)
     const reasons: string[] = []
     if (body.revision !== MOCK_RUN_REVISION) reasons.push(`版本不一致:请求 ${body.revision},当前 ${MOCK_RUN_REVISION}`)
-    const unknown = body.topic_version_ids.filter(id => !MOCK_TOPIC_IDS.has(id))
+    const unknown = body.topic_version_ids.filter(id => !MOCK_TOPIC_VERSION_IDS.has(id))
     if (unknown.length) reasons.push(`目标主题不属于该 revision: ${unknown.join(', ')}`)
     reasons.push(...windowReasons(before, after))
     if (!body.alignment_confirmed) reasons.push('目标映射尚未人工确认')
@@ -822,17 +838,29 @@ export const mockApi: ApiClient = {
     }
     return `${lines.join('\n')}\n`
   },
-  async summary(projectId: string) {
+  async summary(projectId: string, filters?: SummaryFilters) {
     await delay(300)
-    // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)
-    return { ...SYNTHETIC_SUMMARY, project_id: projectId }
+    // 合成数据按请求项目返回 project_id,任何演示项目都可用(仍须常显演示身份)。
+    // 接受筛选(接口与真实 client 同面)但数值不随之变化——mock 数据本就是合成
+    // 常数;回显请求的 filters,让「筛选在表单里生效」的联动与真实模式一致。
+    return {
+      ...SYNTHETIC_SUMMARY,
+      project_id: projectId,
+      filters: {
+        start: filters?.start ?? SYNTHETIC_SUMMARY.filters.start,
+        end: filters?.end ?? SYNTHETIC_SUMMARY.filters.end,
+        channel: filters?.channel ?? null,
+        product: filters?.product ?? null,
+      },
+    }
   },
   async topics() {
     await delay(300)
     return SYNTHETIC_TOPICS.map(topicRow)
   },
-  async trend() {
+  async trend(_projectId: string, _filters?: SummaryFilters) {
     await delay(300)
+    // 合成点列不随筛选变化(与 summary 同口径:接口同面,数值是合成常数)
     return SYNTHETIC_TREND
   },
   async taskSummaries() {

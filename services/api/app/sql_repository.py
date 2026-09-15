@@ -557,11 +557,19 @@ class SQLAlchemyRepository:
                 return None
             return self._finding_dict(obj)
 
-    def update_risk_finding(self, project_id, finding_id, changes):
+    def update_risk_finding(self, project_id, finding_id, changes, expected_version=None):
+        """条件更新(6.5):expected_version 不匹配返回 None(调用方翻译成 409)。
+
+        读与写在**同一事务**内,且 SELECT 带行锁:旧实现是端点先读一次、
+        再另开事务写,两个并发裁决都能通过版本检查——「按钮禁用不是并发保护」
+        这条规格说的正是这种窗口。
+        """
         with self.session() as s, s.begin():
-            obj = s.get(RiskFinding, finding_id)
+            obj = s.get(RiskFinding, finding_id, with_for_update=True)
             if obj is None or obj.project_id != project_id:
                 raise KeyError(finding_id)
+            if expected_version is not None and int(obj.version or 1) != int(expected_version):
+                return None
             for key, value in changes.items():
                 if hasattr(obj, key) and key != 'id':
                     setattr(obj, key, value)

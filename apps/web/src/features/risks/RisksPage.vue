@@ -101,7 +101,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Warning } from '@element-plus/icons-vue'
 import { useSessionStore } from '../../stores/session'
-import { ApiHttpError, apiClient, isMockMode } from '../../api/client'
+import { ApiHttpError, apiClient } from '../../api/client'
 import PageHeader from '../../components/common/PageHeader.vue'
 import VlButton from '../../components/common/VlButton.vue'
 import StatusBadge from '../../components/common/StatusBadge.vue'
@@ -110,22 +110,19 @@ import DistributionBar, { type DistributionSegment } from '../../components/comm
 import EmptyState from '../../components/common/EmptyState.vue'
 import type { RiskItem } from '../../types/domain'
 
-type RiskView = RiskItem & { version?: number }
-
 const session = useSessionStore()
 const canAct = computed(() => (session.user?.role ?? 'VIEWER') !== 'VIEWER')
-const isDemoMode = isMockMode()
 const client = apiClient()
 
 const route = useRoute()
 const projectId = computed(() => String(route.params.p))
 
-const items = ref<RiskView[]>([])
+const items = ref<RiskItem[]>([])
 const status = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle')
 const error = ref('')
 const filterPending = ref(false)
 
-onMounted(async () => {
+async function load() {
   status.value = 'loading'
   try {
     items.value = await client.listRisks(projectId.value)
@@ -134,7 +131,8 @@ onMounted(async () => {
     status.value = 'error'
     error.value = err instanceof Error ? err.message : String(err)
   }
-})
+}
+onMounted(load)
 
 // 排序优先遵循后端:critical 置顶不能被美观排序覆盖
 const visible = computed(() => {
@@ -161,13 +159,13 @@ const severitySegments = computed<DistributionSegment[]>(() => {
 })
 
 const reviewOpen = ref(false)
-const current = ref<RiskView | null>(null)
+const current = ref<RiskItem | null>(null)
 const reason = ref('')
 const reasonError = ref(false)
 const pending = ref(false)
 const conflict = ref(false)
 
-function openReview(risk: RiskView) {
+function openReview(risk: RiskItem) {
   current.value = risk
   reason.value = ''
   reasonError.value = false
@@ -195,8 +193,10 @@ async function decide(decision: 'confirmed' | 'excluded') {
     reason.value = ''
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 409) {
-      // 版本冲突:保留本地输入,提示重新加载
+      // 版本冲突:保留本地输入并重载列表——用户手里的 version 已过期,
+      // 不刷新的话只会拿着同一个旧版本再 409 一次
       conflict.value = true
+      void load()
     } else if (err instanceof ApiHttpError && err.status === 403) {
       reasonError.value = true
       error.value = '当前角色无权裁决风险'

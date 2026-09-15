@@ -168,6 +168,7 @@ import EvidenceQuote from '../../components/common/EvidenceQuote.vue'
 import HumanReviewDialog from '../../components/common/HumanReviewDialog.vue'
 import { ApiHttpError, apiClient, type ProjectMember, type TaskTransitionBody } from '../../api/client'
 import { useSessionStore } from '../../stores/session'
+import { taskIdempotencyKey } from '../../lib/idempotency'
 import { effectStatusLabel } from '../../lib/ui-status'
 import type { EvidenceQuoteItem, TaskDetail, TaskEvidenceSnapshot } from '../../types/domain'
 
@@ -351,7 +352,8 @@ async function onDialogConfirm(comment: string) {
   }
   pending.value = true
   try {
-    const idempotencyKey = `${taskId.value}-${spec.testid}-${task.value?.status}-${Date.now()}`
+    // 稳定幂等键:同一意图(任务+动作+当时状态)重试共用;见 lib/idempotency
+    const idempotencyKey = taskIdempotencyKey(taskId.value, spec.testid, task.value?.status ?? '')
     if (spec.kind === 'confirm') {
       await client.confirmTask(projectId.value, taskId.value, {
         expected_version: detail.value?.version ?? 1,

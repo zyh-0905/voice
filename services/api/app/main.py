@@ -470,21 +470,29 @@ if not repository.list_entities('tasks', 'demo-project'):
     ):
         repository.create_entity('tasks', {**seed, 'project_id':'demo-project', 'status':seed['state'], 'version':1, 'idempotency_keys':[]})
 if not repository.list_entities('reviews', 'demo-project'):
-    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条
+    # W17 复盘:固定口径结果(黄金样例),不可比样例单独一条。
+    # comparability/reasons/filters/alignment_confirmed 也在种子里:这四列
+    # 落表之后(0020),种子不补字段的话演示库的复盘详情一样缺列。
     repository.create_entity('reviews', {
         'id':'review-001','project_id':'demo-project','run_id':'run_demo_001','revision':1,
         'topic_version_ids':['delivery'], 'task_id':None,
-        'before':{'n':168,'N':1000}, 'after':{'n':102,'N':1000},
+        'before':{'n':168,'N':1000,'start':'2026-08-01','end':'2026-08-31','untimed':False},
+        'after':{'n':102,'N':1000,'start':'2026-09-01','end':'2026-09-30','untimed':False},
         'metrics':{'count_change':-66,'share_before_pp':16.8,'share_after_pp':10.2,'share_delta_pp':-6.6,'relative_share_change':-0.3929,'comparable':True},
         'effect_status':'OBSERVED_CHANGE', 'limitations':[],
+        'comparability':'ok', 'reasons':[], 'filters':{},
+        'alignment_confirmed':True,
         'status':'pending','finding':'复盘:物流体验占比变化','confirmed_by':None,
     })
     repository.create_entity('reviews', {
         'id':'review-002','project_id':'demo-project','run_id':'run_demo_001','revision':1,
         'topic_version_ids':['refund'], 'task_id':None,
-        'before':{'n':0,'N':0}, 'after':{'n':12,'N':400},
+        'before':{'n':0,'N':0,'start':'2026-08-01','end':'2026-08-31','untimed':False},
+        'after':{'n':12,'N':400,'start':'2026-09-01','end':'2026-09-15','untimed':False},
         'metrics':{'count_change':12,'share_before_pp':None,'share_after_pp':None,'share_delta_pp':None,'relative_share_change':None,'comparable':False},
         'effect_status':'INSUFFICIENT_DATA', 'limitations':['数据不足,暂不输出变化结论'],
+        'comparability':'insufficient', 'reasons':['分母为 0,无前窗口可比数据'],
+        'filters':{}, 'alignment_confirmed':True,
         'status':'pending','finding':'复盘:退款进度(数据不足)','confirmed_by':None,
     })
 def _project(pid): return repository.get_project(pid)
@@ -593,7 +601,8 @@ def project_summary(
     指定不存在或外项目 run 返回 404,不悄悄换成默认 run。
     """
     from .summary import SummaryRequestError, build_summary
-    if not repository.get_project(project_id):
+    project = repository.get_project(project_id)
+    if not project:
         raise HTTPException(404, detail={'code': 'project_not_found'})
     try:
         return build_summary(
@@ -601,6 +610,8 @@ def project_summary(
             run_id=run_id, revision=revision,
             filters={'start': start, 'end': end, 'channel': channel, 'product': product},
             repository=repository,
+            # 裸日期筛选按项目时区解释(此前一律按 UTC,+08:00 数据跨日边界偏 8 小时)
+            timezone_name=project.get('timezone'),
         )
     except SummaryRequestError as exc:
         raise HTTPException(exc.status_code, detail={'code': exc.code})
@@ -702,6 +713,9 @@ def list_topics(project_id: str, user: dict = Depends(require_project_access)):
                 'trend': None,
                 'cpiDisplayValue': (cpi or {}).get('display_value'),
                 'reviewState': 'pending',
+                # 复盘创建契约要 topic_version_ids(7.5):主题行不带版本 id 的话,
+                # 向导只能写死——这是复盘向导此前三处硬编码的根因之一。
+                'versionId': t.get('version_id'),
                 'evidence': {'topicId': t['topic_id'], 'topicTitle': t['name'], 'runId': published['id'],
                              'revision': snapshot['revision'], 'summary': t.get('summary', ''),
                              'cpi': cpi,
@@ -864,17 +878,30 @@ def get_topic_detail(project_id: str, topic_id: str, topic_version_id: int | Non
             'evidence': snapshot.get('evidence_by_topic', {}).get(topic_id, []),
             'revision': snapshot.get('revision')}
 @app.get('/api/v1/projects/{project_id}/trend')
-def list_trend(project_id: str, user: dict = Depends(require_project_access)):
-    """反馈趋势。演示环境返回合成点列(含一个缺失断点)。"""
-    if not repository.get_project(project_id):
+def list_trend(
+    project_id: str,
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    channel: str | None = Query(None),
+    product: str | None = Query(None),
+    user: dict = Depends(require_project_access),
+):
+    """反馈趋势:有已发布 run 时按冻结输入的 occurred_at 聚合每日计数。
+
+    此前这里返回硬编码的合成点列——真实模式下趋势图与上传数据无关,
+    却看起来完全是真数据。无已发布 run 时仍回退合成点列(演示路径,
+    含一个缺失断点);窗口/渠道/产品筛选与 summary 同口径。
+    """
+    from .summary import build_trend
+    project = repository.get_project(project_id)
+    if not project:
         raise HTTPException(404, detail={'code': 'project_not_found'})
-    points = [
-        {'date': '08-26', 'value': 142}, {'date': '08-27', 'value': 151},
-        {'date': '08-28', 'value': None}, {'date': '08-29', 'value': 158},
-        {'date': '08-30', 'value': 149}, {'date': '08-31', 'value': 161},
-        {'date': '09-01', 'value': 155},
-    ]
-    return {'items': points, 'total': len(points)}
+    return build_trend(
+        list(analyses.values()), project_id,
+        start=start, end=end, channel=channel, product=product,
+        repository=repository,
+        timezone_name=project.get('timezone'),
+    )
 def _risk_view(finding: dict) -> dict:
     """风险候选的前端契约视图:severity 与复核状态分开,列表与裁决返回同一形状。
 
@@ -908,6 +935,8 @@ def list_risks(project_id: str, user: dict = Depends(require_project_access)):
 class RiskReviewRequest(BaseModel):
     decision: str          # confirmed | excluded | reopened
     reason: str = Field(min_length=1)
+    # 6.5:可变对象的状态操作必须带乐观锁版本。此前可选且「不发就不查」——
+    # 客户端漏字段等于无保护地 last-write-wins。
     expected_version: int | None = None
 
 # 裁决动作 → 复核状态;重新审查回到待复核
@@ -918,6 +947,8 @@ def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dic
     """W14 风险裁决:确认/排除/重新审查;理由必填;版本冲突 409;写审计事件。
 
     候选不是既成事实:确认意味着人工核验通过,而不是系统判定事故。
+    版本检查与写入在同一事务内条件执行(见仓储 update_risk_finding):
+    端点先读后写的两段式在并发下两个裁决都能通过检查。
     """
     if not repository.get_project(project_id):
         raise HTTPException(404, detail={'code': 'project_not_found'})
@@ -926,20 +957,22 @@ def review_risk(project_id: str, risk_id: str, req: RiskReviewRequest, user: dic
         raise HTTPException(422, detail={'code': 'invalid_decision', 'allowed': ['confirmed', 'excluded', 'reopened']})
     if not req.reason.strip():
         raise HTTPException(422, detail={'code': 'reason_required'})
+    if req.expected_version is None:
+        raise HTTPException(422, detail={'code': 'expected_version_required'})
     finding = repository.get_risk_finding(project_id, risk_id)
     if finding is None:
         raise HTTPException(404, detail={'code': 'risk_not_found'})
-    version = int(finding.get('version') or 1)
-    if req.expected_version is not None and int(req.expected_version) != version:
-        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
+    # CAS 成功即 expected == 行内当前版本(同事务带行锁校验),新版本据此递增
     updated = repository.update_risk_finding(project_id, risk_id, {
         'review_state': decision,
         'status': 'OPEN' if decision == 'confirmed' else 'CLOSED' if decision == 'excluded' else finding.get('status', 'OPEN'),
-        'version': version + 1,
+        'version': int(req.expected_version) + 1,
         'reviewer_id': user.get('id', 'demo-user'),
         'review_reason': req.reason.strip(),
         'reviewed_at': datetime.now(timezone.utc).isoformat(),
-    })
+    }, expected_version=int(req.expected_version))
+    if updated is None:
+        raise HTTPException(409, detail={'code': 'VERSION_CONFLICT'})
     _record_audit(project_id, 'risk.review', user, {'risk_id': risk_id, 'decision': decision})
     return _risk_view(updated)
 

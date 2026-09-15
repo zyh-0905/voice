@@ -157,6 +157,8 @@ export interface TopicRow {
   cpiDisplayValue: string | null
   reviewState: TopicReviewState
   evidence: EvidenceContext
+  /** 该主题当前 revision 的版本行 id(7.5 复盘契约的 topic_version_ids 来源);演示回退行可能缺省 */
+  versionId?: string | null
 }
 
 // —— 趋势、待办与批次 ——
@@ -260,6 +262,8 @@ export interface RiskItem {
   severity: string
   reviewState: 'pending' | 'confirmed' | 'excluded'
   status: string
+  /** 乐观锁版本(6.5):裁决必须带上,服务端按此条件更新;缺失即 422 */
+  version: number
 }
 
 export interface DatasetBatch {

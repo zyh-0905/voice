@@ -1,8 +1,8 @@
 // composables/useOverviewData.ts — 概览页数据状态(风格规范 9.1/9.5):
 // 单一 status 状态机 + refreshing/stale 附加状态;项目切换 Abort 旧请求;
 // 校验响应 project_id 上下文;服务端数据由 composable 管理,不复制进 Pinia。
-import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import type { DatasetBatch, RiskItem, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
+import { onBeforeUnmount, ref, unref, watch, type Ref } from 'vue'
+import type { DatasetBatch, RiskItem, SummaryFilters, SummaryResponse, TaskSummary, TopicRow, TrendPoint } from '../types/domain'
 import { ApiHttpError, apiClient, type ApiClient } from '../api/client'
 
 export type AsyncStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'forbidden'
@@ -22,7 +22,12 @@ export interface OverviewData {
   reload: () => void
 }
 
-export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiClient()): OverviewData {
+export function useOverviewData(
+  projectId: Ref<string>,
+  options: { filters?: Ref<SummaryFilters | null>; client?: ApiClient } = {},
+): OverviewData {
+  const client = options.client ?? apiClient()
+  const filters = options.filters
   const summary = ref<SummaryResponse | null>(null)
   const topics = ref<TopicRow[]>([])
   const trend = ref<TrendPoint[]>([])
@@ -44,6 +49,8 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
     controller?.abort()
     controller = new AbortController()
     const signal = controller.signal
+    // 筛选只影响 insight 与趋势(7.7);action_metrics 恒项目范围,与请求无关
+    const activeFilters = unref(filters) ?? undefined
     if (hasData()) {
       refreshing.value = true
     } else {
@@ -52,9 +59,9 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
     error.value = null
     try {
       const [nextSummary, nextTopics, nextTrend, nextTasks, nextBatches, nextRisks] = await Promise.all([
-        client.summary(projectId.value, signal),
+        client.summary(projectId.value, activeFilters, signal),
         client.topics(projectId.value, signal),
-        client.trend(projectId.value, signal),
+        client.trend(projectId.value, activeFilters, signal),
         client.taskSummaries(projectId.value, signal),
         client.recentBatches(projectId.value, signal),
         client.listRisks(projectId.value, signal),
@@ -103,7 +110,9 @@ export function useOverviewData(projectId: Ref<string>, client: ApiClient = apiC
     }
   }
 
-  watch(projectId, () => { void load() }, { immediate: true })
+  // 项目或筛选变化都重载:筛选此前只写 URL 不进请求,四卡的 insight 指标
+  // 因此从不随筛选变化(后端 7.7 聚合一直支持,是前端没接)
+  watch([projectId, () => filters?.value], () => { void load() }, { immediate: true })
   onBeforeUnmount(() => controller?.abort())
 
   return {

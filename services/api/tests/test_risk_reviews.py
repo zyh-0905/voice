@@ -26,9 +26,10 @@ def risk_id():
 
 
 def _review(risk_id, decision, reason='人工核验规则命中与原文一致', version=None):
+    # 契约(6.5)现在要求必带 expected_version;缺省自动取当前版本——
+    # 与前端行为一致(它一直发列表里的 version),不指定版本时才构造冲突场景
     body = {'decision': decision, 'reason': reason}
-    if version is not None:
-        body['expected_version'] = version
+    body['expected_version'] = version if version is not None else _current(risk_id)['version']
     return client.post(f'/api/v1/projects/demo-project/risks/{risk_id}/reviews', json=body)
 
 
@@ -50,8 +51,9 @@ def test_invalid_decision_rejected(risk_id):
 
 
 def test_unknown_risk_404():
+    # 带上版本,确保测的是「目标不存在」而不是字段校验
     response = client.post('/api/v1/projects/demo-project/risks/risk-ghost/reviews',
-                           json={'decision': 'confirmed', 'reason': 'x'})
+                           json={'decision': 'confirmed', 'reason': 'x', 'expected_version': 1})
     assert response.status_code == 404
 
 
@@ -109,3 +111,35 @@ def test_audit_pagination():
     assert body['page'] == 1 and body['page_size'] == 1
     assert len(body['items']) <= 1
     assert client.get('/api/v1/projects/demo-project/audits', params={'page_size': 500}).status_code == 422
+
+
+def test_missing_expected_version_rejected(risk_id):
+    """6.5:状态操作必须带乐观锁版本;缺字段 422 而不是静默无锁写入。
+
+    旧实现的 `is not None` 短路让漏字段等于 last-write-wins——客户端 bug
+    直接变成数据丢失,而服务端看起来一切正常。
+    """
+    response = client.post(
+        f'/api/v1/projects/demo-project/risks/{risk_id}/reviews',
+        json={'decision': 'confirmed', 'reason': '缺乐观锁版本'},
+    )
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'expected_version_required'
+
+
+def test_repository_cas_returns_none_on_stale_version(risk_id):
+    """仓储层的条件更新:expected 不匹配返回 None(端点翻译成 409)。
+
+    旧路径是端点先读一次、再另开事务写,两个并发裁决都能通过检查;
+    现在读-校验-写在同一事务(SQL 侧带行锁)。
+    """
+    from app.main import repository
+    current = repository.get_risk_finding('demo-project', risk_id)
+    version = int(current['version'])
+    stale = repository.update_risk_finding(
+        'demo-project', risk_id, {'review_state': 'confirmed'}, expected_version=version - 1)
+    assert stale is None
+    fresh = repository.update_risk_finding(
+        'demo-project', risk_id, {'review_state': 'pending', 'version': version + 1},
+        expected_version=version)
+    assert fresh is not None and int(fresh['version']) == version + 1

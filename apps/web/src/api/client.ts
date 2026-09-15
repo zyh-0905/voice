@@ -8,6 +8,7 @@ import type {
   ImportHealthView,
   ReviewRecord,
   RiskItem,
+  SummaryFilters,
   SummaryResponse,
   TaskDetail,
   TaskSummary,
@@ -229,10 +230,11 @@ export interface ApiClient {
   authConfig(): Promise<AuthConfig>
   /** POST /auth/token,用外部身份提供商的断言换取本平台会话 */
   loginWithAssertion(assertion: string): Promise<LoginResponse>
-  /** 工程计划 7.7:行动首页只读聚合 */
-  summary(projectId: string, signal?: AbortSignal): Promise<SummaryResponse>
+  /** 工程计划 7.7:行动首页只读聚合;filters 只影响 insight_metrics(action_metrics 恒项目范围) */
+  summary(projectId: string, filters?: SummaryFilters, signal?: AbortSignal): Promise<SummaryResponse>
   topics(projectId: string, signal?: AbortSignal): Promise<TopicRow[]>
-  trend(projectId: string, signal?: AbortSignal): Promise<TrendPoint[]>
+  /** 趋势点列;窗口/渠道/产品筛选与 summary 同参 */
+  trend(projectId: string, filters?: SummaryFilters, signal?: AbortSignal): Promise<TrendPoint[]>
   taskSummaries(projectId: string, signal?: AbortSignal): Promise<TaskSummary[]>
   getTask(projectId: string, taskId: string, signal?: AbortSignal): Promise<TaskDetail>
   createTaskDraft(projectId: string, body: { title: string; source_topic_version_id?: string | null }): Promise<TaskSummary>
@@ -487,14 +489,28 @@ export function fetchHttpClient(baseUrl = import.meta.env.VITE_API_BASE_URL || '
       if (!response.ok) throw new ApiHttpError(response.status, `Redacted export failed (${response.status})`)
       return response.text()
     },
-    summary(projectId: string, signal?: AbortSignal) {
-      return request<SummaryResponse>(`${project(projectId)}/summary`, { signal })
+    summary(projectId: string, filters?: SummaryFilters, signal?: AbortSignal) {
+      const query = new URLSearchParams()
+      for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value !== null && value !== undefined && `${value}` !== '') {
+          query.set(key, `${value}`)
+        }
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return request<SummaryResponse>(`${project(projectId)}/summary${suffix}`, { signal })
     },
     topics(projectId: string, signal?: AbortSignal) {
       return list<TopicRow>(`${project(projectId)}/topics`, signal)
     },
-    trend(projectId: string, signal?: AbortSignal) {
-      return list<TrendPoint>(`${project(projectId)}/trend`, signal)
+    trend(projectId: string, filters?: SummaryFilters, signal?: AbortSignal) {
+      const query = new URLSearchParams()
+      for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value !== null && value !== undefined && `${value}` !== '') {
+          query.set(key, `${value}`)
+        }
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return list<TrendPoint>(`${project(projectId)}/trend${suffix}`, signal)
     },
     taskSummaries(projectId: string, signal?: AbortSignal) {
       return list<TaskSummary>(`${project(projectId)}/tasks`, signal)
