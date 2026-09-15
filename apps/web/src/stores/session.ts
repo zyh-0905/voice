@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+import { isMockMode } from '../api/client'
+
 export type UserRole = 'ANALYST' | 'VIEWER'
 export interface User { id: string; name: string; email: string; role: UserRole }
 
@@ -16,7 +18,9 @@ export const useSessionStore = defineStore('session', () => {
     try { parsed = JSON.parse(stored) as User } catch { parsed = null }
   }
   const user = ref<User | null>(parsed)
-  const isDemo = ref(true)
+  // 演示标记只在演示:mock 构建(默认)为 true;真实 API 构建不再挂「合成演示数据」
+  // 横幅——真实数据被标成演示与演示数据冒充真实是同一个错(UI 规范:演示常显标记)。
+  const isDemo = ref(isMockMode())
 
   function apply(next: User) {
     user.value = next

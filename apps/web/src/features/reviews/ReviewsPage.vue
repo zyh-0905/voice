@@ -51,6 +51,9 @@
     <!-- W18 创建向导:选 run/主题 → 选两个等长不重叠的时间窗 → 人工确认映射 → 服务端推导 n/N -->
     <el-dialog v-model="wizardOpen" title="创建复盘" width="560px" :close-on-click-modal="false" append-to-body>
       <div v-if="wizardStep === 1" class="vl-wizard">
+        <p v-if="!topicOptions.length" class="vl-wizard__hint" data-testid="wizard-empty">
+          正在加载可选项…尚无已发布的分析时无法创建复盘。
+        </p>
         <div class="vl-field vl-wizard__field">
           <label for="vl-wizard-run">分析 run</label>
           <select id="vl-wizard-run" v-model="wizard.runId" class="vl-wizard__input" data-testid="wizard-run">
