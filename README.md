@@ -76,10 +76,25 @@ API 文档：`http://localhost:8000/docs`；OpenAPI：`http://localhost:8000/ope
 docker compose up -d --build
 ```
 
-Web 入口为 `http://localhost:8080`（登录 `demo/demo` 或 `viewer/viewer`）。Compose 包含
-**一次性迁移服务（migrate）**、API、Nginx Web、PostgreSQL、Redis、Celery worker 和 outbox relay；
-`api`/`worker`/`relay` 都等待 `migrate` 成功完成后再启动——模型新增列不会被
-`create_all` 补上，必须先执行 `alembic upgrade head`。
+Web 入口为 `http://localhost:8080`（登录 `demo/demo` 或 `viewer/viewer`）。**8080 的
+前端是真实 API 模式**：登录走真认证、导入落真 PostgreSQL、分析由 worker 真执行——
+mock 演示只在 `npm run dev`。Compose 包含**一次性迁移服务（migrate）**、API、Nginx
+Web、PostgreSQL、Redis、Celery worker、outbox relay 和 watchdog；`api`/`worker`/`relay`
+都等待 `migrate` 成功完成后再启动——模型新增列不会被 `create_all` 补上，必须先执行
+`alembic upgrade head`。
+
+默认口径是开发/演示（`VOICELENS_ENV=development`、mock 命名、哈希向量、演示账号）。
+生产部署：
+
+```bash
+cp .env.production.example .env   # 填齐空值(密钥/账号/模型价格)
+docker compose up -d --build
+```
+
+compose 用根目录 `.env` 插值各服务的 `environment`；缺项会被 `app/settings.py`
+的启动校验**直接拒绝启动**（如 `DEDUPE_HMAC_SECRET`、`LOCAL_ACCOUNTS`、模型价格）——
+「看起来能跑」的生产配置比「明确报错」的危险得多。模型 API 密钥只注入 worker
+容器（§14.1）。
 
 常用命令：
 
@@ -89,28 +104,35 @@ docker compose run --rm migrate     # 手动执行迁移
 docker compose exec postgres psql -U voicelens -d voicelens   # 直连数据库
 docker compose down                 # 停止
 python scripts/validate-compose.py  # 无 Docker 时的静态校验
+bash scripts/check-all.sh           # 一键跑完全部门禁(含生产渲染冒烟)
 ```
 
 ## 运行时配置
 
-`.env.example` 是 Compose 的 `env_file`（无需再复制为 `.env`），关键变量：
+`.env.example` 是 Compose 的 `env_file`（无需再复制为 `.env`），也是本地直跑的键目录。
+**compose 里闸门相关的开关由 compose.yaml 的 `environment` 插值控制**，根目录 `.env`
+（生产从 `.env.production.example` 复制）优先级最高——只改 `.env.example` 里这些键对
+compose 栈无效。关键变量：
 
 | 变量 | 说明 |
 |---|---|
 | `DATABASE_URL` | 必须使用 `postgresql+psycopg://` 方言（镜像内是 psycopg3，写成 `postgresql://` 会静默降级到容器内 sqlite） |
 | `USE_DATABASE` | `1` 时使用 PostgreSQL 仓储；`0`/未设时使用内存仓储（仅演示） |
+| `REDIS_URL` | Celery broker/result backend（`CELERY_BROKER_URL` 可显式覆盖；都不设用栈内默认） |
+| `DEDUPE_HMAC_SECRET` | `event_key` 去重 HMAC 密钥；**生产必填独立随机值**，留空回落演示密钥会被启动校验拦 |
 | `SESSION_STORE` | `db` 把会话写入数据库（生产必须）；默认内存 |
 | `AUTH_REQUIRED` | 生产必须为 `true`；`false` 仅用于本地演示旁路 |
 | `AUTH_INSECURE_DEV` | 本地 http 场景显式开关（非 Secure Cookie、无会话请求跳过 CSRF）；**生产启动检测到即失败** |
 | `CORS_ORIGINS` | 允许的前端来源白名单（逗号分隔，不支持通配） |
 | `IDENTITY_PROVIDER` | `local`（默认，账号来自 `LOCAL_ACCOUNTS`）或 `oidc`（需 `OIDC_ISSUER`/`OIDC_AUDIENCE`/`OIDC_JWKS_URL`） |
 | `NAMING_MODE` | `mock`（默认，演示）/ `provider`（外部模型）/ `manual`（不调模型，等待人工命名）。**生产禁止 mock** |
-| `MODEL_ENDPOINT` / `MODEL_ID` / `MODEL_API_KEY` | `NAMING_MODE=provider` 时必填；密钥只注入 worker |
+| `MODEL_ENDPOINT` / `MODEL_ID` / `MODEL_API_KEY` | `NAMING_MODE=provider` 时必填；**密钥只注入 worker 容器（compose 已按 §14.1 隔离）** |
 | `MODEL_PRICE_IN` / `MODEL_PRICE_OUT` / `DAILY_MODEL_BUDGET` | 预算与成本（§10.5）。**没有可靠价格配置时禁用付费模式**，不是一个请求都不发 |
 | `EMBEDDING_MODE` | `hashing`（默认，本地替身，仅演示）/ `api`（外部向量服务）。**生产禁止 hashing** |
 | `MODEL_BASE_URL` | **多数网关在同一 host 上同时提供 chat 与 embeddings**：只配这一个 + `MODEL_API_KEY`，命名与向量就都能用（端点按 `/chat/completions`、`/embeddings` 推导，显式变量可覆盖） |
 | `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | 用不同供应商或不同模型时才需要；缺省回落到 `MODEL_BASE_URL` / `MODEL_ID` / `MODEL_API_KEY` |
 | `EMBEDDING_REVISION` | 向量模型 revision；未填时用 model id 兜底，不编造版本号 |
+| `VOICELENS_WEB_USE_MOCK` | web 镜像构建期变量（compose 默认 `false`）；仅在要用 compose 跑 mock 前端时设 `true` |
 
 生产启动会校验上述约束（`app/settings.py`），不满足直接失败。
 
