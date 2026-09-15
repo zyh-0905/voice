@@ -408,10 +408,17 @@ def retry_analysis(project_id: str, analysis_id: str, user: dict = Depends(requi
     a=get_analysis(project_id, analysis_id)
     if a.get('status') not in ('error','cancelled'): raise HTTPException(409, detail={'code':'analysis_not_retryable'})
     worker.retry(analysis_id)
-    if os.getenv('USE_CELERY', '').lower() in ('1','true','yes'):
-        from .celery_tasks import run_analysis_task
-        if getattr(run_analysis_task, 'delay', None): run_analysis_task.delay(analysis_id)
-    elif os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'): worker.run(analysis_id)
+    # 与创建路径同一投递机制:outbox + relay(5 秒轮询 + 退避重投)。直接 .delay
+    # 会绕过重投保障——broker 瞬断的那次重试会让 run 永远停在 queued。此前的
+    # USE_CELERY 分支正是这样,而该键没有任何注入方:compose 栈上 retry 只改
+    # 状态不派发,run 停在 queued 永远不再执行。
+    if os.getenv('RUN_WORKER_INLINE', '').lower() in ('1','true','yes'):
+        worker.run(analysis_id)
+    else:
+        # event_key 必须每次唯一(outbox_events.event_key 有唯一约束):
+        # 两次重试各写一把新钥匙;event_type 走 analysis.retry,relay 与
+        # analysis.created 同样派发。
+        repository.create_outbox_event({'event_key': f'analysis.retry:{analysis_id}:{uuid4().hex[:8]}', 'event_type':'analysis.retry', 'payload': {'analysis_id': analysis_id, 'project_id': project_id}})
     return _redacted_out(analyses[analysis_id])
 @app.post('/api/v1/projects/{project_id}/analyses/{analysis_id}/cancel')
 def cancel_analysis(project_id: str, analysis_id: str, user: dict = Depends(require_project_analyst)):
