@@ -3,6 +3,8 @@ from copy import deepcopy
 from typing import Protocol
 import os
 
+from .segments import segment_id as segments_segment_id
+
 MAX_PUBLISH_ATTEMPTS = 3
 
 
@@ -671,7 +673,7 @@ class InMemoryRepository:
         """整批替换该反馈的分块:重新分块是重算,不是追加。"""
         key = (project_id, feedback_id)
         self.segments[key] = [
-            {'id': f'seg_{feedback_id}_{index}', 'project_id': project_id,
+            {'id': segments_segment_id(feedback_id, index), 'project_id': project_id,
              'feedback_id': feedback_id, 'start_offset': span.start, 'end_offset': span.end,
              'segment_index': index, 'redaction_version': redaction_version}
             for index, span in enumerate(spans)

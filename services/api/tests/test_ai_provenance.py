@@ -108,3 +108,32 @@ def test_apply_correction_create_marks_human_origin():
     assert created['origin'] == 'human'
     assert created['needs_review'] is False
     assert affected == [created['topic_id']]
+
+
+def test_published_evidence_points_at_real_segments():
+    """证据行指回真实存在的分块:segment_id 非空、能在 segments 表找到、offset 覆盖引文。
+
+    此前恒为空串:segments 表在写、feedback 源视图在读,却没有任何
+    topic_evidence 行引用它——(version, feedback, segment) 唯一约束退化成反馈级。
+    """
+    from app.revisions import load_revision_snapshot
+
+    project_id = _project()
+    _run_analysis(project_id)
+    run = next(a for a in repository.analyses.values() if a['project_id'] == project_id)
+    snapshot = load_revision_snapshot(repository, run)
+    assert snapshot['topics'], '分析已发布,快照应有主题'
+
+    checked = 0
+    for topic in snapshot['topics']:
+        for item in repository.list_topic_evidence(project_id, topic['version_id']):
+            assert item['segment_id'], f'evidence 行 segment_id 为空: {item}'
+            segments = repository.list_segments(project_id, item['feedback_id'])
+            by_id = {seg['id']: seg for seg in segments}
+            assert item['segment_id'] in by_id, \
+                f'segment_id {item["segment_id"]} 不在 segments 表: {list(by_id)}'
+            seg = by_id[item['segment_id']]
+            assert seg['start_offset'] <= item['quote_start']
+            assert item['quote_end'] <= seg['end_offset']
+            checked += 1
+    assert checked > 0, '至少应核对一条证据'

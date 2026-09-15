@@ -23,6 +23,9 @@ class EvidenceRef:
     quote: str
     quote_start: int
     quote_end: int
+    # 引文所在分块 id(与 segments 表同格式);空串=反馈级关联。
+    # 恒空时 segments 表形同虚设:写入了数据,却没有任何证据行引用它。
+    segment_id: str = ''
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,7 @@ def build_revision_snapshot(
                 'quote': ref.quote,
                 'quote_start': ref.quote_start,
                 'quote_end': ref.quote_end,
+                'segment_id': ref.segment_id,
             }
             for ref in draft.evidence
         ]

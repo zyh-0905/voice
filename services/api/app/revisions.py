@@ -143,7 +143,9 @@ def load_revision_snapshot(repository, run: Mapping, revision: int | None = None
         evidence_by_topic[topic_id] = [
             {'feedback_id': item['feedback_id'], 'source_row': item['source_row'],
              'quote': item['quote'], 'quote_start': item['quote_start'],
-             'quote_end': item['quote_end']}
+             'quote_end': item['quote_end'],
+             # 读侧带出 segment_id:证据→分块→offset→脱敏正文的链路要能走通
+             'segment_id': item.get('segment_id') or FEEDBACK_LEVEL_SEGMENT}
             for item in evidence
         ]
     return {

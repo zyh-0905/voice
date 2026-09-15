@@ -8,6 +8,7 @@ from .models import (AnalysisRevision, AnalysisRun, AnalysisStage, Dataset, Dele
                      TaskEvent, TaskEvidence, Topic, TopicCorrection, TopicEvidence,
                      TopicVersion)
 from .repository import MAX_PUBLISH_ATTEMPTS, same_event
+from .segments import segment_id as segments_segment_id
 
 # 模型列与 plan 行的字段名不完全一致(claims/limitations 在库里带 _json 后缀),
 # 映射集中在这里:散在调用点上会漏掉一处,而漏掉的表现是「这个字段永远是默认值」。
@@ -873,7 +874,7 @@ class SQLAlchemyRepository:
             s.query(Segment).filter(Segment.project_id == project_id,
                                     Segment.feedback_id == feedback_id).delete()
             for index, span in enumerate(spans):
-                s.add(Segment(id=f'seg_{feedback_id}_{index}', project_id=project_id,
+                s.add(Segment(id=segments_segment_id(feedback_id, index), project_id=project_id,
                               feedback_id=feedback_id, start_offset=span.start,
                               end_offset=span.end, segment_index=index,
                               redaction_version=redaction_version))

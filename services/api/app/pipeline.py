@@ -16,7 +16,7 @@ from .ingestion import REDACTION_VERSION
 from .publishing import EvidenceRef, TopicDraft, publish_revision
 from .representatives import select_representatives
 from .risk_rules import load_policy, scan_risks
-from .segments import split_redacted
+from .segments import segment_id as segments_segment_id, split_redacted
 
 POLICY_PATH = os.getenv('RISK_POLICY', 'configs/industry/ecommerce.yaml')
 # 没有模型 claim 时引文的字符上限;分块器按句切分,超预算的单句退化为有界切片
@@ -54,6 +54,28 @@ def _resolve_quote(text: str, claimed: str | None) -> tuple[str, int, int]:
         return span.text, span.start, span.end
     end = min(_QUOTE_FALLBACK_CHARS, len(text))
     return text[:end], 0, end
+
+
+def _covering_segment_id(feedback_id: str, text: str,
+                         quote_start: int, quote_end: int) -> str:
+    """引文所在分块的 id:offset 落在哪块就指哪块(8.2 的 offset 约定)。
+
+    与 persist_segments 用**完全相同**的参数重算分块——同一函数、同一预算,
+    保证算出的 id 与已落库的 segments 行一一对应。行不可分(ValueError → 0 块)
+    或引文为空时返回空串,与 FEEDBACK_LEVEL_SEGMENT 同义:证据退回反馈级。
+    """
+    try:
+        spans = split_redacted(text, max_tokens=SEGMENT_MAX_TOKENS, overlap=SEGMENT_OVERLAP)
+    except ValueError:
+        return ''
+    for index, span in enumerate(spans):
+        if span.start <= quote_start and quote_end <= span.end:
+            return segments_segment_id(feedback_id, index)
+    # 引文跨块边界:退而指向包含起点的块,仍是真实存在的分块
+    for index, span in enumerate(spans):
+        if span.start <= quote_start < span.end:
+            return segments_segment_id(feedback_id, index)
+    return ''
 
 
 def _flatten_rows(run: Mapping, repository) -> tuple[list[dict], dict[str, str], int]:
@@ -124,6 +146,11 @@ def build_topics_from_run(run: Mapping, repository) -> list[TopicDraft]:
                 quote=quote,
                 quote_start=quote_start,
                 quote_end=quote_end,
+                # 证据指回分块:此前恒为空串,segments 表写了却没有任何
+                # topic_evidence 行引用它——(version, feedback, segment)
+                # 的唯一约束退化成反馈级
+                segment_id=_covering_segment_id(
+                    row['feedback_id'], sources[row['feedback_id']], quote_start, quote_end),
             ))
         drafts.append(TopicDraft(
             topic_id=f'topic-{cluster_id + 1}',
